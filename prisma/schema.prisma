@@ -1,0 +1,417 @@
+// StreamOps — scheduling for the live-selling team.
+//
+// The unit of work is a SHOW: one platform, one slot (day or night), on one
+// date. Every show is run by two people, and the two are interchangeable — they
+// split the show between camera and computer and swap halfway. The app does not
+// track who is doing which job at any moment, because nobody needs it to: a show
+// simply needs two names against it.
+//
+// Four shows a day: TikTok day, TikTok night, eBay day, eBay night. The boss can
+// change any show's hours, cancel one that is not running, or bring it back,
+// without touching the rest of the week.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  EMPLOYEE
+  BOSS
+}
+
+/// Which side of the business somebody works on.
+///
+/// Streamers are scheduled onto shows and their hours are measured against the
+/// shift they were on. Shipping has no schedule at all — they clock the hours
+/// they work, and those hours count exactly as clocked.
+enum Team {
+  STREAMING
+  SHIPPING
+}
+
+enum Platform {
+  TIKTOK
+  EBAY
+}
+
+/// Which of the day's two shows. Times come from settings and can be overridden
+/// on any individual show.
+enum Slot {
+  DAY
+  NIGHT
+}
+
+enum ShowStatus {
+  SCHEDULED
+  CANCELLED
+}
+
+enum ScheduleStatus {
+  DRAFT
+  PUBLISHED
+}
+
+/// Where a release is in its life.
+///
+/// DRAFT  — the boss is still building it. Nobody else can see it.
+/// OPEN   — sent out. Streamers can offer shows.
+/// CLOSED — no longer taking answers. The schedule gets built from it.
+enum ReleaseStatus {
+  DRAFT
+  OPEN
+  CLOSED
+}
+
+model User {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  name               String
+  passwordHash       String
+  role               Role     @default(EMPLOYEE)
+  isActive           Boolean  @default(true)
+  mustChangePassword Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  team Team @default(STREAMING)
+
+  availability      Availability[]
+  submissions       AvailabilitySubmission[]
+  assignments       Assignment[]
+  assignmentsMade   Assignment[]            @relation("AssignedBy")
+  timeOff           TimeOff[]
+  timeOffRecorded   TimeOff[]               @relation("TimeOffRecordedBy")
+  releasesCreated   Release[]               @relation("ReleaseCreatedBy")
+  releasesPublished Release[]               @relation("ReleasePublishedBy")
+  priorities        ReleasePriority[]
+  snapshotsCreated  ScheduleSnapshot[]      @relation("SnapshotCreatedBy")
+  auditLogs         AuditLog[]              @relation("AuditActor")
+  timeEntries       TimeEntry[]
+  timeEntriesEdited TimeEntryRevision[]     @relation("TimeEntryChangedBy")
+
+  @@index([role, isActive])
+}
+
+/// One scheduling period: the 1st to the 15th, or the 16th to the end of the
+/// month.
+///
+/// Deliberately not Monday-to-Sunday. The schedule is released and worked in the
+/// same blocks the business pays in, so a rota never straddles a pay boundary
+/// and nothing has to be split by hand.
+/// One request for availability, and everything that follows from it.
+///
+/// The boss composes each release himself: which days it covers, which shows
+/// run on them, at what times, and which rules apply when the schedule is
+/// generated. Nothing is inherited from a settings page, because in this
+/// business there is no default fortnight — one week is four shows a day and
+/// the next is two.
+///
+/// Dates are whatever he picks. Payroll stays on the 1st–15th and 16th–end
+/// split regardless; a release may sit inside one of those, span both, or cover
+/// three days. The two are deliberately not tied together.
+model Release {
+  id String @id @default(cuid())
+
+  /// What he calls it. Optional — the dates are the real identity.
+  name      String?
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+
+  status     ReleaseStatus @default(DRAFT)
+  dueAt      DateTime?
+  releasedAt DateTime?
+  closedAt   DateTime?
+
+  /// The schedule built from this release. Version 0 means never published.
+  scheduleStatus ScheduleStatus @default(DRAFT)
+  version        Int            @default(0)
+  publishedAt    DateTime?
+  publishedById  String?
+
+  /* ---- the rules, chosen here and nowhere else ------------------------- */
+
+  /// Give the people named in `priorities` first refusal.
+  usePriority Boolean @default(false)
+
+  /// Split the work in proportion to how much each person offered, so somebody
+  /// available for thirty shows gets roughly three times somebody available for
+  /// ten. Off means an even spread regardless of how much anyone offered.
+  useProportional Boolean @default(true)
+
+  /// Optional cap on how many shows one person may be given from this release.
+  maxShowsPerPerson Int?
+
+  notes       String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy   User?               @relation("ReleaseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  publishedBy User?               @relation("ReleasePublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
+  shows       Show[]
+  priorities  ReleasePriority[]
+  availability Availability[]
+  submissions AvailabilitySubmission[]
+  snapshots   ScheduleSnapshot[]
+
+  @@index([status, startDate])
+  @@index([scheduleStatus, startDate])
+}
+
+/// Who gets first refusal on one release.
+///
+/// Chosen per release rather than stored on the person: who is worth
+/// prioritising changes with what the fortnight needs, and a standing setting
+/// quietly keeps applying long after the reason for it has gone.
+model ReleasePriority {
+  id        String @id @default(cuid())
+  releaseId String
+  userId    String
+  /// Higher goes first, so two people can be ranked against each other.
+  rank      Int    @default(1)
+
+  release Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([releaseId, userId])
+  @@index([releaseId])
+}
+
+/// One show: a platform, a slot, a date, and the hours it actually runs.
+///
+/// Hours live here rather than only in settings so the boss can lengthen or
+/// shorten a single show — "Friday's TikTok night runs an extra hour" — without
+/// that becoming the default for every other night.
+model Show {
+  id        String     @id @default(cuid())
+  releaseId String
+  date      DateTime   @db.Date
+  platform  Platform
+  slot      Slot
+  startsAt  DateTime
+  endsAt    DateTime
+  status    ShowStatus @default(SCHEDULED)
+  notes     String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  release     Release      @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  assignments Assignment[]
+  timeEntries TimeEntry[]
+
+  /// One show per platform and slot on a given date. This is also what stops
+  /// two overlapping releases both claiming the same show.
+  @@unique([date, platform, slot])
+  @@index([releaseId, date])
+  @@index([status, date])
+}
+
+/// One of the two people on a show.
+///
+/// `seat` is 1 or 2 and carries no meaning beyond keeping a show to two people —
+/// the pair are interchangeable and swap jobs halfway through.
+///
+/// Two unique constraints do the real work. (show, seat) caps a show at two
+/// people and stops two racing edits filling the same slot. (show, user) stops
+/// one person being counted as both, which no amount of application code can
+/// guarantee on its own.
+model Assignment {
+  id           String   @id @default(cuid())
+  showId       String
+  userId       String
+  seat         Int
+  assignedById String?
+  createdAt    DateTime @default(now())
+
+  show       Show  @relation(fields: [showId], references: [id], onDelete: Cascade)
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignedBy User? @relation("AssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@unique([showId, seat])
+  @@unique([showId, userId])
+  @@index([userId])
+}
+
+/// "I can work this show." One row per date and slot the person offers.
+///
+/// Deliberately carries no platform: streamers say when they are free, and the
+/// boss decides which platform that lands on.
+model Availability {
+  id        String   @id @default(cuid())
+  userId    String
+  releaseId String
+  date      DateTime @db.Date
+  slot      Slot
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  release Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date, slot])
+  @@index([userId, releaseId])
+  @@index([releaseId, date])
+}
+
+/// Tracks who has actually submitted for a period, as distinct from someone who
+/// simply has no free shows to offer.
+/// "I have finished answering this release."
+///
+/// A row here is the difference between a draft somebody is still tapping at
+/// and an answer the scheduler may use.
+model AvailabilitySubmission {
+  id          String   @id @default(cuid())
+  userId      String
+  releaseId   String
+  submittedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  release Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, releaseId])
+  @@index([releaseId])
+}
+
+/// "I cannot work at all on these days." Applies immediately: the boss is warned
+/// if they schedule the person anyway.
+model TimeOff {
+  id           String   @id @default(cuid())
+  userId       String
+  startDate    DateTime @db.Date
+  endDate      DateTime @db.Date
+  note         String?
+  recordedById String?
+  createdAt    DateTime @default(now())
+
+  user       User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recordedBy User? @relation("TimeOffRecordedBy", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, startDate, endDate])
+  @@index([startDate, endDate])
+}
+
+/// Immutable copy of a period's shows at the moment it was published, so an
+/// earlier published schedule can always be reconstructed.
+model ScheduleSnapshot {
+  id          String   @id @default(cuid())
+  releaseId   String
+  version     Int
+  payload     Json
+  createdById String
+  createdAt   DateTime @default(now())
+
+  release   Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  createdBy User    @relation("SnapshotCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([releaseId, version])
+}
+
+/// Business configuration. Single row, id "singleton".
+/// The handful of things that really are the same every time.
+///
+/// Show hours, the show list and the scheduling rules all used to live here as
+/// standing defaults. They moved onto the release: this business does not have
+/// a default fortnight, and a default that is wrong most weeks is worse than no
+/// default at all.
+model Settings {
+  id       String @id @default("singleton")
+  timezone String @default("America/New_York")
+
+  updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  action     String
+  actorId    String?
+  summary    String?
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+}
+
+/// Who created or last changed a time entry.
+enum TimeEntrySource {
+  /// The person clocked themselves in or out.
+  SELF
+  /// An admin entered or corrected it on their behalf.
+  ADMIN
+}
+
+/// One clock-in, and the clock-out that closes it.
+///
+/// `clockInAt` and `clockOutAt` are always the raw truth: the moment somebody
+/// actually pressed the button. They are never adjusted, because the audit has
+/// to be able to say what really happened.
+///
+/// What gets *paid* is derived from them. For a streamer the entry is linked to
+/// the show they were on, and the paid window is the overlap between the two:
+/// clocking in early does not start the clock early, and staying late does not
+/// extend it, but arriving late or leaving early comes off. For shipping — and
+/// for any entry with no show attached — the raw times are the paid times.
+model TimeEntry {
+  id         String    @id @default(cuid())
+  userId     String
+  clockInAt  DateTime
+  /// Null while the person is still clocked in.
+  clockOutAt DateTime?
+  note       String?
+
+  /// The show this shift is measured against. Null for shipping, and for a
+  /// streamer who clocked in when they were not on anything.
+  showId String?
+
+  source    TimeEntrySource @default(SELF)
+  /// Bumped on every correction; the revisions below hold what it said before.
+  version   Int             @default(1)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SetNull, not Cascade: deleting a show must never delete the record of
+  /// somebody's hours. The entry survives and simply stops being clamped.
+  show      Show?               @relation(fields: [showId], references: [id], onDelete: SetNull)
+  revisions TimeEntryRevision[]
+
+  @@index([userId, clockInAt])
+  @@index([clockInAt])
+  /// Finding whoever is still clocked in, without scanning the table.
+  @@index([userId, clockOutAt])
+  @@index([showId])
+}
+
+/// Append-only history of every version a time entry has held.
+///
+/// Payroll is paid from these hours, so a correction adds a row rather than
+/// overwriting one. "It used to say something else" must always be answerable,
+/// including for the entry as first recorded.
+model TimeEntryRevision {
+  id          String    @id @default(cuid())
+  timeEntryId String
+  version     Int
+  clockInAt   DateTime
+  clockOutAt  DateTime?
+  note        String?
+  /// Why it changed. Required for an admin edit, absent on the first record.
+  reason      String?
+  changedById String
+  changedAt   DateTime  @default(now())
+
+  timeEntry TimeEntry @relation(fields: [timeEntryId], references: [id], onDelete: Cascade)
+  changedBy User      @relation("TimeEntryChangedBy", fields: [changedById], references: [id])
+
+  @@unique([timeEntryId, version])
+  @@index([changedAt])
+}

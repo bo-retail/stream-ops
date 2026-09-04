@@ -1,0 +1,93 @@
+@import "tailwindcss";
+
+/*
+  StreamOps design tokens.
+
+  Deliberately light-only: this is a tool people use on a warehouse floor and on
+  phones between shows, and a half-maintained dark theme reads as broken. The
+  explicit color-scheme stops browsers auto-inverting it.
+*/
+
+@theme {
+  --color-canvas: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-ink: #10131a;
+  --color-ink-muted: #5b6472;
+  --color-ink-subtle: #8b94a3;
+  --color-line: #e3e7ed;
+  --color-line-strong: #cbd2dc;
+
+  --color-brand-50: #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-200: #c7d2fe;
+  --color-brand-500: #4f5bd5;
+  --color-brand-600: #3f49b8;
+  --color-brand-700: #333c99;
+
+  --color-danger-50: #fef2f2;
+  --color-danger-100: #fee2e2;
+  --color-danger-200: #fecaca;
+  --color-danger-500: #dc2626;
+  --color-danger-600: #b91c1c;
+  --color-danger-700: #991b1b;
+
+  --color-warn-50: #fffbeb;
+  --color-warn-100: #fef3c7;
+  --color-warn-200: #fde68a;
+  --color-warn-500: #d97706;
+  --color-warn-700: #92400e;
+
+  --color-ok-50: #ecfdf5;
+  --color-ok-100: #d1fae5;
+  --color-ok-200: #a7f3d0;
+  --color-ok-500: #059669;
+  --color-ok-700: #047857;
+
+  --color-tiktok: #0f172a;
+  --color-ebay: #2563eb;
+
+  --radius-card: 0.75rem;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Numbers in tables and money figures must align vertically to be scannable. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Visible focus for keyboard users on every interactive element. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-brand-500);
+  outline-offset: 2px;
+  border-radius: 0.375rem;
+}
+
+/* Wide grids scroll inside their own container, never the page body. */
+.scroll-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+}
