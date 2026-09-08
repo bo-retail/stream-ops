@@ -126,11 +126,26 @@ export default async function BuildSchedulePage({
     }
   }
 
-  const people: BuilderPerson[] = view.streamers.map((s) => ({
-    id: s.id,
-    name: s.name,
-    shows: view.validation.showsByUser[s.id] ?? 0,
-  }));
+  // What each person is carrying, split by platform, counted from the draft as
+  // it stands. Cancelled shows are skipped — one needs nobody, so it must not
+  // sit in anybody's total — which is the same rule the validator applies to
+  // showsByUser, so the two agree.
+  const tally = new Map<string, { total: number; tiktok: number; ebay: number }>();
+  for (const show of view.shows) {
+    if (show.status === "CANCELLED") continue;
+    for (const a of show.assignments) {
+      const t = tally.get(a.userId) ?? { total: 0, tiktok: 0, ebay: 0 };
+      t.total += 1;
+      if (show.platform === "TIKTOK") t.tiktok += 1;
+      else t.ebay += 1;
+      tally.set(a.userId, t);
+    }
+  }
+
+  const people: BuilderPerson[] = view.streamers.map((s) => {
+    const t = tally.get(s.id) ?? { total: 0, tiktok: 0, ebay: 0 };
+    return { id: s.id, name: s.name, shows: t.total, tiktok: t.tiktok, ebay: t.ebay };
+  });
 
   const { totalSeats, filledSeats } = view.validation;
   const staffedPct = totalSeats === 0 ? 0 : Math.round((filledSeats / totalSeats) * 100);
@@ -151,7 +166,13 @@ export default async function BuildSchedulePage({
     <>
       <PageHeader
         title="Build schedule"
-        description={`${view.release.label} · ${view.release.dateRange}`}
+        // An unnamed release is known by its dates, so its label already *is*
+        // the date range — printing both read "Sep 16 – Sep 30 · Sep 16 – Sep 30".
+        description={
+          view.release.label === view.release.dateRange
+            ? view.release.dateRange
+            : `${view.release.label} · ${view.release.dateRange}`
+        }
         action={
           <div className="flex flex-wrap items-center gap-2">
             {view.release.scheduleStatus === "PUBLISHED" ? (

@@ -3,27 +3,23 @@ import { PlatformBadge, SlotBadge } from "@/components/show-labels";
 import type { AuthUser } from "@/lib/auth/guards";
 import { formatDate, formatMinutes } from "@/lib/domain/dates";
 import { getOpenReleasesForUser } from "@/lib/server/availability";
-import { getEmployeePeriod } from "@/lib/server/schedule";
+import { getEmployeePeriod, getUpcomingShows } from "@/lib/server/schedule";
 import { getWeekContext } from "@/lib/server/settings";
 
 export async function EmployeeDashboard({ user }: { user: AuthUser }) {
-  const { today, currentWeek, nextWeek } = await getWeekContext();
+  const { today } = await getWeekContext();
 
-  const [thisWeek, upcomingWeek, openReleases] = await Promise.all([
-    getEmployeePeriod(user.id, currentWeek),
-    getEmployeePeriod(user.id, nextWeek),
+  // The pay period for the counts, and a plain forward look for the list.
+  // Cancelled shows never reach the list: the point of a cancellation is that
+  // the person does not turn up, so it must not sit in what is coming next.
+  const [thisPeriod, upcoming, openReleases] = await Promise.all([
+    getEmployeePeriod(user.id, today),
+    getUpcomingShows(user.id, 8),
     getOpenReleasesForUser(user.id),
   ]);
 
-  const now = Date.now();
-  // Cancelled shows are dropped: the whole point of a cancellation is that the
-  // person does not turn up, so it must not sit in their upcoming list.
-  const upcoming = [...thisWeek.shows, ...upcomingWeek.shows]
-    .filter((s) => s.status === "SCHEDULED" && s.endsAt.getTime() >= now)
-    .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime());
-
-  const runningThisWeek = thisWeek.shows.filter((s) => s.status === "SCHEDULED");
-  const thisWeekMinutes = runningThisWeek.reduce(
+  const runningThisPeriod = thisPeriod.shows.filter((s) => s.status === "SCHEDULED");
+  const thisPeriodMinutes = runningThisPeriod.reduce(
     (m, s) => m + Math.round((s.endsAt.getTime() - s.startsAt.getTime()) / 60_000),
     0,
   );
@@ -53,12 +49,12 @@ export async function EmployeeDashboard({ user }: { user: AuthUser }) {
       ) : null}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Upcoming shows" value={upcoming.length} sub="This week and next" />
-        <Stat label="Hours this week" value={formatMinutes(thisWeekMinutes)} />
+        <Stat label="Upcoming shows" value={upcoming.length} sub="Next 8, once published" />
+        <Stat label="Hours this period" value={formatMinutes(thisPeriodMinutes)} />
         <Stat
-          label="Shows this week"
-          value={runningThisWeek.length}
-          sub={thisWeek.anythingPublished ? "Schedule is out" : "Not published yet"}
+          label="Shows this period"
+          value={runningThisPeriod.length}
+          sub={thisPeriod.anythingPublished ? "Schedule is out" : "Not published yet"}
         />
       </div>
 
@@ -77,7 +73,7 @@ export async function EmployeeDashboard({ user }: { user: AuthUser }) {
           </EmptyState>
         ) : (
           <ul className="divide-y divide-line">
-            {upcoming.slice(0, 8).map((s) => (
+            {upcoming.map((s) => (
               <li key={s.showId} className="flex items-center justify-between gap-3 px-4 py-2.5">
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-ink">{formatDate(s.dateISO)}</p>

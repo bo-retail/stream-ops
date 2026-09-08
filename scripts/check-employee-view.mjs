@@ -104,5 +104,24 @@ check(
   `status ${status}`,
 );
 
+// The dashboard's "Your next shows" must list each show exactly once.
+//
+// It used to be assembled by asking for "this week" and "next week" and gluing
+// the two answers together. Those are week dates, but they get snapped to
+// half-month periods — so whenever both fell in the same half of the month the
+// same period came back twice and every show appeared twice. It is read forward
+// by date now. This guards that, and it is worth asserting rather than
+// eyeballing because it only went wrong on about half the dates in a month.
+const dashHtml = await (await fetch(`${BASE}/dashboard`, { headers: { cookie } })).text();
+const rows = [
+  ...dashHtml.matchAll(/<li class="flex items-center justify-between gap-3 px-4 py-2\.5"[\s\S]*?<\/li>/g),
+].map((m) => m[0].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+const distinct = new Set(rows);
+check(
+  "the dashboard lists each upcoming show once",
+  rows.length === distinct.size,
+  `${rows.length} row(s), ${distinct.size} distinct`,
+);
+
 console.log(failures === 0 ? "\nAll employee-view checks passed." : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

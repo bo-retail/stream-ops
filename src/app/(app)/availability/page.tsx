@@ -80,7 +80,13 @@ export default async function AvailabilityPage({
     <>
       <PageHeader
         title="My availability"
-        description={`Tap the shows you can work — ${release.label} (${release.dateRange}).`}
+        // An unnamed release is known by its dates, so its label already *is*
+        // the date range — printing both gave "Sep 16 – Sep 30 (Sep 16 – Sep 30)".
+        description={
+          release.label === release.dateRange
+            ? `Tap the shows you can work — ${release.dateRange}.`
+            : `Tap the shows you can work — ${release.label} (${release.dateRange}).`
+        }
       />
 
       {openReleases.length > 1 ? (

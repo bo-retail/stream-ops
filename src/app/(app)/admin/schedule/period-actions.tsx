@@ -388,7 +388,7 @@ export function ReleaseActions({
           <form action={publishAction}>
             <input type="hidden" name="releaseId" value={releaseId} />
             <Submit
-              label={alreadyPublished ? "Publish again" : "Publish this period"}
+              label={alreadyPublished ? "Publish again" : "Publish this release"}
               busy="Publishing…"
               disabled={!canPublish}
               icon={<Send className="h-4 w-4" aria-hidden />}
@@ -430,7 +430,7 @@ export function ReleaseActions({
                 required
               />
             </div>
-            <Submit label="Apply to the period" busy="Applying…" variant="secondary" />
+            <Submit label="Apply to the release" busy="Applying…" variant="secondary" />
           </form>
           <p className="text-xs text-ink-muted">
             Currently {slotHours.DAY.start}–{slotHours.DAY.end} days,{" "}

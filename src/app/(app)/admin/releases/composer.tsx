@@ -510,6 +510,73 @@ export function ReleaseControls({
 }
 
 /**
+ * Renaming a release, at any point in its life.
+ *
+ * Stays available after publishing, unlike the shows and the rules. A name is
+ * how a person finds the release in a list, not part of what was promised to
+ * the team — renaming one moves nobody's shift — so there is no reason to lock
+ * it along with everything else.
+ */
+export function RenameRelease({
+  releaseId,
+  name,
+  dateRange,
+}: {
+  releaseId: string;
+  name: string | null;
+  dateRange: string;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [state, setState] = useState<ReleaseState>({});
+  const [value, setValue] = useState(name ?? "");
+
+  const dirty = value.trim() !== (name ?? "").trim();
+
+  function save() {
+    startTransition(async () => {
+      const { renameRelease } = await import("./actions");
+      const result = await renameRelease(releaseId, value);
+      setState(result);
+      if (result.ok) router.refresh();
+    });
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-0 flex-1">
+          <Label htmlFor="releaseName">What this release is called</Label>
+          <Input
+            id="releaseName"
+            value={value}
+            maxLength={120}
+            disabled={pending}
+            placeholder={dateRange}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && dirty) {
+                e.preventDefault();
+                save();
+              }
+            }}
+          />
+        </div>
+        <Button type="button" disabled={pending || !dirty} onClick={save}>
+          {pending ? "Saving…" : "Save name"}
+        </Button>
+      </div>
+      <p className="text-xs text-ink-muted">
+        Leave it empty and it goes by its dates — {dateRange}. Renaming is safe at any time,
+        including after the schedule is published: it changes the label and nothing else.
+      </p>
+      {state.error ? <Alert tone="danger">{state.error}</Alert> : null}
+      {state.ok ? <Alert tone="ok">{state.ok}</Alert> : null}
+    </div>
+  );
+}
+
+/**
  * Deleting a release, in two steps.
  *
  * The first press does not delete: it asks what would go and shows the answer.

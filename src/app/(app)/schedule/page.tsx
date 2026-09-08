@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { FileSpreadsheet } from "lucide-react";
 import {
   Alert,
   Badge,
@@ -43,7 +44,21 @@ export default async function MySchedulePage({
 
   return (
     <>
-      <PageHeader title="My schedule" description={periodLabel} />
+      <PageHeader
+        title="My schedule"
+        description={periodLabel}
+        action={
+          schedule.anythingPublished ? (
+            <a
+              href={`/api/my-schedule/export?period=${period.start}`}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border border-line-strong bg-surface px-4 text-sm font-medium text-ink hover:bg-canvas"
+            >
+              <FileSpreadsheet className="h-4 w-4" aria-hidden />
+              Download
+            </a>
+          ) : null
+        }
+      />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <LinkButton

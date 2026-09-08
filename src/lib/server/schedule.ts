@@ -302,6 +302,64 @@ export async function getEmployeePeriod(
   return { period, shows, anythingPublished };
 }
 
+/**
+ * The next shows this person is on, from now forward.
+ *
+ * Read by date rather than by stitching period views together. A release is
+ * whatever length the boss chose and two of them can cover overlapping dates,
+ * so "this period and the next" cannot be assembled from period boundaries
+ * without either missing shows or listing them twice — which is exactly what
+ * the dashboard used to do when a week and the week after it both fell inside
+ * one half of the month.
+ */
+export async function getUpcomingShows(userId: string, take = 8): Promise<EmployeeShow[]> {
+  const settings = await getSettings();
+  const clock = clockFor(settings.timezone);
+
+  const rows = await prisma.assignment.findMany({
+    where: {
+      userId,
+      show: {
+        status: "SCHEDULED",
+        endsAt: { gte: new Date() },
+        release: { scheduleStatus: "PUBLISHED" },
+      },
+    },
+    orderBy: { show: { startsAt: "asc" } },
+    take,
+    select: {
+      show: {
+        select: {
+          id: true,
+          date: true,
+          platform: true,
+          slot: true,
+          startsAt: true,
+          endsAt: true,
+          status: true,
+          assignments: { select: { userId: true, user: { select: { name: true } } } },
+        },
+      },
+    },
+  });
+
+  return rows.map(({ show }) => {
+    const other = show.assignments.find((a) => a.userId !== userId);
+    return {
+      showId: show.id,
+      dateISO: fromDbDate(show.date),
+      platform: show.platform,
+      slot: show.slot,
+      startsAt: show.startsAt,
+      endsAt: show.endsAt,
+      startHM: clock(show.startsAt),
+      endHM: clock(show.endsAt),
+      status: show.status,
+      alongside: other ? { name: other.user.name } : null,
+    };
+  });
+}
+
 /** Recently published releases, newest first — past schedules are never overwritten. */
 export async function listPublishedReleases(take = 8) {
   const rows = await prisma.release.findMany({

@@ -406,6 +406,67 @@ export async function sendRelease(
   return { ok: "Sent. The team can fill it in now." };
 }
 
+const RenameSchema = z.object({
+  releaseId: z.string().min(1),
+  name: z.string().trim().max(120),
+});
+
+/**
+ * Renames a release, at any point in its life.
+ *
+ * Deliberately allowed after publishing, unlike everything else on a published
+ * release. A name is a label for people to find it by, not part of the promise
+ * made to the team: changing "Sept 16-30" to "Sept 16-30 — holiday cover" moves
+ * nobody's shift and changes nobody's pay. The dates, the shows and the
+ * placements stay locked once published; the label does not need to be.
+ *
+ * Clearing it is allowed too — the release falls back to being known by its
+ * dates, which is how an unnamed one has always read.
+ */
+export async function renameRelease(releaseId: string, name: string): Promise<ReleaseState> {
+  let boss;
+  try {
+    boss = await requireBossOrThrow();
+  } catch {
+    return { error: "Only an admin can do that." };
+  }
+
+  const parsed = RenameSchema.safeParse({ releaseId, name });
+  if (!parsed.success) return { error: parsed.error.issues[0].message };
+
+  const release = await prisma.release.findUnique({
+    where: { id: releaseId },
+    select: { name: true, startDate: true, endDate: true },
+  });
+  if (!release) return { error: "That release no longer exists." };
+
+  const next = parsed.data.name.trim() || null;
+  const before = release.name?.trim() || null;
+  if (next === before) return {};
+
+  const dates = `${fromDbDate(release.startDate)} to ${fromDbDate(release.endDate)}`;
+
+  await prisma.$transaction([
+    prisma.release.update({ where: { id: releaseId }, data: { name: next } }),
+    prisma.auditLog.create({
+      data: {
+        entityType: "Release",
+        entityId: releaseId,
+        action: "RENAME",
+        actorId: boss.id,
+        summary: next
+          ? `Renamed the release covering ${dates} to "${next}"`
+          : `Cleared the name on the release covering ${dates}`,
+        before: { name: before },
+        after: { name: next },
+      },
+    }),
+  ]);
+
+  refresh(releaseId);
+  return { ok: next ? `Renamed to "${next}".` : "Name cleared — it goes by its dates now." };
+}
+
 /** Stops taking answers. */
 export async function closeRelease(releaseId: string): Promise<ReleaseState> {
   return setStatus(releaseId, "CLOSED", "Closed — no more answers will be taken.");

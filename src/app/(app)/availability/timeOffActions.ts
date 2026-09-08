@@ -54,6 +54,21 @@ export async function bookTimeOff(_prev: TimeOffState, formData: FormData): Prom
     return { error: "That range is longer than six months. Book it in shorter blocks." };
   }
 
+  // Offers on days now booked off are withdrawn.
+  //
+  // Filling and copying already skip days that are booked off, so the rule was
+  // only enforced in one direction: offer first, book off second, and the two
+  // sat contradicting each other. Nobody would have been scheduled — a booked
+  // day is a hard block in the scheduler — but the availability page showed the
+  // same day as both offered and off, and the boss saw an offer the person did
+  // not mean. Booking a day off is the clearer statement, so it wins.
+  const withdrawn = await prisma.availability.count({
+    where: {
+      userId: user.id,
+      date: { gte: toDbDate(d.startDate), lte: toDbDate(d.endDate) },
+    },
+  });
+
   await prisma.$transaction([
     prisma.timeOff.create({
       data: {
@@ -63,6 +78,12 @@ export async function bookTimeOff(_prev: TimeOffState, formData: FormData): Prom
         note: d.note?.trim() || null,
       },
     }),
+    prisma.availability.deleteMany({
+      where: {
+        userId: user.id,
+        date: { gte: toDbDate(d.startDate), lte: toDbDate(d.endDate) },
+      },
+    }),
     prisma.auditLog.create({
       data: {
         entityType: "TimeOff",
@@ -70,9 +91,10 @@ export async function bookTimeOff(_prev: TimeOffState, formData: FormData): Prom
         action: "CREATE",
         actorId: user.id,
         summary:
-          d.startDate === d.endDate
+          (d.startDate === d.endDate
             ? `${user.name} booked ${formatDate(d.startDate, "long")} off`
-            : `${user.name} booked ${formatDate(d.startDate, "medium")} – ${formatDate(d.endDate, "medium")} off`,
+            : `${user.name} booked ${formatDate(d.startDate, "medium")} – ${formatDate(d.endDate, "medium")} off`) +
+          (withdrawn > 0 ? ` — ${withdrawn} offer(s) withdrawn` : ""),
       },
     }),
   ]);

@@ -39,6 +39,60 @@ export interface BuilderPerson {
   id: string;
   name: string;
   shows: number;
+  tiktok: number;
+  ebay: number;
+}
+
+/**
+ * What each person is carrying so far, TikTok against eBay.
+ *
+ * Sat above the day cards rather than in a sidebar: the number that matters is
+ * the one you are about to change, and it wants to be in the same glance as the
+ * seat you are filling. Busiest first, so an uneven split is obvious without
+ * reading every row; a dash rather than a zero for anybody on nothing, because a
+ * column of zeroes reads as noise while a dash reads as "still to place".
+ */
+function PersonTally({ people }: { people: BuilderPerson[] }) {
+  const ranked = [...people].sort((a, b) => b.shows - a.shows || a.name.localeCompare(b.name));
+  const total = people.reduce((n, p) => n + p.shows, 0);
+  const tiktok = people.reduce((n, p) => n + p.tiktok, 0);
+  const ebay = people.reduce((n, p) => n + p.ebay, 0);
+
+  return (
+    <Card>
+      <CardHeader
+        title="Shifts each person has"
+        description={
+          total === 0
+            ? "Nobody is placed yet."
+            : `${total} seat${total === 1 ? "" : "s"} filled — ${tiktok} TikTok, ${ebay} eBay.`
+        }
+      />
+      <ul className="divide-y divide-line sm:grid sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4">
+        {ranked.map((person) => (
+          <li
+            key={person.id}
+            className="flex items-center justify-between gap-3 border-b border-line px-4 py-2.5 last:border-b-0 sm:border-b"
+          >
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-ink">{person.name}</p>
+              <p className="text-xs text-ink-subtle">
+                {person.tiktok} TikTok · {person.ebay} eBay
+              </p>
+            </div>
+            <span
+              className={cn(
+                "tabular shrink-0 text-lg font-semibold",
+                person.shows === 0 ? "text-ink-subtle" : "text-ink",
+              )}
+            >
+              {person.shows === 0 ? "—" : person.shows}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
 }
 
 /** Who can be put on a show, and what to warn about if they are. */
@@ -337,6 +391,8 @@ export function ScheduleBuilder({
           ) : null}
         </div>
       ) : null}
+
+      {people.length > 0 ? <PersonTally people={people} /> : null}
 
       {byDate.map(({ dateISO, shows: dayShows }) => (
         <Card key={dateISO}>

@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { getPriorities, getReleaseSummary } from "@/lib/server/releases";
 import { getSettings } from "@/lib/server/settings";
 import { listStreamers } from "@/lib/server/team";
-import { Composer, ReleaseControls, StatusBadge } from "../composer";
+import { Composer, ReleaseControls, RenameRelease, StatusBadge } from "../composer";
 import type { ExistingShow } from "../composer";
 
 export const metadata: Metadata = { title: "Release" };
@@ -110,6 +110,20 @@ export default async function ReleasePage({ params }: { params: Promise<{ id: st
           , where cancelling tells the people on it.
         </Alert>
       ) : null}
+
+      <Card className="mb-5">
+        <CardHeader
+          title="Name"
+          description="For your own reference. Change it whenever you like."
+        />
+        <div className="p-4">
+          <RenameRelease
+            releaseId={release.id}
+            name={release.name}
+            dateRange={release.dateRange}
+          />
+        </div>
+      </Card>
 
       <Card className="mb-5">
         <CardHeader
