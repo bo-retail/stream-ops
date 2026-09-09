@@ -5,10 +5,24 @@ import { useEffect } from "react";
 /**
  * Whole-app error screen.
  *
- * The default Next.js error page shows a stack trace, which tells a non-technical
- * user nothing about what to do. The overwhelmingly common failure in this setup
- * is simply that the database is not running, so that case is detected and
- * answered in plain language with the exact command to fix it.
+ * The default Next.js error page shows a stack trace, which tells a
+ * non-technical user nothing about what to do. The common failure is that the
+ * database cannot be reached, so that case is detected and answered in plain
+ * language.
+ *
+ * What that answer is depends entirely on where the app is running, and the two
+ * cases have nothing in common:
+ *
+ *   - **Locally**, the database is a program on the same machine that someone
+ *     has to start. Telling them how is the whole point of this screen.
+ *   - **In production**, it is Neon, and nobody reading this can do anything
+ *     about it. `Server has closed the connection` is the documented symptom of
+ *     Neon's pooler dropping an idle socket (see `src/lib/db.ts`), which
+ *     resolves itself on the next request — so a streamer looking at their
+ *     shifts on a phone gets "try again", not a terminal command.
+ *
+ * This page used to print a local command with an absolute path from the
+ * machine it was written on, in production, to everybody.
  */
 
 function isDatabaseDown(message: string): boolean {
@@ -37,12 +51,13 @@ export default function GlobalError({
   }, [error]);
 
   const databaseDown = isDatabaseDown(error.message ?? "");
+  const local = process.env.NODE_ENV === "development";
 
   return (
     <main className="flex min-h-dvh items-center justify-center px-4 py-10">
       <div className="w-full max-w-lg">
         <div className="rounded-[var(--radius-card)] border border-line bg-surface p-6 shadow-[0_1px_2px_rgba(16,19,26,0.04)]">
-          {databaseDown ? (
+          {databaseDown && local ? (
             <>
               <h1 className="text-lg font-semibold text-ink">The database isn&apos;t running</h1>
               <p className="mt-2 text-sm text-ink-muted">
@@ -55,23 +70,27 @@ export default function GlobalError({
                   To fix it
                 </p>
                 <p className="mt-1.5 text-sm text-ink">
-                  Open the PowerShell window running the database and check it is still going. If it
-                  closed or shows errors, start it again:
+                  Check the terminal running the database. If it closed or is showing errors, start
+                  it again from the project folder:
                 </p>
                 <pre className="tabular mt-2 overflow-x-auto rounded-md bg-surface px-3 py-2 text-xs text-ink ring-1 ring-inset ring-line">
-{`cd "C:\\Users\\samue\\Downloads\\STREAM\\stream-ops"
-npx.cmd prisma dev --name streamops`}
+{`npx prisma dev`}
                 </pre>
                 <p className="mt-2 text-xs text-ink-muted">
-                  Wait for <strong>&ldquo;server streamops is now running&rdquo;</strong>, then press
-                  the button below.
+                  Wait for <strong>&ldquo;is now running&rdquo;</strong>, then press the button
+                  below. This message only appears in local development.
                 </p>
               </div>
-
-              <p className="mt-3 text-xs text-ink-muted">
-                If it refuses to start with <code>Aborted()</code> errors, see &ldquo;If the database
-                refuses to start&rdquo; in QUICKSTART.md — there are three lines to clear the stale
-                lock files.
+            </>
+          ) : databaseDown ? (
+            <>
+              <h1 className="text-lg font-semibold text-ink">Can&apos;t reach the database</h1>
+              <p className="mt-2 text-sm text-ink-muted">
+                Nothing has been lost and nothing you did caused this. The connection dropped for a
+                moment, which usually fixes itself straight away.
+              </p>
+              <p className="mt-2 text-sm text-ink-muted">
+                Wait a few seconds and try again. If it keeps happening, tell your admin.
               </p>
             </>
           ) : (

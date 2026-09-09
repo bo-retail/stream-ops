@@ -5,7 +5,7 @@ import { formatDate, formatMinutes } from "@/lib/domain/dates";
 import { formatPeriod, periodFor } from "@/lib/domain/periods";
 import { getEntriesInRange, getOpenEntry } from "@/lib/server/timeclock";
 import { getWeekContext } from "@/lib/server/settings";
-import { missingReportDays } from "@/lib/server/shipping";
+import { missingReportDaysSafe } from "@/lib/server/shipping";
 
 /**
  * The dashboard for somebody on shipping.
@@ -26,7 +26,7 @@ export async function ShippingDashboard({ user }: { user: AuthUser }) {
   const [open, entries, missingReports] = await Promise.all([
     getOpenEntry(user.id),
     getEntriesInRange({ from: period.start, to: period.end, userId: user.id }),
-    isDirector ? missingReportDays() : Promise.resolve([]),
+    isDirector ? missingReportDaysSafe() : Promise.resolve([]),
   ]);
 
   const minutes = entries.reduce((m, e) => m + (e.paidMinutes ?? 0), 0);

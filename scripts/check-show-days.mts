@@ -61,6 +61,37 @@ async function makeDay(
   return release.id;
 }
 
+/**
+ * Anything left behind by a run that died before its own cleanup.
+ *
+ * Run at both ends, because a half-cleaned database fails the next run in two
+ * confusing ways: a leftover release collides on the (date, platform, slot)
+ * unique index, and a leftover batch makes a day look like its report already
+ * arrived — so the check that matters most reports the opposite of the truth.
+ *
+ * Batches are matched on being empty as well as on the date. A real import
+ * always has files and watches behind it, so this cannot reach one.
+ */
+const FIXTURE_PREFIX = "check: ";
+const FIXTURE_DATES = [HAS_SHOWS_NO_REPORT, ALL_CANCELLED, NEVER_PUBLISHED, TOO_OLD, today];
+
+async function clearFixtures() {
+  const releases = await prisma.release.deleteMany({
+    where: { name: { startsWith: FIXTURE_PREFIX } },
+  });
+  const batches = await prisma.importBatch.deleteMany({
+    where: {
+      showDate: { in: FIXTURE_DATES.map(toDbDate) },
+      watchCount: 0,
+      boxCount: 0,
+    },
+  });
+  return releases.count + batches.count;
+}
+
+const stale = await clearFixtures();
+if (stale > 0) console.log(`Cleared ${stale} leftover(s) from an earlier run.\n`);
+
 const created: string[] = [];
 created.push(await makeDay(HAS_SHOWS_NO_REPORT, { published: true, cancelled: false, name: "check: needs a report" }));
 created.push(await makeDay(ALL_CANCELLED, { published: true, cancelled: true, name: "check: all cancelled" }));
@@ -119,7 +150,7 @@ check("the list is newest first", days[0]?.dateISO, today);
 
 console.log("\nCleaning up.");
 await prisma.importBatch.deleteMany({ where: { id: { in: [blocked.id, ok.id] } } });
-await prisma.release.deleteMany({ where: { id: { in: created } } });
+await clearFixtures();
 
 const left = await prisma.release.count({ where: { id: { in: created } } });
 console.log(`Removed — ${left} fixture releases left.`);

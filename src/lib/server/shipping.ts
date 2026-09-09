@@ -147,16 +147,56 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
  *     than a prompt, and a banner that never clears stops being read.
  */
 export async function missingReportDays(lookBackDays = LOOK_BACK_DAYS): Promise<DateISO[]> {
-  const days = await listShowDays(lookBackDays);
   const settings = await getSettings();
   const today = todayISO(settings.timezone);
+  const from = addDays(today, -lookBackDays);
+  // Yesterday is the newest day that can be missing anything, so the window
+  // itself carries the "strictly before today" rule rather than a later filter.
+  const to = addDays(today, -1);
 
-  return days
-    .filter((day) => day.dateISO < today)
-    .filter((day) => day.liveShows > 0)
-    .filter((day) => day.report === null || day.report.status !== "OK")
-    .map((day) => day.dateISO)
+  if (to < from) return [];
+
+  const [shows, loaded] = await Promise.all([
+    prisma.show.groupBy({
+      by: ["date"],
+      where: {
+        date: { gte: toDbDate(from), lte: toDbDate(to) },
+        status: "SCHEDULED",
+        release: { scheduleStatus: "PUBLISHED" },
+      },
+      _count: { _all: true },
+    }),
+    // A refused upload is not a report — that is precisely the day somebody
+    // still has to deal with — so only OK batches count as loaded.
+    prisma.importBatch.findMany({
+      where: { showDate: { gte: toDbDate(from), lte: toDbDate(to) }, status: "OK" },
+      select: { showDate: true },
+      distinct: ["showDate"],
+    }),
+  ]);
+
+  const done = new Set(loaded.map((b) => fromDbDate(b.showDate)));
+  return shows
+    .map((s) => fromDbDate(s.date))
+    .filter((d) => !done.has(d))
     .sort();
+}
+
+/**
+ * The same thing, but it never throws.
+ *
+ * A dashboard is mostly somebody's own schedule and hours. The banner is a note
+ * on top of it, and a note must not be what takes the page down: losing the
+ * connection for a moment should cost the warning, not the whole screen. If the
+ * database is genuinely unreachable the page's real queries will say so.
+ */
+export async function missingReportDaysSafe(lookBackDays = LOOK_BACK_DAYS): Promise<DateISO[]> {
+  try {
+    return await missingReportDays(lookBackDays);
+  } catch (error) {
+    console.error("Could not read the missing-report days for the banner:", error);
+    return [];
+  }
 }
 
 /** Yesterday, in the business zone — what the shipping screens open on. */
