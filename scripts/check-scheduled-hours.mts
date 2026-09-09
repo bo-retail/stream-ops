@@ -228,6 +228,54 @@ check("and is not clamped back up to the show's hours", corrected[0]?.paidMinute
 
 check("shipping is never given scheduled hours", await prisma.timeEntry.count({ where: { userId: packer.id } }), 0);
 
+/* ------------------------------------------------------- somebody leaves */
+
+/*
+  The case that used to lose money.
+
+  Hours were only printed for accounts that were, at that moment, an active
+  streamer. Deactivate a leaver on their last day — or move them onto shipping —
+  before anything had loaded a page, and the shows they had already worked
+  stopped being printed and were never paid. Nothing said so.
+
+  Their assignments are deliberately left in place when they move, so the show
+  still names them; only the account changed.
+*/
+const LEAVER_DATE = new Date(Date.now() - 58 * 86_400_000).toISOString().slice(0, 10);
+const leftStart = new Date(`${LEAVER_DATE}T19:00:00.000Z`);
+const leftEnd = new Date(leftStart.getTime() + 5 * 3_600_000);
+const worked = await makeShow({
+  dateISO: LEAVER_DATE,
+  published: true,
+  startsAt: leftStart,
+  endsAt: leftEnd,
+  platform: "EBAY",
+  slot: "DAY",
+});
+
+// Alice is deactivated and Bob is moved onto shipping, both before anything has
+// printed the show they just worked.
+await prisma.user.update({ where: { id: alice.id }, data: { isActive: false } });
+await prisma.user.update({ where: { id: bob.id }, data: { team: "SHIPPING" } });
+
+await materialiseScheduledHours();
+check("a leaver is still paid for the show they worked", await scheduledHoursPrinted(worked), 2);
+
+const leaverEntry = await prisma.timeEntry.findFirst({
+  where: { showId: worked, userId: alice.id },
+  select: { clockInAt: true, clockOutAt: true },
+});
+check("for the show's full hours", leaverEntry?.clockOutAt?.toISOString(), leftEnd.toISOString());
+check(
+  "and the one who moved to shipping is paid too",
+  await prisma.timeEntry.count({ where: { showId: worked, userId: bob.id, source: "SCHEDULE" } }),
+  1,
+);
+
+// Put them back so the rest of the fixture teardown is unsurprising.
+await prisma.user.update({ where: { id: alice.id }, data: { isActive: true } });
+await prisma.user.update({ where: { id: bob.id }, data: { team: "STREAMING" } });
+
 /* ------------------------------------------------------------------ cleanup */
 
 console.log("\nCleaning up.");

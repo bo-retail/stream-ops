@@ -88,6 +88,13 @@ model User {
 
   team Team @default(STREAMING)
 
+  /// This person's own hourly rate in whole cents, when it differs from their
+  /// team's. Null means "whatever the team is paid", which is the normal case.
+  hourlyRateCents Int?
+  /// This person's own commission in basis points, when it differs. Streamers
+  /// only; null means the standard rate.
+  commissionBps   Int?
+
   availability      Availability[]
   submissions       AvailabilitySubmission[]
   assignments       Assignment[]
@@ -333,6 +340,18 @@ model ScheduleSnapshot {
 model Settings {
   id       String @id @default("singleton")
   timezone String @default("America/New_York")
+
+  /// What a streamer is paid an hour, in whole cents. Everyone earns hourly.
+  streamerHourlyCents Int @default(0)
+  /// What somebody on shipping is paid an hour, in whole cents.
+  shippingHourlyCents Int @default(0)
+
+  /// A streamer's share of their show's sales, in basis points — 100 = 1.00%.
+  ///
+  /// Basis points rather than a percentage so a rate like 1.25% is an integer
+  /// and never a float that drifts. Both people on a show earn it separately,
+  /// so a show at 1% pays out 2% of its sales in total.
+  streamerCommissionBps Int @default(100)
 
   updatedAt DateTime @updatedAt
 }

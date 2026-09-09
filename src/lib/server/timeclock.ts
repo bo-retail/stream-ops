@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { fromDbDate, toDbDate } from "@/lib/domain/dates";
-import { paidWindow, showForClockIn } from "@/lib/domain/hours";
+import { paidWindow } from "@/lib/domain/hours";
 import { periodFor } from "@/lib/domain/periods";
 import type { Period } from "@/lib/domain/periods";
 import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
@@ -247,8 +247,9 @@ export async function getEntriesInRange(range: {
  * definition. Shipping was always this way.
  *
  * Kept as a named function rather than deleted at the call site so the reason
- * has somewhere to live; `showForClockIn` in the domain layer keeps working out
- * which show an instant belongs to, which the historical entries still rely on.
+ * has somewhere to live. `showForClockIn` in the domain layer is still there and
+ * still tested — it works out which show an instant belongs to, which is how
+ * historical clocked entries were attributed — but nothing calls it now.
  */
 export async function findShiftForClockIn(): Promise<null> {
   return null;
@@ -356,6 +357,20 @@ const MATERIALISE_DAYS = 90;
 export async function materialiseScheduledHours(now: Date = new Date()): Promise<number> {
   const from = new Date(now.getTime() - MATERIALISE_DAYS * 86_400_000);
 
+  /*
+    Deliberately nothing about who the person is *now*.
+
+    What earns the hours is being on a published schedule for a show that has
+    since started. Filtering on the account as it stands today loses pay
+    silently: deactivate a leaver, or move a streamer onto shipping, before
+    anything has happened to load a page, and the shows they actually worked
+    stop being printed and are never paid. Their assignments are deliberately
+    left in place when they move (see the Team page), so the only thing that
+    changed is the account — not whether they stood in front of a camera.
+
+    Nothing else can reach this: assignments are only ever created for people
+    who can be scheduled, on both the auto-fill and the copy-forward paths.
+  */
   const due = await prisma.assignment.findMany({
     where: {
       show: {
@@ -363,8 +378,6 @@ export async function materialiseScheduledHours(now: Date = new Date()): Promise
         startsAt: { gte: from, lte: now },
         release: { scheduleStatus: "PUBLISHED" },
       },
-      // Shipping has no schedule; an admin is not on the rota either.
-      user: { isActive: true, team: "STREAMING", role: "EMPLOYEE" },
     },
     select: {
       userId: true,

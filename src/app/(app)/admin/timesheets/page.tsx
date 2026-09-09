@@ -10,12 +10,21 @@ import {
   materialiseScheduledHours,
   totalsByPerson,
 } from "@/lib/server/timeclock";
+import { getPayrollPeriod, listRatePeople } from "@/lib/server/payroll";
 import { getWeekContext } from "@/lib/server/settings";
 import { listAllUsers } from "@/lib/server/team";
 import { AddEntryPanel, PersonTotals, Timesheet } from "./timesheet-client";
 import type { SheetEntry } from "./timesheet-client";
+import { PayTable, PersonRates, RatesPanel } from "./pay-client";
 
-export const metadata: Metadata = { title: "Timesheets" };
+export const metadata: Metadata = { title: "Payroll" };
+
+function money(cents: number): string {
+  return `$${(cents / 100).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
 
 export default async function TimesheetsPage({
   searchParams,
@@ -32,9 +41,11 @@ export default async function TimesheetsPage({
   // idempotent, and the reason no scheduler has to be kept alive to do it.
   await materialiseScheduledHours();
 
-  const [entries, people, log] = await Promise.all([
+  const [entries, people, payroll, ratePeople, log] = await Promise.all([
     getEntriesInRange({ from: period.start, to: period.end }),
     listAllUsers(),
+    getPayrollPeriod(period.start, period.end),
+    listRatePeople(),
     // Every change to a timesheet, so an audit does not mean digging in the
     // database. Scoped to time entries: the schedule has its own history.
     prisma.auditLog.findMany({
@@ -83,15 +94,15 @@ export default async function TimesheetsPage({
   return (
     <>
       <PageHeader
-        title="Timesheets"
-        description={`${formatPeriod(period)} · paid hours, measured against each shift`}
+        title="Payroll"
+        description={`${formatPeriod(period)} · hours, what they are worth, and commission`}
         action={
           <a
             href={`/api/timesheets/export?from=${period.start}&to=${period.end}`}
-            className="inline-flex h-10 items-center gap-2 rounded-lg border border-line-strong bg-surface px-4 text-sm font-medium text-ink hover:bg-canvas"
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700"
           >
             <FileSpreadsheet className="h-4 w-4" aria-hidden />
-            Download for QuickBooks
+            Download payroll
           </a>
         }
       />
@@ -111,11 +122,15 @@ export default async function TimesheetsPage({
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
+          label="Total pay"
+          value={money(payroll.totals.totalCents)}
+          sub={`${money(payroll.totals.hourlyPayCents)} hours + ${money(payroll.totals.commissionCents)} commission`}
+        />
+        <Stat
           label="Total hours"
           value={formatMinutes(totalMinutes)}
-          sub={`${entries.length} shift${entries.length === 1 ? "" : "s"}`}
+          sub={`${entries.length} shift${entries.length === 1 ? "" : "s"} · ${totals.length} people`}
         />
-        <Stat label="People who worked" value={totals.length} sub="In this period" />
         <Stat
           label="Not clocked out"
           value={openCount}
@@ -135,6 +150,68 @@ export default async function TimesheetsPage({
           sending anything to payroll.
         </Alert>
       ) : null}
+
+      {payroll.totals.unrated > 0 ? (
+        <Alert
+          tone="danger"
+          className="mt-4"
+          title={`${payroll.totals.unrated} ${payroll.totals.unrated === 1 ? "person has" : "people have"} no rate set`}
+        >
+          They worked, so their pay is being worked out at $0.00 an hour — which reads exactly like
+          a real answer. Set their rate below before exporting.
+        </Alert>
+      ) : null}
+
+      {payroll.unattributed.length > 0 ? (
+        <Alert tone="warn" className="mt-4" title="Sales nobody is being paid for">
+          {money(payroll.unattributed.reduce((n, s) => n + s.netRevenueCents, 0))} of sales is
+          tagged for shows that are not on any published rota, so no commission was worked out on
+          it: {payroll.unattributed.map((s) => s.label).join(", ")}. Either the shift tags are
+          wrong on those listings, or the shows were never put on a release.
+        </Alert>
+      ) : null}
+
+      <div className="mt-5 space-y-5">
+        <PayTable
+          rows={payroll.people.map((p) => ({
+            userId: p.userId,
+            name: p.name,
+            team: p.team,
+            position: p.position,
+            minutes: p.minutes,
+            hourlyRateCents: p.hourlyRateCents,
+            hourlyPayCents: p.hourlyPayCents,
+            commissionBps: p.commissionBps,
+            commissionCents: p.commissionCents,
+            totalCents: p.totalCents,
+            openShifts: p.openShifts,
+            unrated: p.unrated,
+            shows: p.shows.map((s) => ({
+              label: s.label,
+              netRevenueCents: s.netRevenueCents,
+              commissionCents: s.commissionCents,
+            })),
+          }))}
+        />
+
+        <div className="grid gap-5 lg:grid-cols-2">
+          <RatesPanel
+            streamerHourlyCents={payroll.rates.streamerHourlyCents}
+            shippingHourlyCents={payroll.rates.shippingHourlyCents}
+            commissionBps={payroll.rates.streamerCommissionBps}
+          />
+          <PersonRates
+            people={ratePeople.map((p) => ({
+              id: p.id,
+              name: p.name,
+              position: p.position,
+              team: p.team,
+              hourlyRateCents: p.hourlyRateCents,
+              commissionBps: p.commissionBps,
+            }))}
+          />
+        </div>
+      </div>
 
       <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_20rem]">
         <div className="order-2 space-y-5 lg:order-1">

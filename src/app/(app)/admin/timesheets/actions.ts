@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireBossOrThrow } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { isDateISO, isTimeHM, resolveSlotInstants } from "@/lib/domain/dates";
+import { formatBps, parseMoneyToCents, parsePercentToBps } from "@/lib/domain/payroll";
 import { getSettings } from "@/lib/server/settings";
 
 export interface TimesheetState {
@@ -348,4 +349,173 @@ export async function closeOpenEntry(
 
   refresh();
   return { ok: `Closed ${entry.user.name}'s entry.` };
+}
+
+/* ============================================================== the rates */
+
+/**
+ * What people are paid.
+ *
+ * Kept here rather than on Settings because this is where somebody is looking
+ * when the question arises, and because a rate change is a payroll decision
+ * with the same audit requirements as correcting an hour: it is written to the
+ * log with the old and new figures every time.
+ *
+ * Changing a rate does not rewrite anything already paid. Pay is worked out
+ * when the period is read, so a change moves the current period and every one
+ * after it — which is why the log matters.
+ */
+const RatesSchema = z.object({
+  streamerHourly: z.string(),
+  shippingHourly: z.string(),
+  commissionPercent: z.string(),
+});
+
+export async function setRates(
+  _prev: TimesheetState,
+  formData: FormData,
+): Promise<TimesheetState> {
+  let boss;
+  try {
+    boss = await requireBossOrThrow();
+  } catch {
+    return { error: "Only an admin can change what people are paid." };
+  }
+
+  const parsed = RatesSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: "Fill in all three rates." };
+
+  const streamerHourlyCents = parseMoneyToCents(parsed.data.streamerHourly);
+  const shippingHourlyCents = parseMoneyToCents(parsed.data.shippingHourly);
+  const streamerCommissionBps = parsePercentToBps(parsed.data.commissionPercent);
+
+  if (streamerHourlyCents === null) return { error: "The streamer hourly rate is not an amount." };
+  if (shippingHourlyCents === null) return { error: "The shipping hourly rate is not an amount." };
+  if (streamerCommissionBps === null) return { error: "The commission is not a percentage." };
+  // A rate this size is a decimal point in the wrong place, not a wage.
+  if (streamerHourlyCents > 100_000 || shippingHourlyCents > 100_000) {
+    return { error: "That is over $1,000 an hour. Check the decimal point." };
+  }
+  if (streamerCommissionBps > 10_000) {
+    return { error: "That is over 100%. Check the figure." };
+  }
+
+  const before = await getSettings();
+  if (
+    before.streamerHourlyCents === streamerHourlyCents &&
+    before.shippingHourlyCents === shippingHourlyCents &&
+    before.streamerCommissionBps === streamerCommissionBps
+  ) {
+    return { ok: "Nothing changed." };
+  }
+
+  await prisma.$transaction([
+    prisma.settings.update({
+      where: { id: "singleton" },
+      data: { streamerHourlyCents, shippingHourlyCents, streamerCommissionBps },
+    }),
+    prisma.auditLog.create({
+      data: {
+        entityType: "Settings",
+        entityId: "singleton",
+        action: "RATES",
+        actorId: boss.id,
+        summary:
+          `Pay rates set to streamers ${money(streamerHourlyCents)}/h, ` +
+          `shipping ${money(shippingHourlyCents)}/h, commission ${formatBps(streamerCommissionBps)} a show`,
+        before: {
+          streamerHourlyCents: before.streamerHourlyCents,
+          shippingHourlyCents: before.shippingHourlyCents,
+          streamerCommissionBps: before.streamerCommissionBps,
+        },
+        after: { streamerHourlyCents, shippingHourlyCents, streamerCommissionBps },
+      },
+    }),
+  ]);
+
+  refresh();
+  return { ok: "Rates saved. They apply to this period and every one after it." };
+}
+
+const PersonRateSchema = z.object({
+  userId: z.string().min(1),
+  hourly: z.string(),
+  commissionPercent: z.string(),
+});
+
+/**
+ * One person's own rate, where it differs from their team's.
+ *
+ * An empty box means "whatever the team is paid" — not zero. That distinction
+ * is the whole point of the field being nullable: clearing it must put somebody
+ * back on the standard rate, not stop paying them.
+ */
+export async function setPersonRate(
+  _prev: TimesheetState,
+  formData: FormData,
+): Promise<TimesheetState> {
+  let boss;
+  try {
+    boss = await requireBossOrThrow();
+  } catch {
+    return { error: "Only an admin can change what somebody is paid." };
+  }
+
+  const parsed = PersonRateSchema.safeParse(Object.fromEntries(formData));
+  if (!parsed.success) return { error: "That is not a rate." };
+
+  const { userId } = parsed.data;
+  const hourlyRaw = parsed.data.hourly.trim();
+  const commissionRaw = parsed.data.commissionPercent.trim();
+
+  const hourlyRateCents = hourlyRaw === "" ? null : parseMoneyToCents(hourlyRaw);
+  const commissionBps = commissionRaw === "" ? null : parsePercentToBps(commissionRaw);
+
+  if (hourlyRaw !== "" && hourlyRateCents === null) return { error: "That is not an amount." };
+  if (commissionRaw !== "" && commissionBps === null) return { error: "That is not a percentage." };
+  if (hourlyRateCents !== null && hourlyRateCents > 100_000) {
+    return { error: "That is over $1,000 an hour. Check the decimal point." };
+  }
+  if (commissionBps !== null && commissionBps > 10_000) {
+    return { error: "That is over 100%. Check the figure." };
+  }
+
+  const person = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { name: true, hourlyRateCents: true, commissionBps: true },
+  });
+  if (!person) return { error: "That person no longer exists." };
+
+  await prisma.$transaction([
+    prisma.user.update({ where: { id: userId }, data: { hourlyRateCents, commissionBps } }),
+    prisma.auditLog.create({
+      data: {
+        entityType: "User",
+        entityId: userId,
+        action: "RATES",
+        actorId: boss.id,
+        summary:
+          `${person.name}: ` +
+          (hourlyRateCents === null
+            ? "hourly back to the standard rate"
+            : `hourly set to ${money(hourlyRateCents)}`) +
+          ", " +
+          (commissionBps === null
+            ? "commission back to the standard rate"
+            : `commission set to ${formatBps(commissionBps)}`),
+        before: {
+          hourlyRateCents: person.hourlyRateCents,
+          commissionBps: person.commissionBps,
+        },
+        after: { hourlyRateCents, commissionBps },
+      },
+    }),
+  ]);
+
+  refresh();
+  return { ok: `Saved ${person.name}'s rate.` };
+}
+
+function money(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
 }

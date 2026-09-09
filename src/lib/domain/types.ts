@@ -63,10 +63,19 @@ export type TimeHM = string;
  */
 export interface BusinessSettings {
   timezone: string;
+  /** What a streamer is paid an hour, in whole cents. */
+  streamerHourlyCents: number;
+  /** What somebody on shipping is paid an hour, in whole cents. */
+  shippingHourlyCents: number;
+  /** A streamer's share of their show's sales, in basis points: 100 = 1.00%. */
+  streamerCommissionBps: number;
 }
 
 export const DEFAULT_SETTINGS: BusinessSettings = {
   timezone: "America/New_York",
+  streamerHourlyCents: 0,
+  shippingHourlyCents: 0,
+  streamerCommissionBps: 100,
 };
 
 /**

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { checkCandidate, validateSchedule } from "./schedule";
-import type { AssignmentInput, AvailabilityInput, ShowInput } from "./schedule";
+import { checkCandidate, planCopyForward, validateSchedule } from "./schedule";
+import type {
+  AssignmentInput,
+  AvailabilityInput,
+  CopySourceShow,
+  CopyTargetShow,
+  ShowInput,
+} from "./schedule";
 import type { Slot } from "./types";
 
 const DATE = "2026-08-21";
@@ -364,5 +370,109 @@ describe("picking someone for a show", () => {
       availability: [{ userId: "devon", dateISO: DATE, slot: "DAY" }],
     });
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe("copying the last release forward", () => {
+  // 2026-08-18 is a Tuesday; 2026-08-25 is the Tuesday after it.
+  const lastTuesday = new Date(Date.UTC(2026, 7, 18));
+  const thisTuesday = new Date(Date.UTC(2026, 7, 25));
+  const thisWednesday = new Date(Date.UTC(2026, 7, 26));
+
+  function source(over: Partial<CopySourceShow> = {}): CopySourceShow {
+    return {
+      date: lastTuesday,
+      platform: "TIKTOK",
+      slot: "NIGHT",
+      assignments: [
+        { userId: "maya", seat: 1 },
+        { userId: "devon", seat: 2 },
+      ],
+      ...over,
+    };
+  }
+
+  function target(over: Partial<CopyTargetShow> = {}): CopyTargetShow {
+    return {
+      id: "new1",
+      date: thisTuesday,
+      platform: "TIKTOK",
+      slot: "NIGHT",
+      takenSeats: [],
+      ...over,
+    };
+  }
+
+  const everyone = new Set(["maya", "devon", "ana"]);
+
+  it("carries the same weekday, platform and slot across", () => {
+    const plan = planCopyForward([source()], [target()], everyone);
+    expect(plan.toCreate).toEqual([
+      { showId: "new1", userId: "maya", seat: 1 },
+      { showId: "new1", userId: "devon", seat: 2 },
+    ]);
+    expect(plan.skipped).toBe(0);
+  });
+
+  it("leaves a different weekday alone", () => {
+    const plan = planCopyForward([source()], [target({ date: thisWednesday })], everyone);
+    expect(plan.toCreate).toEqual([]);
+  });
+
+  it("leaves a different slot alone", () => {
+    const plan = planCopyForward([source()], [target({ slot: "DAY" })], everyone);
+    expect(plan.toCreate).toEqual([]);
+  });
+
+  it("never overwrites a seat already filled", () => {
+    const plan = planCopyForward([source()], [target({ takenSeats: [1] })], everyone);
+    expect(plan.toCreate).toEqual([{ showId: "new1", userId: "devon", seat: 2 }]);
+  });
+
+  // The bug this exists for. Somebody who has left, or moved onto shipping,
+  // keeps their place on the release they actually worked — so there is always a
+  // name to find — and copying it forward would put them on a rota going out.
+  it("does not carry forward somebody who can no longer be scheduled", () => {
+    const plan = planCopyForward([source()], [target()], new Set(["devon"]));
+    expect(plan.toCreate).toEqual([{ showId: "new1", userId: "devon", seat: 2 }]);
+    expect(plan.skipped).toBe(1);
+  });
+
+  it("counts every placement it dropped, so the boss can be told", () => {
+    const plan = planCopyForward([source()], [target()], new Set<string>());
+    expect(plan.toCreate).toEqual([]);
+    expect(plan.skipped).toBe(2);
+  });
+
+  it("leaves the seat open rather than promoting the other person into it", () => {
+    const plan = planCopyForward([source()], [target()], new Set(["maya"]));
+    expect(plan.toCreate).toEqual([{ showId: "new1", userId: "maya", seat: 1 }]);
+  });
+
+  // A three-week release copying from a two-week one has two candidate Tuesdays.
+  it("repeats the earliest match when a weekday appears twice", () => {
+    const first = source({ date: lastTuesday });
+    const second = source({
+      date: new Date(Date.UTC(2026, 7, 11)),
+      assignments: [{ userId: "ana", seat: 1 }],
+    });
+    const plan = planCopyForward([first, second], [target()], everyone);
+    // 11 August is the earlier Tuesday, so its pattern is the one that repeats.
+    expect(plan.toCreate).toEqual([{ showId: "new1", userId: "ana", seat: 1 }]);
+  });
+
+  it("never puts one person in both seats", () => {
+    const both = source({
+      assignments: [
+        { userId: "maya", seat: 1 },
+        { userId: "maya", seat: 2 },
+      ],
+    });
+    const plan = planCopyForward([both], [target()], everyone);
+    expect(plan.toCreate).toEqual([{ showId: "new1", userId: "maya", seat: 1 }]);
+  });
+
+  it("has nothing to say when there is no previous release", () => {
+    expect(planCopyForward([], [target()], everyone)).toEqual({ toCreate: [], skipped: 0 });
   });
 });

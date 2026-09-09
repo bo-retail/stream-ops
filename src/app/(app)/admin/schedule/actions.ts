@@ -14,6 +14,7 @@ import {
 } from "@/lib/domain/dates";
 import { blockerFor, rankCandidates } from "@/lib/domain/assign";
 import type { Candidate } from "@/lib/domain/assign";
+import { planCopyForward } from "@/lib/domain/schedule";
 import { PLATFORM_SHORT, SEATS, SEATS_PER_SHOW, SLOT_SHORT } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
 import { getReleaseView } from "@/lib/server/schedule";
@@ -613,32 +614,36 @@ export async function copyLastRelease(
     }),
   ]);
 
-  const weekdayKey = (date: Date, platform: Platform, slot: Slot) =>
-    `${date.getUTCDay()}|${platform}|${slot}`;
+  // Who can still be scheduled. See `planCopyForward` for why this is the whole
+  // question rather than a copy.
+  const eligible = new Set(
+    (
+      await prisma.user.findMany({
+        where: { isActive: true, role: "EMPLOYEE", team: "STREAMING" },
+        select: { id: true },
+      })
+    ).map((u) => u.id),
+  );
 
-  // Where a weekday has more than one matching show — a three-week release
-  // copying from a two-week one — the earliest is used, so the pattern repeats
-  // rather than the last one winning arbitrarily.
-  const byWeekday = new Map<string, { userId: string; seat: number }[]>();
-  for (const show of [...previousShows].sort((a, b) => a.date.getTime() - b.date.getTime())) {
-    const key = weekdayKey(show.date, show.platform, show.slot);
-    if (!byWeekday.has(key)) byWeekday.set(key, show.assignments);
-  }
-
-  const toCreate: { showId: string; userId: string; seat: number }[] = [];
-  for (const show of currentShows) {
-    const taken = new Set(show.assignments.map((a) => a.seat));
-    const source = byWeekday.get(weekdayKey(show.date, show.platform, show.slot)) ?? [];
-    for (const a of source) {
-      if (taken.has(a.seat)) continue;
-      // Never both seats to one person, even if the source somehow had that.
-      if (toCreate.some((c) => c.showId === show.id && c.userId === a.userId)) continue;
-      toCreate.push({ showId: show.id, userId: a.userId, seat: a.seat });
-    }
-  }
+  const { toCreate, skipped } = planCopyForward(
+    previousShows,
+    currentShows.map((s) => ({
+      id: s.id,
+      date: s.date,
+      platform: s.platform,
+      slot: s.slot,
+      takenSeats: s.assignments.map((a) => a.seat),
+    })),
+    eligible,
+  );
 
   if (toCreate.length === 0) {
-    return { error: "Nothing to copy — no matching shows, or every seat is already filled." };
+    return {
+      error:
+        skipped > 0
+          ? `Nothing to copy — the ${skipped} placement(s) that matched belong to people who are no longer streamers.`
+          : "Nothing to copy — no matching shows, or every seat is already filled.",
+    };
   }
 
   await prisma.$transaction([
@@ -652,14 +657,20 @@ export async function copyLastRelease(
         entityId: releaseId,
         action: "COPY_PREVIOUS",
         actorId: boss.id,
-        summary: `Copied ${toCreate.length} placements from the previous release`,
+        summary:
+          `Copied ${toCreate.length} placements from the previous release` +
+          (skipped > 0 ? `; skipped ${skipped} for people who are no longer streamers` : ""),
       },
     }),
   ]);
 
   refresh();
   return {
-    ok: `Copied ${toCreate.length} placement(s) from the previous release. Check them before publishing.`,
+    ok:
+      `Copied ${toCreate.length} placement(s) from the previous release. Check them before publishing.` +
+      (skipped > 0
+        ? ` ${skipped} were left out — those people are no longer streamers.`
+        : ""),
   };
 }
 

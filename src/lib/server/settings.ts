@@ -17,6 +17,9 @@ export const getSettings = cache(async (): Promise<BusinessSettings> => {
 
   return {
     timezone: row.timezone,
+    streamerHourlyCents: row.streamerHourlyCents,
+    shippingHourlyCents: row.shippingHourlyCents,
+    streamerCommissionBps: row.streamerCommissionBps,
   };
 });
 

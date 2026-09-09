@@ -302,6 +302,83 @@ export function validateSchedule(
   };
 }
 
+/* ------------------------------------------------- copying a release forward */
+
+export interface CopySourceShow {
+  date: Date;
+  platform: Platform;
+  slot: Slot;
+  assignments: readonly { userId: string; seat: number }[];
+}
+
+export interface CopyTargetShow {
+  id: string;
+  date: Date;
+  platform: Platform;
+  slot: Slot;
+  /** Seats already filled here. Never overwritten. */
+  takenSeats: readonly number[];
+}
+
+export interface CopyPlan {
+  toCreate: { showId: string; userId: string; seat: number }[];
+  /** Placements dropped because that person can no longer be scheduled. */
+  skipped: number;
+}
+
+/**
+ * Who to put on the new release, taken from the last one.
+ *
+ * Matched on weekday, platform and slot rather than by date or position: a
+ * release can be any length, so "the Tuesday night eBay show" is the only thing
+ * that means the same in both.
+ *
+ * `eligible` is the people who can still be scheduled today, and it is the whole
+ * point of this being a decision rather than a copy. Somebody who has left, or
+ * moved onto shipping, keeps their place on the releases they actually worked —
+ * those assignments are left alone on purpose, because deleting them would empty
+ * seats on a rota that has already gone out. So there is always a name here to
+ * find, and carrying it forward would put somebody on a schedule they cannot
+ * work. They are counted rather than silently dropped, so the boss is told.
+ */
+export function planCopyForward(
+  previous: readonly CopySourceShow[],
+  current: readonly CopyTargetShow[],
+  eligible: ReadonlySet<string>,
+): CopyPlan {
+  const key = (date: Date, platform: Platform, slot: Slot) =>
+    `${date.getUTCDay()}|${platform}|${slot}`;
+
+  // Where a weekday has more than one matching show — a three-week release
+  // copying from a two-week one — the earliest is used, so the pattern repeats
+  // rather than the last one winning arbitrarily.
+  const byWeekday = new Map<string, readonly { userId: string; seat: number }[]>();
+  for (const show of [...previous].sort((a, b) => a.date.getTime() - b.date.getTime())) {
+    const k = key(show.date, show.platform, show.slot);
+    if (!byWeekday.has(k)) byWeekday.set(k, show.assignments);
+  }
+
+  const toCreate: CopyPlan["toCreate"] = [];
+  let skipped = 0;
+
+  for (const show of current) {
+    const taken = new Set(show.takenSeats);
+    const source = byWeekday.get(key(show.date, show.platform, show.slot)) ?? [];
+    for (const a of source) {
+      if (taken.has(a.seat)) continue;
+      if (!eligible.has(a.userId)) {
+        skipped++;
+        continue;
+      }
+      // Never both seats to one person, even if the source somehow had that.
+      if (toCreate.some((c) => c.showId === show.id && c.userId === a.userId)) continue;
+      toCreate.push({ showId: show.id, userId: a.userId, seat: a.seat });
+    }
+  }
+
+  return { toCreate, skipped };
+}
+
 /**
  * Whether a person can be added to a show, and if not, why.
  *
