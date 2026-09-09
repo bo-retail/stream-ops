@@ -388,11 +388,24 @@ export async function materialiseScheduledHours(now: Date = new Date()): Promise
 
   if (due.length === 0) return 0;
 
+  /*
+    Anything already on record for this person and this show, whatever wrote it.
+
+    Not just the SCHEDULE entries. Before this, streamers clocked in and out for
+    their shows, and those entries carry the show they were measured against. If
+    this only looked for its own kind it would print a second set of hours over
+    the top of every show anybody ever clocked — and the first page load after
+    deploying would silently double up to ninety days of pay that has already
+    been paid.
+
+    An admin correction is the same story: it is hours for that show, entered
+    deliberately, and printing the schedule's version beside it would pay both.
+
+    Off-schedule work is unaffected. Those entries have no show attached, which
+    is the whole distinction, so they are not matched here.
+  */
   const already = await prisma.timeEntry.findMany({
-    where: {
-      source: "SCHEDULE",
-      showId: { in: due.map((d) => d.showId) },
-    },
+    where: { showId: { in: due.map((d) => d.showId) } },
     select: { userId: true, showId: true },
   });
   const done = new Set(already.map((e) => `${e.userId}|${e.showId}`));

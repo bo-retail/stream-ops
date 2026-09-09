@@ -231,6 +231,80 @@ check("and is not clamped back up to the show's hours", corrected[0]?.paidMinute
 
 check("shipping is never given scheduled hours", await prisma.timeEntry.count({ where: { userId: packer.id } }), 0);
 
+/* ------------------------------- a show somebody already clocked, the old way */
+
+/*
+  The one that would have doubled a pay period.
+
+  Before hours came from the schedule, a streamer clocked in and out and the
+  entry carried the show it was measured against. Those entries are still there.
+  If a catch-up run only looked for its own SCHEDULE entries, it would print a
+  second set of hours over the top of every show anybody had ever clocked — and
+  the first page load after deploying reaches ninety days back.
+*/
+const CLOCKED_DATE = new Date(Date.now() - 57 * 86_400_000).toISOString().slice(0, 10);
+const clockedStart = new Date(`${CLOCKED_DATE}T19:00:00.000Z`);
+const clockedEnd = new Date(clockedStart.getTime() + 6 * 3_600_000);
+const clockedShow = await makeShow({
+  dateISO: CLOCKED_DATE,
+  published: true,
+  startsAt: clockedStart,
+  endsAt: clockedEnd,
+  platform: "TIKTOK",
+  slot: "DAY",
+});
+
+// Alice clocked it herself, the way it used to work. Bob's was corrected by an
+// admin. Neither should be printed over.
+await prisma.timeEntry.create({
+  data: {
+    userId: alice.id,
+    showId: clockedShow,
+    clockInAt: clockedStart,
+    clockOutAt: clockedEnd,
+    source: "SELF",
+    version: 1,
+  },
+});
+await prisma.timeEntry.create({
+  data: {
+    userId: bob.id,
+    showId: clockedShow,
+    clockInAt: clockedStart,
+    clockOutAt: new Date(clockedEnd.getTime() - 3_600_000),
+    source: "ADMIN",
+    version: 2,
+  },
+});
+
+await materialiseScheduledHours();
+
+check(
+  "a show somebody clocked is not printed over",
+  await prisma.timeEntry.count({ where: { showId: clockedShow, userId: alice.id } }),
+  1,
+);
+check(
+  "nor one an admin corrected",
+  await prisma.timeEntry.count({ where: { showId: clockedShow, userId: bob.id } }),
+  1,
+);
+check(
+  "and no schedule entry was printed for either",
+  await scheduledHoursPrinted(clockedShow),
+  0,
+);
+check(
+  "the admin's correction still stands",
+  (
+    await prisma.timeEntry.findFirstOrThrow({
+      where: { showId: clockedShow, userId: bob.id },
+      select: { clockOutAt: true },
+    })
+  ).clockOutAt?.toISOString(),
+  new Date(clockedEnd.getTime() - 3_600_000).toISOString(),
+);
+
 /* ------------------------------------------------------- somebody leaves */
 
 /*
