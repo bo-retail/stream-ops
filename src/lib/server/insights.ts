@@ -360,12 +360,20 @@ export interface RangePreset {
   to: DateISO;
 }
 
+/** What the page shows when nothing is asked for. */
+export const DEFAULT_PERIOD = "30";
+
 /**
  * The stretches worth looking at.
  *
  * Ends yesterday rather than today throughout, because a show day's sales do
  * not exist until its reports are uploaded the next morning. A range including
  * today would always end on a zero and make every trend look like a collapse.
+ *
+ * Yesterday is first because it is the question asked most often — last night's
+ * shows are the only ones whose figures have just landed. Being a single day it
+ * compares against the day before, which is the honest comparison: two days
+ * apart is what the reports actually let you see.
  */
 export async function rangePresets(): Promise<RangePreset[]> {
   const settings = await getSettings();
@@ -374,6 +382,7 @@ export async function rangePresets(): Promise<RangePreset[]> {
   const span = await loadedSpan();
 
   const presets: RangePreset[] = [
+    { key: "1", label: "Yesterday", from: end, to: end },
     { key: "7", label: "Last 7 days", from: addDays(end, -6), to: end },
     { key: "30", label: "Last 30 days", from: addDays(end, -29), to: end },
     { key: "90", label: "Last 90 days", from: addDays(end, -89), to: end },
@@ -394,7 +403,12 @@ export function resolveRange(
   if (from && to && from <= to) {
     return { from, to, label: `${from} to ${to}`, key: "custom" };
   }
-  const found = presets.find((p) => p.key === key) ?? presets[1] ?? presets[0];
+  // By key, never by position: adding a preset must not silently move what the
+  // page opens on.
+  const found =
+    presets.find((p) => p.key === key) ??
+    presets.find((p) => p.key === DEFAULT_PERIOD) ??
+    presets[0];
   return { from: found.from, to: found.to, label: found.label, key: found.key };
 }
 
