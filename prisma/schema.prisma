@@ -19,8 +19,16 @@ datasource db {
   provider = "postgresql"
 }
 
+/// What somebody may do.
+///
+/// Paired with `Team` to make a position: BOSS is the admin, MANAGER on the
+/// shipping side is the Shipping Director, and EMPLOYEE is everybody else.
+/// `requireBoss` tests for BOSS exactly, so adding MANAGER kept the new role
+/// out of every admin page without touching that guard.
 enum Role {
   EMPLOYEE
+  /// Runs one side of the business without administering the app.
+  MANAGER
   BOSS
 }
 
@@ -93,6 +101,10 @@ model User {
   auditLogs         AuditLog[]              @relation("AuditActor")
   timeEntries       TimeEntry[]
   timeEntriesEdited TimeEntryRevision[]     @relation("TimeEntryChangedBy")
+
+  importsUploaded ImportBatch[] @relation("ImportUploadedBy")
+  packagesClosed  Package[]     @relation("PackageClosedBy")
+  scans           ScanEvent[]   @relation("ScanBy")
 
   @@index([role, isActive])
 }
@@ -414,4 +426,237 @@ model TimeEntryRevision {
 
   @@unique([timeEntryId, version])
   @@index([changedAt])
+}
+
+/* ==========================================================================
+   Shipping — the morning's order files, the boxes they become, and the
+   permanent record of what a packer put in each one.
+   ========================================================================== */
+
+/// How an upload ended.
+enum ImportStatus {
+  /// Parsed and accepted. This is the day's data.
+  OK
+  /// A file was not what the code expects, or a check failed. No boxes made.
+  BLOCKED
+}
+
+/// One upload of a show day's order exports.
+///
+/// Kept as history rather than one row per day: a day can legitimately be
+/// uploaded again — a corrected export, a file that was missing first time —
+/// and "who loaded what, when, and what it produced" has to stay answerable.
+/// The most recent OK batch is the day's data.
+model ImportBatch {
+  id       String       @id @default(cuid())
+  showDate DateTime     @db.Date
+  status   ImportStatus @default(OK)
+
+  uploadedById String?
+  uploadedAt   DateTime @default(now())
+
+  /// One entry per file: name, platform, sha256, size, row count.
+  files Json
+  /// Everything the parse wanted to say — blocking, warning and informational.
+  flags Json
+
+  watchCount   Int @default(0)
+  boxCount     Int @default(0)
+  droppedCount Int @default(0)
+
+  uploadedBy User?         @relation("ImportUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  sales      SalesRecord[]
+  drops      ImportDrop[]
+  packages   Package[]
+
+  @@index([showDate, uploadedAt])
+  @@index([status, showDate])
+}
+
+/// One paid watch, exactly as `WatchSale` in src/lib/domain/imports.
+///
+/// Money is stored in whole cents. The schedule already keeps elapsed time as
+/// integer hundredths for the same reason: a float is the wrong shape for
+/// something that gets totalled and paid.
+model SalesRecord {
+  id      String @id @default(cuid())
+  batchId String
+
+  platform Platform
+  /// "TikTok AM", "TikTok PM", "eBay AM", "eBay PM" — where it sold.
+  show     String
+  showDate DateTime @db.Date
+
+  /// Who is paid for it, which is not the same question as where it sold.
+  shiftTag      String
+  rawShiftTag   String
+  shiftTagValid Boolean @default(true)
+
+  orderRef    String
+  lineRef     String
+  buyer       String
+  /// The stock number. TikTok `Product Name`, eBay `Item Title`.
+  stockNumber String
+  category    String  @default("")
+  qty         Int     @default(1)
+
+  unitPriceCents        Int @default(0)
+  platformDiscountCents Int @default(0)
+  sellerDiscountCents   Int @default(0)
+  /// After both discounts — the headline revenue figure (R14).
+  netItemPriceCents     Int @default(0)
+  /// Carried through untouched and uninterpreted (R9).
+  shippingCents         Int @default(0)
+  taxAndFeesCents       Int @default(0)
+  orderTotalCents       Int @default(0)
+
+  /// When the marketplace says the order was created. Null on eBay, which
+  /// records no time of day at all.
+  soldAt DateTime?
+  paidOn DateTime? @db.Date
+
+  shipToName    String @default("")
+  state         String @default("")
+  paymentMethod String @default("")
+
+  /// TikTok's own Package ID. Not a reference to `Package`.
+  sourcePackageId String @default("")
+  tracking        String @default("")
+  sourceFile      String
+
+  batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([showDate, show])
+  @@index([batchId])
+  @@index([tracking])
+  @@index([shiftTag])
+}
+
+/// A raw row that was not counted, and why. The Exceptions sheet.
+model ImportDrop {
+  id      String @id @default(cuid())
+  batchId String
+
+  platform    Platform
+  orderRef    String
+  buyer       String @default("")
+  stockNumber String @default("")
+  amountCents Int    @default(0)
+  reason      String
+  sourceFile  String
+
+  batch ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+}
+
+enum PackageStatus {
+  OPEN
+  CLOSED_COMPLETE
+  CLOSED_INCOMPLETE
+}
+
+/// One box: one tracking number, one parcel, one buyer.
+///
+/// Several orders share a box when somebody bought more than once during a
+/// show. Tracking is the key rather than TikTok's `Package ID` because eBay has
+/// no package column at all, and because the tracking number is the only thing
+/// a packer can physically scan.
+model Package {
+  id             String   @id @default(cuid())
+  /// The unique constraint is what makes a box closed for everyone: two
+  /// packers scanning the same label cannot create two boxes to close.
+  trackingNumber String   @unique
+  platform       Platform
+  showDate       DateTime @db.Date
+
+  buyer       String @default("")
+  shipToName  String @default("")
+  shipToState String @default("")
+
+  status PackageStatus @default(OPEN)
+  /// A label that was scanned but was in no uploaded file. Packable anyway;
+  /// listed for the Shipping Director to reconcile.
+  isUnrecognised Boolean @default(false)
+
+  closedById String?
+  closedAt   DateTime?
+
+  /// The upload that first created this box. Null once that batch is gone.
+  batchId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  batch    ImportBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  closedBy User?        @relation("PackageClosedBy", fields: [closedById], references: [id], onDelete: SetNull)
+
+  items PackageItem[]
+  scans ScanEvent[]
+
+  @@index([showDate, status])
+  @@index([status])
+  @@index([closedById, closedAt])
+}
+
+/// What belongs in a box, as a count per stock number.
+///
+/// A count and not a checklist: a real box on 09/08 held stock number 49746
+/// three times. As a list of unique items the second scan of an identical
+/// barcode reads as a duplicate and gets refused, stranding the packer.
+model PackageItem {
+  id          String @id @default(cuid())
+  packageId   String
+  stockNumber String
+  expectedQty Int
+  scannedQty  Int    @default(0)
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  @@unique([packageId, stockNumber])
+  @@index([stockNumber])
+}
+
+/// What happened at the scanner.
+enum ScanKind {
+  /// A label was scanned and the box opened.
+  LABEL
+  ITEM_ACCEPTED
+  /// The watch was not in this box. Recorded because a refusal is proof the
+  /// control worked and the wrong item was caught.
+  ITEM_REFUSED
+  /// An unexpected watch was added deliberately, against the data.
+  ITEM_OVERRIDE
+  CLOSE_COMPLETE
+  CLOSE_INCOMPLETE
+  REOPEN
+}
+
+/// Append-only log of every scan.
+///
+/// This is the evidence for a customer who says they were sent the wrong
+/// watch: which box, which watch, by whom, at what moment — and what was
+/// refused. Rows are never updated or deleted; a correction adds a row.
+///
+/// About 700 events a day at the real rate of 220 boxes and 473 watches.
+model ScanEvent {
+  id        String   @id @default(cuid())
+  packageId String
+  userId    String
+  at        DateTime @default(now())
+  kind      ScanKind
+
+  /// The watch, for item events. Null on LABEL and the close events.
+  stockNumber String?
+  /// Exactly what the scanner returned, before matching. Kept so a label that
+  /// failed to resolve can be diagnosed rather than guessed at.
+  rawScan     String?
+  note        String?
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  user    User    @relation("ScanBy", fields: [userId], references: [id])
+
+  @@index([packageId, at])
+  @@index([userId, at])
+  @@index([at])
 }

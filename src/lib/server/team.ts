@@ -1,14 +1,20 @@
 import "server-only";
 import { cache } from "react";
 import { prisma } from "@/lib/db";
+import type { Role, Team } from "@/generated/prisma/enums";
 
+/**
+ * Taken from the generated enums rather than written out as a union: spelling
+ * the values here meant that adding a role to the schema left this quietly
+ * describing a shape the database no longer had.
+ */
 export interface TeamMember {
   id: string;
   name: string;
   email: string;
-  role: "EMPLOYEE" | "BOSS";
+  role: Role;
   isActive: boolean;
-  team: "STREAMING" | "SHIPPING";
+  team: Team;
 }
 
 const SELECT = {

@@ -300,13 +300,86 @@ in the box.
 
 ### The Director's views
 
-Defaults to today; any past date can be pulled up.
+**The day it opens on is yesterday, not today.** Yesterday's shows are packed this
+morning, so the date that matters when the screen is opened is almost always the one
+before. A date control moves a day at a time in either direction, and any past date can
+be pulled up — the log is permanent, so every day that ever ran is reachable.
 
-- Live counter — boxes shipped of the day's total, broken down by person
+The headline, and the reason the screen exists at all:
+
+```
+Tuesday 9 September — packing the shows of Monday 8 September
+
+    173 of 220 boxes sent            47 still to go
+    ────────────────────────────────────────────────
+    María      96 boxes   214 items    07:41 — 11:58
+    Ana        61 boxes   139 items    08:03 — 11:57
+    Luis       16 boxes    38 items    09:40 — 10:22
+```
+
+The total comes from the day's upload: **boxes to send** is how many the sales reports
+produced, **boxes sent** is how many have been closed. Both figures are meaningless
+without an upload, so a day with no report shows the banner in §6.1 instead of a
+counter of zero.
+
+Below the headline:
+
 - Per person: boxes packed, items packed, first scan, last scan
 - Incomplete boxes queue
 - Unrecognised-label reconcile queue
 - Full scan detail for any box
+
+Visible to the Shipping Director and the boss. Packers do not get this screen — they get
+their scanner and nothing else.
+
+### 6.1 The missing-report banner
+
+A show ran and nobody uploaded its reports. Nothing downstream can happen — no boxes to
+pack, no sales, no commission — and the failure is silent, because an empty screen looks
+much like a quiet day.
+
+So: **a day with shows but no report raises a banner** for the Shipping Director and the
+boss, on their dashboard and on Sales Report Entry, naming the dates and linking straight
+to the upload.
+
+A date qualifies when all of these hold:
+
+- it is **strictly before today** in the business zone — today's shows have not finished,
+  and their reports do not exist until tomorrow morning
+- it carries at least one **`SCHEDULED`** show in a **published** release — a day whose
+  shows were all cancelled needs no report, and a draft was never a commitment
+- **no successful import exists** for it
+- it falls inside a **14-day** look-back — older than that is history, not a prompt
+
+The banner does not dismiss. It goes away when the report is uploaded, which is the
+point. Packers never see it: they cannot act on it.
+
+### 6.2 Downloading the consolidated sales workbook
+
+The boss can download any day's sales as the workbook, in the shape the manual run
+produced — the format that was already read and trusted.
+
+Three sheets: `Summary`, `Sales`, `Exceptions`. Arial. Currency as
+`$#,##0.00;($#,##0.00);-`. The `Sales` sheet frozen below its header row and filtered.
+`BO_Retail_Show_Sales_{YYYY-MM-DD}.xlsx`, named for the show date.
+
+**One day by default; a range on request.** A range produces the same three sheets over
+every show day in it, named `BO_Retail_Show_Sales_{start}_to_{end}.xlsx`. The `Summary`
+keeps its familiar shape — one row per show, totalled across the range — and gains a
+second table beneath it breaking the same figures down by day, because over a fortnight
+"which day was that" is the first question anyone asks.
+
+Every figure on `Summary` is a **live formula** over `Sales` — `COUNTIFS` and `SUMIFS`,
+never a pasted value (F6) — so correcting a row in the workbook recalculates the totals
+rather than leaving them contradicting the rows beneath them.
+
+> **One fix against the earlier run.** Its distinct-buyer count used
+> `SUMPRODUCT((show=X)/COUNTIFS(...))`, which accumulates floating-point error and
+> renders as `87.000000000000043` buyers. The formula is kept — it is the right shape —
+> wrapped in `ROUND(…, 0)`.
+
+Built with `exceljs`, already a dependency, following the two export routes the app
+has: `api/schedule/export` and `api/timesheets/export`.
 
 Per-person numbers are **activity, not a timesheet**. First and last scan bracket when
 someone was actually packing — more honest than login times, since people stay signed in
@@ -374,7 +447,10 @@ built on the same parse.
 
 Named so nobody builds them by accident:
 
-- The sales and commission screens. The data is captured from day one; the views come later.
+- The sales and commission **screens**. The data is captured from day one and the
+  workbook can be downloaded (§6.2); the on-screen reporting comes later.
+- Commission itself — the rate, and how it splits between the two people on a show, are
+  not yet decided.
 - Anything that assigns work to a packer. Paper does that.
 - Unit-level watch traceability. The barcode is a model (R4).
 - Inventory. Stock numbers identify models, and repeat sales are normal, not oversells.
