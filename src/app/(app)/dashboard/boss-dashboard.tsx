@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { AlertTriangle, ArrowRight, CheckCircle2, Radio, Users } from "lucide-react";
 import {
   Alert,
@@ -19,12 +20,27 @@ import { getReleaseView } from "@/lib/server/schedule";
 import { listReleases } from "@/lib/server/releases";
 import { getSettings, getWeekContext } from "@/lib/server/settings";
 import { missingReportDaysSafe } from "@/lib/server/shipping";
+import { salesHeadlineSafe } from "@/lib/server/insights";
+import { formatChange, formatMoneyShort } from "@/lib/domain/insights";
 
 export async function BossDashboard() {
   const { today } = await getWeekContext();
   const settings = await getSettings();
   const releases = await listReleases(30);
   const missingReports = await missingReportDaysSafe();
+
+  /*
+    Two figures, not ten.
+
+    Revenue answers "are we doing better", and it cannot be read alone —
+    volume beside it is what separates a good fortnight from a discounted one.
+    Everything else lives on Sales insights; a dashboard that tries to be a
+    report stops being glanceable, which is the only thing it is for.
+
+    Fails soft for the same reason the banner does: a summary figure must not
+    be what takes down the page it is summarising.
+  */
+  const sales = await salesHeadlineSafe();
 
   const clock = new Intl.DateTimeFormat("en-GB", {
     timeZone: settings.timezone,
@@ -155,6 +171,28 @@ export async function BossDashboard() {
       <div className="mb-5">
         <MissingReports days={missingReports} />
       </div>
+
+      {/* The money first, because it is the only thing on this page that says
+          whether the last month went well. Two figures: revenue on its own can
+          rise while every watch sells for less. */}
+      {sales?.hasData ? (
+        <Link href="/insights" className="mb-5 block">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Stat
+              label="Net revenue · last 30 days"
+              value={formatMoneyShort(sales.revenueCents)}
+              tone={sales.revenue.direction === "up" ? "ok" : sales.revenue.direction === "down" ? "warn" : undefined}
+              sub={`${formatChange(sales.revenue)} on the 30 days before`}
+            />
+            <Stat
+              label="Watches sold · last 30 days"
+              value={sales.units}
+              tone={sales.unitsChange.direction === "up" ? "ok" : sales.unitsChange.direction === "down" ? "warn" : undefined}
+              sub={`${formatChange(sales.unitsChange)} on the 30 days before`}
+            />
+          </div>
+        </Link>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Shows today" value={todayShows.length} sub={`${liveNow.length} on air now`} />

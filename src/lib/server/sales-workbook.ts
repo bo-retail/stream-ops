@@ -1,8 +1,9 @@
 import "server-only";
 import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
-import { fromDbDate, toDbDate } from "@/lib/domain/dates";
+import { fromDbDate } from "@/lib/domain/dates";
 import type { DateISO } from "@/lib/domain/types";
+import { latestBatchIds } from "./sales-data";
 
 /**
  * A show day's sales as a workbook — the shape the manual run produced, which
@@ -95,27 +96,9 @@ export async function buildSalesWorkbook(
   from: DateISO,
   to: DateISO,
 ): Promise<SalesWorkbook | null> {
-  const range = { gte: toDbDate(from), lte: toDbDate(to) };
 
-  /*
-    Only the most recent successful upload for each day.
-
-    A day may legitimately be uploaded more than once — a corrected export, a
-    file that was missing first time — and every upload keeps its own sales
-    rows. Reading them all would double a re-uploaded day's revenue.
-  */
-  const batches = await prisma.importBatch.findMany({
-    where: { showDate: range, status: "OK" },
-    orderBy: { uploadedAt: "desc" },
-    select: { id: true, showDate: true },
-  });
-
-  const latest = new Map<DateISO, string>();
-  for (const batch of batches) {
-    const key = fromDbDate(batch.showDate);
-    if (!latest.has(key)) latest.set(key, batch.id);
-  }
-  const batchIds = [...latest.values()];
+  // Only the most recent successful upload for each day — see `sales-data`.
+  const batchIds = await latestBatchIds(from, to);
 
   if (batchIds.length === 0) return null;
 
@@ -269,8 +252,17 @@ export async function buildSalesWorkbook(
   const totalRow = row;
   summary.getCell(`A${totalRow}`).value = "All shows";
   summary.getCell(`B${totalRow}`).value = { formula: `COUNTA(${range$(COL.show)})` };
+  /*
+    Distinct people, not the sum of the rows above it.
+
+    The per-show figures count a buyer once per show, which is right for a show
+    — and adding them up counts anybody who bought in two shows twice. On the
+    09/08 data that reads 235 against 219 real people. This counts the buyer
+    column alone, so the total means what the word means, and matches the
+    figure on Sales insights.
+  */
   summary.getCell(`C${totalRow}`).value = {
-    formula: `ROUND(SUMPRODUCT((${range$(COL.show)}<>"")/COUNTIFS(${range$(COL.show)},${range$(COL.show)}&"",${range$(COL.buyer)},${range$(COL.buyer)}&"")),0)`,
+    formula: `ROUND(SUMPRODUCT((${range$(COL.buyer)}<>"")/COUNTIF(${range$(COL.buyer)},${range$(COL.buyer)}&"")),0)`,
   };
   for (const [target, source] of [
     ["D", COL.unitPrice],
