@@ -563,6 +563,27 @@ export function listUnrecognisedBoxes(showDate: Date): Promise<BoxSummary[]> {
   return listBoxes({ showDate, isUnrecognised: true });
 }
 
+/** Every box one person closed on one day, newest first. */
+export async function getPersonDay(
+  userId: string,
+  showDate: Date,
+): Promise<{ name: string; boxes: BoxSummary[]; items: number } | null> {
+  const person = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, name: true },
+  });
+  if (!person) return null;
+
+  const [boxes, items] = await Promise.all([
+    listBoxes({ showDate, closedById: userId }),
+    prisma.scanEvent.count({
+      where: { userId, kind: "ITEM_ACCEPTED", package: { showDate } },
+    }),
+  ]);
+
+  return { name: person.name, boxes, items };
+}
+
 export interface ScanRow {
   at: Date;
   kind: string;

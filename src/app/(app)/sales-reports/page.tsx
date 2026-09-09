@@ -16,20 +16,42 @@ import {
 import { MissingReports } from "@/components/missing-reports";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { formatDate } from "@/lib/domain/dates";
+import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
 import { listShowDays, missingReportDays } from "@/lib/server/shipping";
+import type { DayShow } from "@/lib/server/shipping";
+import { RemoveReport } from "./remove-report";
 import { UploadForm } from "./upload-form";
 
 export const metadata: Metadata = { title: "Sales report entry" };
 
+/** "TikTok Night · eBay Night", cancelled ones struck through. */
+function shows(list: DayShow[]) {
+  if (list.length === 0) return <span className="text-ink-subtle">—</span>;
+  return (
+    <span className="text-sm">
+      {list.map((s, i) => (
+        <span key={`${s.platform}-${s.slot}`}>
+          {i > 0 ? <span className="text-ink-subtle"> · </span> : null}
+          <span className={s.cancelled ? "text-ink-subtle line-through" : "text-ink"}>
+            {PLATFORM_SHORT[s.platform]} {SLOT_SHORT[s.slot]}
+          </span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /**
- * Where the morning's three exports come in.
+ * Where the day's exports come in.
  *
- * The only door data enters the system through: the day's boxes, the sales
- * records behind them and the commission figures all come from here.
+ * The list is built from the published schedule, so it says which days ran
+ * shows and therefore which days are waiting for something — and, per day,
+ * exactly what that something is. Two TikTok shows means two TikTok exports;
+ * eBay is always one file however many shows ran, because its report cannot be
+ * filtered any finer than a day.
  *
- * The day is not chosen — it is read out of the orders themselves, because the
- * files already know which show they belong to and a person picking from a
- * dropdown at 7am is one mis-click from putting a day's boxes on the wrong date.
+ * The day is chosen here and read out of the orders as well. The choice is only
+ * ever a confirmation: if the files say a different day, nothing is imported.
  */
 export default async function SalesReportsPage() {
   // The director loads the files; the sales figures behind them are the boss's.
@@ -37,17 +59,25 @@ export default async function SalesReportsPage() {
   const isBoss = user.role === "BOSS";
   const [days, missing] = await Promise.all([listShowDays(), missingReportDays()]);
 
+  const targets = days
+    .filter((d) => d.liveShows > 0)
+    .map((d) => ({
+      dateISO: d.dateISO,
+      expects: d.expected.describe,
+      loaded: d.report?.status === "OK",
+    }));
+
   return (
     <>
       <PageHeader
         title="Sales report entry"
-        description="The morning's TikTok and eBay exports, one show day at a time."
+        description="The exports for a show day, and what each day is still waiting for."
       />
 
       <div className="space-y-5">
         <MissingReports days={missing} />
 
-        <UploadForm />
+        <UploadForm targets={targets} />
 
         {isBoss ? (
           <Card>
@@ -57,11 +87,7 @@ export default async function SalesReportsPage() {
             />
             {/* A plain GET form: the browser navigates to the export and the
                 file arrives. Nothing to go wrong client-side. */}
-            <form
-              action="/api/sales/export"
-              method="get"
-              className="flex flex-wrap items-end gap-3 p-4"
-            >
+            <form action="/api/sales/export" method="get" className="flex flex-wrap items-end gap-3 p-4">
               <Field label="From" htmlFor="from">
                 <Input id="from" name="from" type="date" required />
               </Field>
@@ -79,7 +105,7 @@ export default async function SalesReportsPage() {
         <Card>
           <CardHeader
             title="Recent show days"
-            description="The last two weeks of published shows, and what has been loaded against them."
+            description="Taken from the published schedule — the shows that ran, and what has been loaded against them."
           />
           {days.length === 0 ? (
             <EmptyState title="No published shows in the last two weeks">
@@ -90,59 +116,70 @@ export default async function SalesReportsPage() {
               <thead>
                 <tr>
                   <Th>Show day</Th>
-                  <Th>Shows</Th>
+                  <Th>Shows that ran</Th>
                   <Th>Report</Th>
                   <Th>Watches</Th>
                   <Th>Boxes</Th>
                   <Th>Packed</Th>
-                  {isBoss ? <Th className="text-right">Sales</Th> : null}
+                  <Th className="text-right">{isBoss ? "Sales" : ""}</Th>
                 </tr>
               </thead>
               <tbody>
-                {days.map((day) => (
-                  <tr key={day.dateISO}>
-                    <Td className="font-medium">{formatDate(day.dateISO)}</Td>
-                    <Td className="tabular text-ink-muted">{day.liveShows || "—"}</Td>
-                    <Td>
-                      {day.report === null ? (
-                        <Badge tone="warn">Not loaded</Badge>
-                      ) : day.report.status === "BLOCKED" ? (
-                        <Badge tone="danger">Refused</Badge>
-                      ) : (
-                        <Badge tone="ok">
-                          {day.report.uploadedByName
-                            ? `by ${day.report.uploadedByName.split(" ")[0]}`
-                            : "Loaded"}
-                        </Badge>
-                      )}
-                    </Td>
-                    <Td className="tabular">{day.report?.status === "OK" ? day.report.watchCount : "—"}</Td>
-                    <Td className="tabular">{day.boxesTotal || "—"}</Td>
-                    <Td className="tabular">
-                      {day.boxesTotal > 0 ? (
-                        <span className={day.boxesSent === day.boxesTotal ? "font-medium text-ok-700" : undefined}>
-                          {day.boxesSent} of {day.boxesTotal}
-                        </span>
-                      ) : (
-                        "—"
-                      )}
-                    </Td>
-                    {isBoss ? (
-                      <Td className="text-right">
-                        {day.report?.status === "OK" ? (
-                          <a
-                            href={`/api/sales/export?date=${day.dateISO}`}
-                            className="text-sm font-medium text-brand-700 underline underline-offset-2"
-                          >
-                            Download
-                          </a>
+                {days.map((day) => {
+                  const loaded = day.report?.status === "OK";
+                  return (
+                    <tr key={day.dateISO}>
+                      <Td className="whitespace-nowrap font-medium">{formatDate(day.dateISO)}</Td>
+                      <Td>
+                        {shows(day.shows)}
+                        <p className="mt-0.5 text-xs text-ink-subtle">
+                          {loaded
+                            ? `${day.loadedFiles.length} file${day.loadedFiles.length === 1 ? "" : "s"} loaded`
+                            : `expects ${day.expected.describe}`}
+                        </p>
+                      </Td>
+                      <Td>
+                        {day.report === null ? (
+                          <Badge tone="warn">Not loaded</Badge>
+                        ) : day.report.status === "BLOCKED" ? (
+                          <Badge tone="danger">Refused</Badge>
                         ) : (
-                          <span className="text-sm text-ink-subtle">—</span>
+                          <Badge tone="ok">
+                            {day.report.uploadedByName
+                              ? `by ${day.report.uploadedByName.split(" ")[0]}`
+                              : "Loaded"}
+                          </Badge>
                         )}
                       </Td>
-                    ) : null}
-                  </tr>
-                ))}
+                      <Td className="tabular">{loaded ? day.report!.watchCount : "—"}</Td>
+                      <Td className="tabular">{day.boxesTotal || "—"}</Td>
+                      <Td className="tabular">
+                        {day.boxesTotal > 0 ? (
+                          <span className={day.boxesSent === day.boxesTotal ? "font-medium text-ok-700" : undefined}>
+                            {day.boxesSent} of {day.boxesTotal}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </Td>
+                      <Td className="text-right">
+                        <div className="flex flex-col items-end gap-1.5">
+                          {isBoss && loaded ? (
+                            <a
+                              href={`/api/sales/export?date=${day.dateISO}`}
+                              className="text-sm font-medium text-brand-700 underline underline-offset-2"
+                            >
+                              Download
+                            </a>
+                          ) : null}
+                          {day.report !== null ? (
+                            <RemoveReport batchId={day.report.batchId} dateISO={day.dateISO} />
+                          ) : null}
+                        </div>
+                      </Td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </Table>
           )}

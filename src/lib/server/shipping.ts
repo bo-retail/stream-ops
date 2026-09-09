@@ -1,8 +1,12 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { addDays, fromDbDate, toDbDate, todayISO } from "@/lib/domain/dates";
+import { expectedFilesFor } from "@/lib/domain/imports/expected";
+import type { DayShow, ExpectedFiles } from "@/lib/domain/imports/expected";
 import type { DateISO } from "@/lib/domain/types";
 import { getSettings } from "./settings";
+
+export type { DayShow, ExpectedFiles };
 
 /**
  * The show days the shipping side works from, and whether their reports arrived.
@@ -19,6 +23,12 @@ export interface ShowDay {
   dateISO: DateISO;
   /** Shows still scheduled on that date. A fully cancelled day needs no report. */
   liveShows: number;
+  /** Every show the schedule had that day, cancelled ones included. */
+  shows: DayShow[];
+  /** What the upload for this day should contain. */
+  expected: ExpectedFiles;
+  /** Files that actually arrived on the most recent successful upload. */
+  loadedFiles: { name: string; platform: string }[];
   report: {
     batchId: string;
     status: "OK" | "BLOCKED";
@@ -45,16 +55,17 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
   const from = addDays(today, -lookBackDays);
 
   const [shows, batches, boxes] = await Promise.all([
-    // Cancelled shows are counted in too, so a day that was called off still
-    // appears in the list saying so. Dropping it entirely would leave a gap
-    // that reads the same as a day somebody forgot to upload.
-    prisma.show.groupBy({
-      by: ["date", "status"],
+    // Read as individual shows rather than counted, because what a day is
+    // waiting for depends on which shows ran, not how many. Cancelled ones are
+    // included so a day that was called off still appears saying so — dropping
+    // it would leave a gap that reads the same as a day nobody uploaded.
+    prisma.show.findMany({
       where: {
         date: { gte: toDbDate(from), lte: toDbDate(today) },
         release: { scheduleStatus: "PUBLISHED" },
       },
-      _count: { _all: true },
+      select: { date: true, platform: true, slot: true, status: true },
+      orderBy: [{ date: "asc" }, { platform: "asc" }, { slot: "asc" }],
     }),
     prisma.importBatch.findMany({
       where: { showDate: { gte: toDbDate(from), lte: toDbDate(today) } },
@@ -67,6 +78,7 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
         watchCount: true,
         boxCount: true,
         droppedCount: true,
+        files: true,
         uploadedBy: { select: { name: true } },
       },
     }),
@@ -78,16 +90,15 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
   ]);
 
   const dates = new Set<DateISO>();
-  for (const row of shows) dates.add(fromDbDate(row.date));
-  for (const row of batches) dates.add(fromDbDate(row.showDate));
-
-  // Only the shows still standing count as needing a report.
-  const showCount = new Map<DateISO, number>();
+  const showsByDate = new Map<DateISO, DayShow[]>();
   for (const row of shows) {
     const key = fromDbDate(row.date);
-    const running = row.status === "SCHEDULED" ? row._count._all : 0;
-    showCount.set(key, (showCount.get(key) ?? 0) + running);
+    dates.add(key);
+    const list = showsByDate.get(key) ?? [];
+    list.push({ platform: row.platform, slot: row.slot, cancelled: row.status === "CANCELLED" });
+    showsByDate.set(key, list);
   }
+  for (const row of batches) dates.add(fromDbDate(row.showDate));
 
   // The most recent upload wins; the earlier ones stay on record but are not
   // what the day currently says.
@@ -111,9 +122,23 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
     .map((dateISO) => {
       const batch = latest.get(dateISO);
       const counts = boxTotals.get(dateISO) ?? { total: 0, sent: 0 };
+      const dayShows = showsByDate.get(dateISO) ?? [];
+
+      // `files` is written as JSON by the import, so it is read back defensively
+      // rather than trusted to be the shape this version writes.
+      const loadedFiles = Array.isArray(batch?.files)
+        ? (batch.files as { name?: unknown; platform?: unknown }[]).map((f) => ({
+            name: typeof f?.name === "string" ? f.name : "(unnamed)",
+            platform: typeof f?.platform === "string" ? f.platform : "UNKNOWN",
+          }))
+        : [];
+
       return {
         dateISO,
-        liveShows: showCount.get(dateISO) ?? 0,
+        liveShows: dayShows.filter((s) => !s.cancelled).length,
+        shows: dayShows,
+        expected: expectedFilesFor(dayShows),
+        loadedFiles,
         report: batch
           ? {
               batchId: batch.id,
@@ -197,6 +222,55 @@ export async function missingReportDaysSafe(lookBackDays = LOOK_BACK_DAYS): Prom
     console.error("Could not read the missing-report days for the banner:", error);
     return [];
   }
+}
+
+/**
+ * Undoes an upload.
+ *
+ * The wrong files, or the wrong day. Everything the upload created goes: the
+ * sales records, the exceptions, and the boxes nobody has touched.
+ *
+ * It refuses outright once anybody has scanned against the day. A box that has
+ * been scanned is evidence — the database itself will not let it go — and
+ * removing the report underneath it would leave boxes whose contents nothing
+ * explains. Undo is for a mistake noticed straight away, not a way out of a
+ * morning's work.
+ */
+export async function deleteImport(
+  batchId: string,
+): Promise<{ ok: true; boxesRemoved: number } | { ok: false; reason: string }> {
+  const batch = await prisma.importBatch.findUnique({
+    where: { id: batchId },
+    select: { id: true, showDate: true },
+  });
+  if (!batch) return { ok: false, reason: "That upload no longer exists." };
+
+  const scanned = await prisma.package.count({
+    where: { showDate: batch.showDate, scans: { some: {} } },
+  });
+  if (scanned > 0) {
+    return {
+      ok: false,
+      reason:
+        `${scanned} box${scanned === 1 ? " has" : "es have"} already been scanned against ` +
+        `${fromDbDate(batch.showDate)}. Removing the report would leave them with nothing ` +
+        `explaining what is in them. Upload the corrected files instead — that replaces the ` +
+        `open boxes and leaves the packed ones alone.`,
+    };
+  }
+
+  const removed = await prisma.$transaction(async (tx) => {
+    // Boxes outlive their batch by design (the link is SET NULL), so they are
+    // removed here explicitly rather than left behind with nothing behind them.
+    const boxes = await tx.package.deleteMany({
+      where: { showDate: batch.showDate, scans: { none: {} } },
+    });
+    // Sales rows and exceptions cascade from the batch.
+    await tx.importBatch.delete({ where: { id: batchId } });
+    return boxes.count;
+  });
+
+  return { ok: true, boxesRemoved: removed };
 }
 
 /** Yesterday, in the business zone — what the shipping screens open on. */

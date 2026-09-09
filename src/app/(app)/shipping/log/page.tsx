@@ -1,6 +1,20 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Badge, Card, CardHeader, EmptyState, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
+import { Download } from "lucide-react";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Stat,
+  Table,
+  Td,
+  Th,
+} from "@/components/ui";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { addDays, formatDate, isDateISO, toDbDate } from "@/lib/domain/dates";
 import {
@@ -110,6 +124,35 @@ export default async function ShippingLogPage({
 
         <Card>
           <CardHeader
+            title="Download the shipping report"
+            description="This day, or a range. Three sheets: who packed what, every box, and every scan."
+          />
+          <div className="flex flex-wrap items-end gap-3 p-4">
+            <a
+              href={`/api/shipping/export?date=${dateISO}`}
+              className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700"
+            >
+              <Download className="h-4 w-4" aria-hidden />
+              This day
+            </a>
+            {/* A plain GET form: the browser navigates and the file arrives. */}
+            <form action="/api/shipping/export" method="get" className="flex flex-wrap items-end gap-3">
+              <Field label="From" htmlFor="from">
+                <Input id="from" name="from" type="date" defaultValue={dateISO} required />
+              </Field>
+              <Field label="To" htmlFor="to">
+                <Input id="to" name="to" type="date" defaultValue={dateISO} required />
+              </Field>
+              <Button type="submit" variant="secondary">
+                <Download className="h-4 w-4" aria-hidden />
+                Download range
+              </Button>
+            </form>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
             title="Who packed what"
             description="Activity, not a timesheet — first and last scan bracket when somebody was actually packing."
           />
@@ -126,16 +169,32 @@ export default async function ShippingLogPage({
                   <Th>Watches</Th>
                   <Th>First scan</Th>
                   <Th>Last scan</Th>
+                  <Th />
                 </tr>
               </thead>
               <tbody>
                 {packers.map((p) => (
                   <tr key={p.userId}>
-                    <Td className="font-medium">{p.name}</Td>
+                    <Td className="font-medium">
+                      <Link
+                        href={`/shipping/log/person/${p.userId}?date=${dateISO}`}
+                        className="text-brand-700 underline underline-offset-2"
+                      >
+                        {p.name}
+                      </Link>
+                    </Td>
                     <Td className="tabular">{p.boxes}</Td>
                     <Td className="tabular">{p.items}</Td>
                     <Td className="tabular text-ink-muted">{time(p.firstScan)}</Td>
                     <Td className="tabular text-ink-muted">{time(p.lastScan)}</Td>
+                    <Td className="text-right">
+                      <Link
+                        href={`/shipping/log/person/${p.userId}?date=${dateISO}`}
+                        className="text-sm font-medium text-brand-700 underline underline-offset-2"
+                      >
+                        What they sent
+                      </Link>
+                    </Td>
                   </tr>
                 ))}
               </tbody>
