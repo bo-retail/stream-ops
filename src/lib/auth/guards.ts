@@ -2,6 +2,7 @@ import "server-only";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { readSession } from "./session";
+import { STALE_SESSION_PATH } from "./route-guard";
 import type { Role, Team } from "@/generated/prisma/enums";
 
 export interface AuthUser {
@@ -50,10 +51,20 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   };
 }
 
-/** For pages: sends anyone not signed in to the login screen. */
+/**
+ * For pages: sends anyone not signed in to the login screen.
+ *
+ * The destination carries a marker rather than being a bare `/login`, because
+ * the two ways of getting here are not the same. Somebody with no cookie is
+ * simply signed out. Somebody whose cookie is validly signed but whose account
+ * the database refuses — deactivated, or deleted — would otherwise be bounced
+ * straight back here by middleware, which cannot see the database and so still
+ * believes them. The marker is what lets the edge drop that cookie instead of
+ * looping. See `lib/auth/route-guard`.
+ */
 export async function requireUser(): Promise<AuthUser> {
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  if (!user) redirect(STALE_SESSION_PATH);
   if (user.mustChangePassword) redirect("/change-password");
   return user;
 }

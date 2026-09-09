@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth/session";
+import { decideRoute } from "@/lib/auth/route-guard";
 
 /**
  * First line of defence only.
@@ -11,35 +12,35 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth/session";
  * `requireUser` / `requireBoss` against the database — this exists to keep
  * signed-out visitors off application routes and to avoid rendering an admin
  * page shell to someone who will only be redirected away from it.
+ *
+ * The decision itself lives in `lib/auth/route-guard` so it can be tested
+ * without constructing edge requests. See the note there about why a validly
+ * signed token is not enough on its own.
  */
-
-const PUBLIC_PATHS = ["/login"];
-const ADMIN_PREFIX = "/admin";
-
 export async function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const session = token ? await verifySessionToken(token) : null;
 
-  if (PUBLIC_PATHS.includes(pathname)) {
-    if (session) return NextResponse.redirect(new URL("/dashboard", request.url));
-    return NextResponse.next();
-  }
+  const decision = decideRoute({
+    pathname,
+    search,
+    hasCookie: token !== undefined,
+    hasValidSession: session !== null,
+    role: session?.role ?? null,
+  });
 
-  if (!session) {
-    const loginUrl = new URL("/login", request.url);
-    if (pathname !== "/") loginUrl.searchParams.set("next", `${pathname}${search}`);
-    const response = NextResponse.redirect(loginUrl);
-    // Clear an unusable cookie so the browser stops sending it on every request.
-    if (token) response.cookies.delete(SESSION_COOKIE);
+  if (decision.kind === "allow") return NextResponse.next();
+
+  if (decision.kind === "allowAndClear") {
+    const response = NextResponse.next();
+    response.cookies.delete(SESSION_COOKIE);
     return response;
   }
 
-  if (pathname.startsWith(ADMIN_PREFIX) && session.role !== "BOSS") {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
-  }
-
-  return NextResponse.next();
+  const response = NextResponse.redirect(new URL(decision.to, request.url));
+  if (decision.clear) response.cookies.delete(SESSION_COOKIE);
+  return response;
 }
 
 export const config = {
