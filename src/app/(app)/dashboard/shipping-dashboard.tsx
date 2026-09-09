@@ -1,9 +1,11 @@
 import { Card, CardHeader, EmptyState, LinkButton, PageHeader, Stat } from "@/components/ui";
+import { MissingReports } from "@/components/missing-reports";
 import type { AuthUser } from "@/lib/auth/guards";
 import { formatDate, formatMinutes } from "@/lib/domain/dates";
 import { formatPeriod, periodFor } from "@/lib/domain/periods";
 import { getEntriesInRange, getOpenEntry } from "@/lib/server/timeclock";
 import { getWeekContext } from "@/lib/server/settings";
+import { missingReportDays } from "@/lib/server/shipping";
 
 /**
  * The dashboard for somebody on shipping.
@@ -17,9 +19,14 @@ export async function ShippingDashboard({ user }: { user: AuthUser }) {
   const { today } = await getWeekContext();
   const period = periodFor(today);
 
-  const [open, entries] = await Promise.all([
+  // Only the director is chased about missing reports — a packer cannot act on
+  // one, and a warning nobody can clear is noise on somebody's morning.
+  const isDirector = user.role === "MANAGER" || user.role === "BOSS";
+
+  const [open, entries, missingReports] = await Promise.all([
     getOpenEntry(user.id),
     getEntriesInRange({ from: period.start, to: period.end, userId: user.id }),
+    isDirector ? missingReportDays() : Promise.resolve([]),
   ]);
 
   const minutes = entries.reduce((m, e) => m + (e.paidMinutes ?? 0), 0);
@@ -40,6 +47,12 @@ export async function ShippingDashboard({ user }: { user: AuthUser }) {
           </LinkButton>
         }
       />
+
+      {missingReports.length > 0 ? (
+        <div className="mb-5">
+          <MissingReports days={missingReports} />
+        </div>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-3">
         <Stat

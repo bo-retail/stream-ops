@@ -10,6 +10,7 @@ import {
   Stat,
 } from "@/components/ui";
 import { PlatformBadge } from "@/components/show-labels";
+import { MissingReports } from "@/components/missing-reports";
 import { cn } from "@/lib/utils";
 import { prisma } from "@/lib/db";
 import { formatDate, toDbDate } from "@/lib/domain/dates";
@@ -17,11 +18,13 @@ import { SLOT_SHORT } from "@/lib/domain/types";
 import { getReleaseView } from "@/lib/server/schedule";
 import { listReleases } from "@/lib/server/releases";
 import { getSettings, getWeekContext } from "@/lib/server/settings";
+import { missingReportDays } from "@/lib/server/shipping";
 
 export async function BossDashboard() {
   const { today } = await getWeekContext();
   const settings = await getSettings();
   const releases = await listReleases(30);
+  const missingReports = await missingReportDays();
 
   const clock = new Intl.DateTimeFormat("en-GB", {
     timeZone: settings.timezone,
@@ -146,6 +149,12 @@ export async function BossDashboard() {
           </LinkButton>
         }
       />
+
+      {/* A day that ran shows and never got its reports stops everything
+          downstream, and looks exactly like a quiet day if nobody says so. */}
+      <div className="mb-5">
+        <MissingReports days={missingReports} />
+      </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Shows today" value={todayShows.length} sub={`${liveNow.length} on air now`} />

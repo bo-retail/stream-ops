@@ -438,7 +438,12 @@ built on the same parse.
    into 220 boxes, the 17-watch box rebuilt with its duplicate counts, then the same day
    uploaded a second time to prove it stays at 220 boxes and that a box closed in between
    keeps its status, its stamp and its scans.
-8. **`node scripts/check-shipping.mjs`** — the database guarantees, proved by trying to
+8. **`npx tsx scripts/check-show-days.mts`** — the banner rule, against five purpose-built
+   show days: one published with shows and no report (chased), one whose shows were all
+   cancelled (not), one never published (not), today (not — its shows have not finished),
+   and one outside the look-back window (not). Plus that a *refused* upload does not count
+   as a report, and a successful one clears it.
+9. **`node scripts/check-shipping.mjs`** — the database guarantees, proved by trying to
    violate each one against a real Postgres and rolling back, in the same style as
    `check-constraints.mjs`. Two boxes cannot share a tracking number; a stock number
    cannot appear twice in one box; neither count can go negative; a scanned count *may*
