@@ -589,6 +589,7 @@ function DeleteRelease({ releaseId, disabled }: { releaseId: string; disabled: b
   const [pending, startTransition] = useTransition();
   const [impact, setImpact] = useState<DeleteImpact | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
 
   function ask() {
     startTransition(async () => {
@@ -600,10 +601,11 @@ function DeleteRelease({ releaseId, disabled }: { releaseId: string; disabled: b
 
   function confirm() {
     startTransition(async () => {
-      const result = await deleteRelease(releaseId);
+      const result = await deleteRelease(releaseId, reason);
       if (result.error) {
         setError(result.error);
         setImpact(null);
+        setReason("");
         return;
       }
       router.push("/admin/releases");
@@ -631,8 +633,48 @@ function DeleteRelease({ releaseId, disabled }: { releaseId: string; disabled: b
             This schedule is published — the team can see it right now.
           </p>
         ) : null}
+
+        {/* Somebody's pay changes, so it is said plainly and it needs a reason
+            written down — the same standard as any other change to hours. */}
+        {impact.scheduledEntries > 0 ? (
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium text-danger-700">
+              {impact.scheduledEntries}{" "}
+              {impact.scheduledEntries === 1 ? "person has" : "people have"} been paid for these
+              shows. Deleting this takes those hours back.
+            </p>
+            <label htmlFor="delete-reason" className="block text-xs font-medium text-danger-700">
+              Why is it being deleted?
+            </label>
+            <input
+              id="delete-reason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="e.g. built by mistake, the real one is the 16th"
+              className="h-10 w-full rounded-lg border border-danger-200 bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-danger-400 focus:outline-none focus:ring-2 focus:ring-danger-100"
+            />
+          </div>
+        ) : null}
+
+        {impact.clockedEntries > 0 ? (
+          <p className="text-sm font-medium text-danger-700">
+            {impact.clockedEntries} entr{impact.clockedEntries === 1 ? "y was" : "ies were"} clocked
+            by hand against these shows. Those have to come off on Timesheets first.
+          </p>
+        ) : null}
+
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="danger" size="sm" disabled={pending} onClick={confirm}>
+          <Button
+            type="button"
+            variant="danger"
+            size="sm"
+            disabled={
+              pending ||
+              impact.clockedEntries > 0 ||
+              (impact.scheduledEntries > 0 && reason.trim().length < 3)
+            }
+            onClick={confirm}
+          >
             <Trash2 className="h-4 w-4" aria-hidden />
             {pending ? "Deleting…" : "Yes, delete it"}
           </Button>

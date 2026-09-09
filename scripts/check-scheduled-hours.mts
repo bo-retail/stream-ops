@@ -137,7 +137,21 @@ const draft = await makeShow({
   slot: "NIGHT",
 });
 
-console.log("Built three shows: one that ran, one still to come, one never published.\n");
+// Started an hour ago, still on air. Its own date so it cannot collide with
+// anything real; only `startsAt` decides whether hours are due.
+const IN_PROGRESS_DATE = new Date(Date.now() - 59 * 86_400_000).toISOString().slice(0, 10);
+const onAirStart = new Date(Date.now() - 3_600_000);
+const onAirEnd = new Date(Date.now() + 5 * 3_600_000);
+const onAir = await makeShow({
+  dateISO: IN_PROGRESS_DATE,
+  published: true,
+  startsAt: onAirStart,
+  endsAt: onAirEnd,
+  platform: "TIKTOK",
+  slot: "DAY",
+});
+
+console.log("Built four shows: one that ran, one on air now, one still to come, one never published.\n");
 
 /* --------------------------------------------------------------- printing */
 
@@ -146,6 +160,24 @@ check("hours were printed", printed >= 2, true);
 check("both people on the show got them", await scheduledHoursPrinted(ran), 2);
 check("a show that has not started yet gets nothing", await scheduledHoursPrinted(future), 0);
 check("nor does one on an unpublished release", await scheduledHoursPrinted(draft), 0);
+
+// The whole point of the question: payroll is not pre-filled with a pay
+// period's worth of shows nobody has worked yet.
+const futureEntries = await prisma.timeEntry.count({
+  where: { showId: future, source: "SCHEDULE" },
+});
+check("no entry exists for a future show at all", futureEntries, 0);
+
+// A show on air now has started, so its hours are printed — the whole shift,
+// not the hour of it that has elapsed. That is what "as the show starts"
+// means, and it matches how a night show has always been attributed to the
+// day it began on rather than split across midnight.
+check("a show on air now has its hours printed", await scheduledHoursPrinted(onAir), 2);
+const onAirView = await prisma.timeEntry.findFirstOrThrow({
+  where: { showId: onAir, userId: alice.id },
+  select: { clockInAt: true, clockOutAt: true },
+});
+check("for the full shift, not the part already elapsed", onAirView.clockOutAt?.toISOString(), onAirEnd.toISOString());
 
 const again = await materialiseScheduledHours();
 check("running it again prints nothing", again, 0);

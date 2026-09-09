@@ -572,8 +572,16 @@ export interface DeleteImpact {
   availability: number;
   submissions: number;
   published: boolean;
-  /** Clocked time attached to these shows. Anything above zero blocks deletion. */
-  timeEntries: number;
+  /**
+   * Hours somebody physically clocked against these shows. Above zero, the
+   * release cannot be deleted at all — see {@link deleteRelease}.
+   */
+  clockedEntries: number;
+  /**
+   * Hours printed from the schedule, or corrected by an admin afterwards.
+   * These go with the release, but only with an explanation.
+   */
+  scheduledEntries: number;
 }
 
 export async function getDeleteImpact(releaseId: string): Promise<DeleteImpact | null> {
@@ -595,9 +603,16 @@ export async function getDeleteImpact(releaseId: string): Promise<DeleteImpact |
   });
   if (!release) return null;
 
-  const [assignments, timeEntries] = await Promise.all([
+  const [assignments, clockedEntries, scheduledEntries] = await Promise.all([
     prisma.assignment.count({ where: { show: { releaseId } } }),
-    prisma.timeEntry.count({ where: { show: { releaseId } } }),
+    // Somebody pressed a button. That is a fact about a person's day and it is
+    // not the schedule's to throw away.
+    prisma.timeEntry.count({ where: { show: { releaseId }, source: "SELF" } }),
+    // Printed from this schedule, or corrected on it. Both are things this
+    // release caused, so they go when it does.
+    prisma.timeEntry.count({
+      where: { show: { releaseId }, source: { in: ["SCHEDULE", "ADMIN"] } },
+    }),
   ]);
 
   const label =
@@ -611,7 +626,8 @@ export async function getDeleteImpact(releaseId: string): Promise<DeleteImpact |
     availability: release._count.availability,
     submissions: release._count.submissions,
     published: release.scheduleStatus === "PUBLISHED",
-    timeEntries,
+    clockedEntries,
+    scheduledEntries,
   };
 }
 
@@ -622,12 +638,22 @@ export async function getDeleteImpact(releaseId: string): Promise<DeleteImpact |
  * the wrong thing. The shows, the schedule on them, and the availability people
  * sent against it all go too, because none of them mean anything on their own.
  *
- * One hard refusal: if anybody has clocked time against these shows, the release
- * stays. Deleting it would detach those entries from their shifts, and a
- * streamer's paid hours are measured against the shift — so past pay would
- * silently change. That is not something to find out about later.
+ * So do the hours this schedule printed, and any correction made to them. That
+ * needs an explanation, kept on the audit log, because it changes what somebody
+ * was paid.
+ *
+ * One hard refusal remains: hours somebody actually clocked. Those are a record
+ * of a person's day, made by them, and nothing else knows when they pressed the
+ * button. They come off on Timesheets, by a person, or not at all.
+ *
+ * This guard used to refuse on *any* attached entry, which was right when the
+ * only way to have one was to clock it. Once the schedule started printing
+ * hours by itself, that made every past published release undeletable.
  */
-export async function deleteRelease(releaseId: string): Promise<ReleaseState> {
+export async function deleteRelease(
+  releaseId: string,
+  reason?: string,
+): Promise<ReleaseState> {
   let boss;
   try {
     boss = await requireBossOrThrow();
@@ -638,18 +664,53 @@ export async function deleteRelease(releaseId: string): Promise<ReleaseState> {
   const impact = await getDeleteImpact(releaseId);
   if (!impact) return { error: "That release no longer exists." };
 
-  if (impact.timeEntries > 0) {
+  /*
+    One thing is still refused outright: hours somebody actually clocked.
+
+    That is a record of a person's day, made by them, and it is not the
+    schedule's to throw away. It also cannot be reconstructed — nothing else
+    knows when they pressed the button.
+
+    Hours printed from this schedule are different. This release created them,
+    so deleting it takes them back — but only deliberately, and only with the
+    reason written down, because somebody's pay changes.
+  */
+  if (impact.clockedEntries > 0) {
     return {
-      error: `Cannot delete: ${impact.timeEntries} clocked entr${
-        impact.timeEntries === 1 ? "y is" : "ies are"
-      } attached to these shows. Deleting it would change what people were paid for hours they have already worked.`,
+      error:
+        `Cannot delete: ${impact.clockedEntries} entr${impact.clockedEntries === 1 ? "y was" : "ies were"} ` +
+        `clocked against these shows by hand. Remove those on Timesheets first — they are somebody's ` +
+        `record of their own day, not this release's to delete.`,
     };
   }
 
-  await prisma.$transaction([
+  const why = reason?.trim() ?? "";
+  if (impact.scheduledEntries > 0 && why.length < 3) {
+    return {
+      error:
+        `${impact.scheduledEntries} ${impact.scheduledEntries === 1 ? "person has" : "people have"} ` +
+        `been paid for these shows. Deleting the release takes those hours back. Say why, and it will go through.`,
+    };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // Hours first. A show sets its entries' showId to null rather than removing
+    // them, so leaving this until after the cascade would strand them: paid,
+    // with nothing left explaining what they were for.
+    if (impact.scheduledEntries > 0) {
+      const entries = await tx.timeEntry.findMany({
+        where: { show: { releaseId }, source: { in: ["SCHEDULE", "ADMIN"] } },
+        select: { id: true },
+      });
+      const ids = entries.map((e) => e.id);
+      await tx.timeEntryRevision.deleteMany({ where: { timeEntryId: { in: ids } } });
+      await tx.timeEntry.deleteMany({ where: { id: { in: ids } } });
+    }
+
     // Shows, assignments, availability and submissions all cascade from here.
-    prisma.release.delete({ where: { id: releaseId } }),
-    prisma.auditLog.create({
+    await tx.release.delete({ where: { id: releaseId } });
+
+    await tx.auditLog.create({
       data: {
         entityType: "Release",
         entityId: releaseId,
@@ -658,14 +719,21 @@ export async function deleteRelease(releaseId: string): Promise<ReleaseState> {
         summary:
           `Deleted ${impact.published ? "the PUBLISHED release" : "the release"} ${impact.label} — ` +
           `${impact.shows} shows, ${impact.assignments} placements, ` +
-          `${impact.availability} availability rows, ${impact.submissions} answers`,
+          `${impact.availability} availability rows, ${impact.submissions} answers` +
+          (impact.scheduledEntries > 0
+            ? `, and ${impact.scheduledEntries} paid entr${impact.scheduledEntries === 1 ? "y" : "ies"} — ${why}`
+            : ""),
       },
-    }),
-  ]);
+    });
+  });
 
   refresh();
   revalidatePath("/admin/requests");
+  revalidatePath("/admin/timesheets");
   return {
-    ok: `Deleted ${impact.label} and everything on it.`,
+    ok:
+      impact.scheduledEntries > 0
+        ? `Deleted ${impact.label}, and took back ${impact.scheduledEntries} paid entr${impact.scheduledEntries === 1 ? "y" : "ies"}.`
+        : `Deleted ${impact.label} and everything on it.`,
   };
 }
