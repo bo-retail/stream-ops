@@ -10,9 +10,12 @@
  *   npx tsx scripts/check-release-delete.mts
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { prisma } from "../src/lib/db";
 import { toDbDate } from "../src/lib/domain/dates";
 import { materialiseScheduledHours } from "../src/lib/server/timeclock";
+
+assertDevDatabase("check-release-delete.mts");
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {

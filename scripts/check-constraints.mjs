@@ -6,7 +6,10 @@
  * rather than assuming. Every attempt below is rolled back.
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { Client } from "pg";
+
+assertDevDatabase("check-constraints.mjs");
 
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();

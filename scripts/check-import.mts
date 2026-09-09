@@ -22,10 +22,13 @@
  * Everything it creates is removed at the end.
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { prisma } from "../src/lib/db";
 import { runImport } from "../src/lib/server/imports";
+
+assertDevDatabase("check-import.mts");
 
 const dir = process.env.STREAMOPS_IMPORT_FIXTURES;
 if (!dir || !existsSync(dir)) {
@@ -53,6 +56,30 @@ if (!boss) {
 
 /* ------------------------------------------------------------ first upload */
 
+/*
+  Whatever is already on this day stays there.
+
+  This script used to assume an empty day and count in absolutes, so it failed
+  the moment somebody had uploaded that day through the app — which is exactly
+  when you would most want to run it. The counts are taken against a baseline
+  instead, and the cleanup at the end removes only what this run created.
+*/
+const theDay = new Date("2026-09-08T00:00:00.000Z");
+const existingBatchIds = (
+  await prisma.importBatch.findMany({ where: { showDate: theDay }, select: { id: true } })
+).map((b) => b.id);
+const existingOk = await prisma.importBatch.count({
+  where: { showDate: theDay, status: "OK" },
+});
+const existingSales = await prisma.salesRecord.count({ where: { showDate: theDay } });
+const existingBoxes = await prisma.package.count({ where: { showDate: theDay } });
+
+if (existingBatchIds.length > 0) {
+  console.log(
+    `${existingBatchIds.length} upload(s) already on 2026-09-08. Counting from there, leaving them alone.\n`,
+  );
+}
+
 const first = await runImport(files, boss.id);
 console.log(`First upload: ${first.status}, ${first.watchCount} watches, ${first.boxCount} boxes.\n`);
 
@@ -66,13 +93,15 @@ const showDate = new Date(`${first.showDate}T00:00:00.000Z`);
 
 check(
   "sales rows written",
-  await prisma.salesRecord.count({ where: { showDate } }),
+  (await prisma.salesRecord.count({ where: { showDate } })) - existingSales,
   473,
 );
+// Boxes are keyed on the tracking number, so a re-upload updates them rather
+// than adding more. The count is absolute either way.
 check(
   "boxes written",
   await prisma.package.count({ where: { showDate } }),
-  220,
+  Math.max(220, existingBoxes),
 );
 check(
   "dropped rows written",
@@ -141,25 +170,41 @@ check(
 
 check(
   "both uploads are on record",
-  await prisma.importBatch.count({ where: { showDate, status: "OK" } }),
+  (await prisma.importBatch.count({ where: { showDate, status: "OK" } })) - existingOk,
   2,
 );
 check(
   "sales rows are per batch, not duplicated onto the boxes",
-  await prisma.salesRecord.count({ where: { showDate } }),
+  (await prisma.salesRecord.count({ where: { showDate } })) - existingSales,
   946, // 473 from each upload; the boxes stayed at 220
 );
 
 /* ------------------------------------------------------------------ cleanup */
 
 console.log("\nCleaning up.");
-await prisma.scanEvent.deleteMany({ where: { package: { showDate } } });
-await prisma.packageItem.deleteMany({ where: { package: { showDate } } });
-await prisma.package.deleteMany({ where: { showDate } });
-await prisma.importBatch.deleteMany({ where: { showDate } });
 
-const left = await prisma.package.count({ where: { showDate } });
-console.log(`Removed — ${left} boxes left on ${first.showDate}.`);
+// Only this run's uploads. Sales rows cascade from the batch. The boxes go only
+// if the day had none before, because a box outlives the upload that created it
+// and one that was already here may have been packed against.
+await prisma.importBatch.deleteMany({
+  where:
+    existingBatchIds.length > 0 ? { showDate, id: { notIn: existingBatchIds } } : { showDate },
+});
+if (existingBoxes === 0) {
+  await prisma.scanEvent.deleteMany({ where: { package: { showDate } } });
+  await prisma.packageItem.deleteMany({ where: { package: { showDate } } });
+  await prisma.package.deleteMany({ where: { showDate } });
+}
+
+const leftSales = await prisma.salesRecord.count({ where: { showDate } });
+console.log(
+  `Removed this run's uploads — ${leftSales} sales row(s) left on ${first.showDate}` +
+    (existingSales > 0 ? ` (${existingSales} were here before).` : "."),
+);
+if (leftSales !== existingSales) {
+  console.log(`FAIL  cleanup left ${leftSales} sales rows where ${existingSales} were before.`);
+  failures++;
+}
 
 await prisma.$disconnect();
 console.log(failures === 0 ? "\nAll import checks passed." : `\n${failures} check(s) FAILED.`);

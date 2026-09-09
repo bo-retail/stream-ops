@@ -11,6 +11,7 @@
  *   npx tsx scripts/check-insights.mts
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { prisma } from "../src/lib/db";
@@ -23,6 +24,8 @@ import {
   salesHeadline,
 } from "../src/lib/server/insights";
 import { latestBatchIds } from "../src/lib/server/sales-data";
+
+assertDevDatabase("check-insights.mts");
 
 const dir = process.env.STREAMOPS_IMPORT_FIXTURES;
 if (!dir || !existsSync(dir)) {

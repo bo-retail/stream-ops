@@ -15,9 +15,12 @@
  *   npx tsx scripts/check-scheduled-hours.mts
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { prisma } from "../src/lib/db";
 import { toDbDate } from "../src/lib/domain/dates";
 import { getEntriesInRange, materialiseScheduledHours, scheduledHoursPrinted } from "../src/lib/server/timeclock";
+
+assertDevDatabase("check-scheduled-hours.mts");
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {

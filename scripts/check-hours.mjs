@@ -13,7 +13,10 @@
  * against whatever happens to be there.
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { Client } from "pg";
+
+assertDevDatabase("check-hours.mjs");
 
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();

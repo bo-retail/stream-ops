@@ -307,8 +307,12 @@ export async function buildSalesWorkbook(
 
   /* ------------------------------------------------------ commission split */
 
+  // The Show column is what pay is worked out on. The shift tag is kept beside
+  // it because it is the only way to see a listing that was prepared for one
+  // show and bought during another — useful for spotting a mis-tagged listing,
+  // and on eBay it is what decides the Show column in the first place.
   summary.getCell(`A${row}`).value =
-    "Commission split — the Show column says where it sold, the Shift tag says who is paid";
+    "Commission — the Show column is who is paid; the Shift tag is which show the item was listed for";
   summary.getCell(`A${row}`).font = { name: "Arial", bold: true, size: 12 };
   row++;
   summary.getRow(row).values = ["Show", "Shift tag on item", "Watches sold", "Net product revenue"];

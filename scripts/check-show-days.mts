@@ -13,10 +13,13 @@
  * Everything it creates is removed at the end.
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { prisma } from "../src/lib/db";
 import { addDays, toDbDate, todayISO } from "../src/lib/domain/dates";
 import { getSettings } from "../src/lib/server/settings";
 import { listShowDays, missingReportDays } from "../src/lib/server/shipping";
+
+assertDevDatabase("check-show-days.mts");
 
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {

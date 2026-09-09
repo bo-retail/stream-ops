@@ -12,12 +12,15 @@
  *   npx tsx scripts/check-workbook.mts
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
 import { prisma } from "../src/lib/db";
 import { runImport } from "../src/lib/server/imports";
 import { buildSalesWorkbook } from "../src/lib/server/sales-workbook";
+
+assertDevDatabase("check-workbook.mts");
 
 const dir = process.env.STREAMOPS_IMPORT_FIXTURES;
 if (!dir || !existsSync(dir)) {
@@ -115,12 +118,26 @@ check("which sums the sheet rather than the rows above", formulaAt("G7")?.starts
 const text = (row: number) => String(summary.getCell(`A${row}`).value ?? "");
 const commissionRow = [...Array(40).keys()]
   .map((i) => i + 8)
-  .find((r) => text(r).startsWith("Commission split"));
-check("a commission split table exists", commissionRow !== undefined, true);
+  .find((r) => text(r).startsWith("Commission"));
+check("a commission table exists", commissionRow !== undefined, true);
 check(
-  "keyed on where it sold and who is paid",
+  "it keeps the shift tag beside the show",
   summary.getCell(`B${commissionRow! + 1}`).value,
   "Shift tag on item",
+);
+
+// Pay follows the show a watch sold in, not the tag on the listing. This
+// heading said the opposite, which would have had somebody reconciling a
+// payroll run against the wrong column.
+check(
+  "and says the Show column is who is paid",
+  text(commissionRow!).includes("Show column is who is paid"),
+  true,
+);
+check(
+  "not the shift tag",
+  text(commissionRow!).includes("Shift tag says who is paid"),
+  false,
 );
 
 /* ------------------------------------------------------- the Exceptions sheet */

@@ -6,7 +6,10 @@
  * attempt below is rolled back, and the fixtures are removed at the end.
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { Client } from "pg";
+
+assertDevDatabase("check-shipping.mjs");
 
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();

@@ -16,9 +16,12 @@
  * Usage: node scripts/check-accounts.mjs [baseUrl]
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import bcrypt from "bcryptjs";
 import { SignJWT } from "jose";
 import { Client } from "pg";
+
+assertDevDatabase("check-accounts.mjs");
 
 const BASE = process.argv[2] ?? "http://localhost:3000";
 const secret = new TextEncoder().encode(process.env.AUTH_SECRET);

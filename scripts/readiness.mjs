@@ -39,9 +39,24 @@ const { rows: users } = await db.query(
 const bosses = users.filter((u) => u.role === "BOSS" && u.isActive);
 const streamers = users.filter((u) => u.role === "EMPLOYEE" && u.team === "STREAMING" && u.isActive);
 const shipping = users.filter((u) => u.role === "EMPLOYEE" && u.team === "SHIPPING" && u.isActive);
+const directors = users.filter((u) => u.role === "MANAGER" && u.team === "SHIPPING" && u.isActive);
 
 if (bosses.length === 0) fail("no active admin account");
-else ok(`${bosses.length} admin, ${streamers.length} streamer(s), ${shipping.length} on shipping`);
+else {
+  ok(
+    `${bosses.length} admin, ${streamers.length} streamer(s), ${shipping.length} packer(s), ` +
+      `${directors.length} shipping director(s)`,
+  );
+}
+
+// Without a director, nobody but the admin can upload the morning's reports —
+// and without those there is no packing list and no sales.
+if (directors.length === 0 && shipping.length > 0) {
+  warn(
+    "no shipping director",
+    "only an admin can upload the day's reports until somebody is given that position",
+  );
+}
 
 // Demo accounts are recognisable by their address, not by their password.
 const demo = users.filter((u) => u.email.endsWith("@streamops.local"));
@@ -86,6 +101,38 @@ if (settingsRows.length === 0) {
   console.log(`           time zone   ${s.timezone}`);
   ok("settings present");
   console.log("           show hours and scheduling rules are set on each release, not here");
+
+  /* --------------------------------------------------------------- pay */
+
+  console.log("\nPay rates");
+
+  const money = (c) => `$${(c / 100).toFixed(2)}`;
+  console.log(`           streamers   ${money(s.streamerHourlyCents)}/hour`);
+  console.log(`           shipping    ${money(s.shippingHourlyCents)}/hour`);
+  console.log(
+    `           commission  ${s.streamerCommissionBps / 100}% of a show's sales, to each person on it`,
+  );
+
+  // Hours at nothing an hour come out as a total of nothing, which reads
+  // exactly like a real answer on a payroll export.
+  if (s.streamerHourlyCents === 0 && streamers.length > 0) {
+    fail("streamers have no hourly rate", "their pay will export as $0.00");
+  } else if (streamers.length > 0) {
+    ok("streamers have an hourly rate");
+  }
+  if (s.shippingHourlyCents === 0 && shipping.length + directors.length > 0) {
+    fail("shipping has no hourly rate", "their pay will export as $0.00");
+  } else if (shipping.length + directors.length > 0) {
+    ok("shipping has an hourly rate");
+  }
+
+  const { rows: own } = await db.query(
+    `select name, "hourlyRateCents", "commissionBps" from "User"
+     where "isActive" and ("hourlyRateCents" is not null or "commissionBps" is not null)`,
+  );
+  if (own.length > 0) {
+    ok(`${own.length} person(s) on a rate of their own`, own.map((u) => u.name).join(", "));
+  }
 }
 
 /* ---------------------------------------------------------------- data */
@@ -147,6 +194,55 @@ const { rows: short } = await db.query(`
 if (short[0].n > 0) warn(`${short[0].n} published show(s) short of a person`);
 else ok("every published show has both people");
 
+/* ------------------------------------------------------ sales and shipping */
+
+console.log("\nSales and shipping");
+
+const { rows: shipRows } = await db.query(`
+  select
+    (select count(*)::int from "ImportBatch") as uploads,
+    (select count(*)::int from "ImportBatch" where status = 'BLOCKED') as blocked,
+    (select count(*)::int from "SalesRecord") as sales,
+    (select count(*)::int from "Package") as boxes,
+    (select count(*)::int from "Package" where status = 'OPEN') as open_boxes,
+    (select count(*)::int from "Package" where status = 'CLOSED_INCOMPLETE') as incomplete,
+    (select count(*)::int from "ScanEvent") as scans
+`);
+const sh = shipRows[0];
+console.log(
+  `           ${sh.uploads} upload(s), ${sh.blocked} refused · ${sh.sales} sales rows · ${sh.boxes} boxes · ${sh.scans} scans`,
+);
+if (sh.uploads === 0) {
+  console.log("           nothing uploaded yet — that starts on the Sales report entry tab");
+} else {
+  ok(`${sh.boxes} box(es) on record, ${sh.open_boxes} still open`);
+  if (sh.incomplete > 0) {
+    warn(`${sh.incomplete} box(es) were closed incomplete`, "each one is a parcel short a watch");
+  }
+}
+
+// A day uploaded twice is normal — a corrected export. Every figure reads only
+// the most recent one, so this is reported rather than flagged.
+const { rows: dupes } = await db.query(`
+  select to_char("showDate", 'YYYY-MM-DD') as day, count(*)::int as n
+  from "ImportBatch" where status = 'OK'
+  group by "showDate" having count(*) > 1 order by "showDate"
+`);
+if (dupes.length > 0) {
+  ok(
+    `${dupes.length} day(s) uploaded more than once`,
+    `only the most recent counts — ${dupes.map((d) => `${d.day} x${d.n}`).join(", ")}`,
+  );
+}
+
+// A scan without a name is not evidence, and the database refuses to delete an
+// account that has made one. This is what would block deactivating somebody.
+const { rows: orphan } = await db.query(`
+  select count(*)::int as n from "ScanEvent" s
+  left join "User" u on u.id = s."userId" where u.id is null
+`);
+if (orphan[0].n > 0) fail(`${orphan[0].n} scan(s) have no account behind them`);
+
 /* ----------------------------------------------------------- environment */
 
 console.log("\nEnvironment (this machine — check Vercel separately)");
@@ -166,6 +262,52 @@ else {
 
 if (process.env.SEED_BOSS_PASSWORD) {
   warn("SEED_BOSS_PASSWORD is still in your .env", "remove it once the real admin exists");
+}
+
+/* ------------------------------------------------------------- migrations */
+
+console.log("\nMigrations");
+
+const { rows: applied } = await db.query(`
+  select migration_name, finished_at, rolled_back_at
+  from _prisma_migrations order by started_at
+`);
+const unfinished = applied.filter((m) => m.finished_at === null && m.rolled_back_at === null);
+const rolledBack = applied.filter((m) => m.rolled_back_at !== null);
+
+console.log(`           ${applied.length} applied`);
+if (applied.length > 0) {
+  console.log(`           latest: ${applied[applied.length - 1].migration_name}`);
+}
+if (unfinished.length > 0) {
+  fail(
+    `${unfinished.length} migration(s) never finished`,
+    unfinished.map((m) => m.migration_name).join(", "),
+  );
+} else if (rolledBack.length > 0) {
+  fail(
+    `${rolledBack.length} migration(s) rolled back`,
+    rolledBack.map((m) => m.migration_name).join(", "),
+  );
+} else {
+  ok("every migration applied cleanly");
+}
+
+// The two enum values the newest features depend on. If a migration half-applied
+// these would be missing while the tables around them exist, and the failure
+// would only show up when somebody was given the position or a show started.
+const { rows: enums } = await db.query(`
+  select t.typname, e.enumlabel
+  from pg_type t join pg_enum e on e.enumtypid = t.oid
+  where t.typname in ('Role', 'TimeEntrySource')
+`);
+const labels = new Set(enums.map((e) => `${e.typname}.${e.enumlabel}`));
+if (!labels.has("Role.MANAGER")) fail("the MANAGER role is missing", "no shipping director can exist");
+else ok("the shipping director role exists");
+if (!labels.has("TimeEntrySource.SCHEDULE")) {
+  fail("TimeEntrySource.SCHEDULE is missing", "streamers' hours cannot be printed from the schedule");
+} else {
+  ok("hours can be printed from the schedule");
 }
 
 /* -------------------------------------------------------------- verdict */

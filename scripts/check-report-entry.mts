@@ -8,6 +8,7 @@
  *   npx tsx scripts/check-report-entry.mts
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
@@ -16,6 +17,8 @@ import { readFiles, runImport } from "../src/lib/server/imports";
 import { openBoxByScan, packItem, sealBox } from "../src/lib/server/packing";
 import { deleteImport, listShowDays, reportRemovalImpact } from "../src/lib/server/shipping";
 import { buildShippingWorkbook } from "../src/lib/server/shipping-workbook";
+
+assertDevDatabase("check-report-entry.mts");
 
 const dir = process.env.STREAMOPS_IMPORT_FIXTURES;
 if (!dir || !existsSync(dir)) {

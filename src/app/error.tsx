@@ -70,15 +70,15 @@ export default function GlobalError({
                   To fix it
                 </p>
                 <p className="mt-1.5 text-sm text-ink">
-                  Check the terminal running the database. If it closed or is showing errors, start
-                  it again from the project folder:
+                  PostgreSQL runs as a Windows service. Start it again from an admin PowerShell:
                 </p>
                 <pre className="tabular mt-2 overflow-x-auto rounded-md bg-surface px-3 py-2 text-xs text-ink ring-1 ring-inset ring-line">
-{`npx prisma dev`}
+{`Start-Service postgresql-x64-17`}
                 </pre>
                 <p className="mt-2 text-xs text-ink-muted">
-                  Wait for <strong>&ldquo;is now running&rdquo;</strong>, then press the button
-                  below. This message only appears in local development.
+                  Then press the button below. If that service does not exist, check what{" "}
+                  <code>DATABASE_URL</code> in <code>.env</code> points at. This message only
+                  appears in local development.
                 </p>
               </div>
             </>

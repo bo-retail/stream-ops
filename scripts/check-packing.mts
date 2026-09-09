@@ -14,6 +14,7 @@
  * Everything it creates is removed at the end.
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { prisma } from "../src/lib/db";
@@ -28,6 +29,8 @@ import {
   unsealBox,
 } from "../src/lib/server/packing";
 import type { ScanOutcome } from "../src/lib/server/packing";
+
+assertDevDatabase("check-packing.mts");
 
 const dir = process.env.STREAMOPS_IMPORT_FIXTURES;
 if (!dir || !existsSync(dir)) {

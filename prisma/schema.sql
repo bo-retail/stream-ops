@@ -1,8 +1,23 @@
+-- StreamOps — the whole database, from nothing.
+--
+-- Equivalent to running every migration in order, and kept in step with them:
+-- `prisma migrate diff --from-empty --to-schema prisma/schema.prisma --script`
+-- produces everything down to the last section, which is added by hand.
+--
+-- Use this to stand up a scratch or staging database in one command. Use
+-- `npm run db:deploy` for anything that already holds data — this file only
+-- creates, and running it against a live database will fail on the first table
+-- that already exists.
+--
+--   psql "$DATABASE_URL" -f prisma/schema.sql
+--
+-- Regenerate with scripts/build-schema-sql.mjs after adding a migration.
+
 -- CreateSchema
 CREATE SCHEMA IF NOT EXISTS "public";
 
 -- CreateEnum
-CREATE TYPE "Role" AS ENUM ('EMPLOYEE', 'BOSS');
+CREATE TYPE "Role" AS ENUM ('EMPLOYEE', 'MANAGER', 'BOSS');
 
 -- CreateEnum
 CREATE TYPE "Team" AS ENUM ('STREAMING', 'SHIPPING');
@@ -23,7 +38,16 @@ CREATE TYPE "ScheduleStatus" AS ENUM ('DRAFT', 'PUBLISHED');
 CREATE TYPE "ReleaseStatus" AS ENUM ('DRAFT', 'OPEN', 'CLOSED');
 
 -- CreateEnum
-CREATE TYPE "TimeEntrySource" AS ENUM ('SELF', 'ADMIN');
+CREATE TYPE "TimeEntrySource" AS ENUM ('SELF', 'ADMIN', 'SCHEDULE');
+
+-- CreateEnum
+CREATE TYPE "ImportStatus" AS ENUM ('OK', 'BLOCKED');
+
+-- CreateEnum
+CREATE TYPE "PackageStatus" AS ENUM ('OPEN', 'CLOSED_COMPLETE', 'CLOSED_INCOMPLETE');
+
+-- CreateEnum
+CREATE TYPE "ScanKind" AS ENUM ('LABEL', 'ITEM_ACCEPTED', 'ITEM_REFUSED', 'ITEM_OVERRIDE', 'CLOSE_COMPLETE', 'CLOSE_INCOMPLETE', 'REOPEN');
 
 -- CreateTable
 CREATE TABLE "User" (
@@ -37,6 +61,8 @@ CREATE TABLE "User" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     "team" "Team" NOT NULL DEFAULT 'STREAMING',
+    "hourlyRateCents" INTEGER,
+    "commissionBps" INTEGER,
 
     CONSTRAINT "User_pkey" PRIMARY KEY ("id")
 );
@@ -157,6 +183,9 @@ CREATE TABLE "ScheduleSnapshot" (
 CREATE TABLE "Settings" (
     "id" TEXT NOT NULL DEFAULT 'singleton',
     "timezone" TEXT NOT NULL DEFAULT 'America/New_York',
+    "streamerHourlyCents" INTEGER NOT NULL DEFAULT 0,
+    "shippingHourlyCents" INTEGER NOT NULL DEFAULT 0,
+    "streamerCommissionBps" INTEGER NOT NULL DEFAULT 100,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "Settings_pkey" PRIMARY KEY ("id")
@@ -206,6 +235,117 @@ CREATE TABLE "TimeEntryRevision" (
     "changedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "TimeEntryRevision_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ImportBatch" (
+    "id" TEXT NOT NULL,
+    "showDate" DATE NOT NULL,
+    "status" "ImportStatus" NOT NULL DEFAULT 'OK',
+    "uploadedById" TEXT,
+    "uploadedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "files" JSONB NOT NULL,
+    "flags" JSONB NOT NULL,
+    "watchCount" INTEGER NOT NULL DEFAULT 0,
+    "boxCount" INTEGER NOT NULL DEFAULT 0,
+    "droppedCount" INTEGER NOT NULL DEFAULT 0,
+
+    CONSTRAINT "ImportBatch_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "SalesRecord" (
+    "id" TEXT NOT NULL,
+    "batchId" TEXT NOT NULL,
+    "platform" "Platform" NOT NULL,
+    "show" TEXT NOT NULL,
+    "showDate" DATE NOT NULL,
+    "shiftTag" TEXT NOT NULL,
+    "rawShiftTag" TEXT NOT NULL,
+    "shiftTagValid" BOOLEAN NOT NULL DEFAULT true,
+    "orderRef" TEXT NOT NULL,
+    "lineRef" TEXT NOT NULL,
+    "buyer" TEXT NOT NULL,
+    "stockNumber" TEXT NOT NULL,
+    "category" TEXT NOT NULL DEFAULT '',
+    "qty" INTEGER NOT NULL DEFAULT 1,
+    "unitPriceCents" INTEGER NOT NULL DEFAULT 0,
+    "platformDiscountCents" INTEGER NOT NULL DEFAULT 0,
+    "sellerDiscountCents" INTEGER NOT NULL DEFAULT 0,
+    "netItemPriceCents" INTEGER NOT NULL DEFAULT 0,
+    "shippingCents" INTEGER NOT NULL DEFAULT 0,
+    "taxAndFeesCents" INTEGER NOT NULL DEFAULT 0,
+    "orderTotalCents" INTEGER NOT NULL DEFAULT 0,
+    "soldAt" TIMESTAMP(3),
+    "paidOn" DATE,
+    "shipToName" TEXT NOT NULL DEFAULT '',
+    "state" TEXT NOT NULL DEFAULT '',
+    "paymentMethod" TEXT NOT NULL DEFAULT '',
+    "sourcePackageId" TEXT NOT NULL DEFAULT '',
+    "tracking" TEXT NOT NULL DEFAULT '',
+    "sourceFile" TEXT NOT NULL,
+
+    CONSTRAINT "SalesRecord_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ImportDrop" (
+    "id" TEXT NOT NULL,
+    "batchId" TEXT NOT NULL,
+    "platform" "Platform" NOT NULL,
+    "orderRef" TEXT NOT NULL,
+    "buyer" TEXT NOT NULL DEFAULT '',
+    "stockNumber" TEXT NOT NULL DEFAULT '',
+    "amountCents" INTEGER NOT NULL DEFAULT 0,
+    "reason" TEXT NOT NULL,
+    "sourceFile" TEXT NOT NULL,
+
+    CONSTRAINT "ImportDrop_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Package" (
+    "id" TEXT NOT NULL,
+    "trackingNumber" TEXT NOT NULL,
+    "platform" "Platform" NOT NULL,
+    "showDate" DATE NOT NULL,
+    "buyer" TEXT NOT NULL DEFAULT '',
+    "shipToName" TEXT NOT NULL DEFAULT '',
+    "shipToState" TEXT NOT NULL DEFAULT '',
+    "status" "PackageStatus" NOT NULL DEFAULT 'OPEN',
+    "isUnrecognised" BOOLEAN NOT NULL DEFAULT false,
+    "closedById" TEXT,
+    "closedAt" TIMESTAMP(3),
+    "batchId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Package_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "PackageItem" (
+    "id" TEXT NOT NULL,
+    "packageId" TEXT NOT NULL,
+    "stockNumber" TEXT NOT NULL,
+    "expectedQty" INTEGER NOT NULL,
+    "scannedQty" INTEGER NOT NULL DEFAULT 0,
+
+    CONSTRAINT "PackageItem_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ScanEvent" (
+    "id" TEXT NOT NULL,
+    "packageId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "kind" "ScanKind" NOT NULL,
+    "stockNumber" TEXT,
+    "rawScan" TEXT,
+    "note" TEXT,
+
+    CONSTRAINT "ScanEvent_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -292,6 +432,54 @@ CREATE INDEX "TimeEntryRevision_changedAt_idx" ON "TimeEntryRevision"("changedAt
 -- CreateIndex
 CREATE UNIQUE INDEX "TimeEntryRevision_timeEntryId_version_key" ON "TimeEntryRevision"("timeEntryId", "version");
 
+-- CreateIndex
+CREATE INDEX "ImportBatch_showDate_uploadedAt_idx" ON "ImportBatch"("showDate", "uploadedAt");
+
+-- CreateIndex
+CREATE INDEX "ImportBatch_status_showDate_idx" ON "ImportBatch"("status", "showDate");
+
+-- CreateIndex
+CREATE INDEX "SalesRecord_showDate_show_idx" ON "SalesRecord"("showDate", "show");
+
+-- CreateIndex
+CREATE INDEX "SalesRecord_batchId_idx" ON "SalesRecord"("batchId");
+
+-- CreateIndex
+CREATE INDEX "SalesRecord_tracking_idx" ON "SalesRecord"("tracking");
+
+-- CreateIndex
+CREATE INDEX "SalesRecord_shiftTag_idx" ON "SalesRecord"("shiftTag");
+
+-- CreateIndex
+CREATE INDEX "ImportDrop_batchId_idx" ON "ImportDrop"("batchId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Package_trackingNumber_key" ON "Package"("trackingNumber");
+
+-- CreateIndex
+CREATE INDEX "Package_showDate_status_idx" ON "Package"("showDate", "status");
+
+-- CreateIndex
+CREATE INDEX "Package_status_idx" ON "Package"("status");
+
+-- CreateIndex
+CREATE INDEX "Package_closedById_closedAt_idx" ON "Package"("closedById", "closedAt");
+
+-- CreateIndex
+CREATE INDEX "PackageItem_stockNumber_idx" ON "PackageItem"("stockNumber");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "PackageItem_packageId_stockNumber_key" ON "PackageItem"("packageId", "stockNumber");
+
+-- CreateIndex
+CREATE INDEX "ScanEvent_packageId_at_idx" ON "ScanEvent"("packageId", "at");
+
+-- CreateIndex
+CREATE INDEX "ScanEvent_userId_at_idx" ON "ScanEvent"("userId", "at");
+
+-- CreateIndex
+CREATE INDEX "ScanEvent_at_idx" ON "ScanEvent"("at");
+
 -- AddForeignKey
 ALTER TABLE "Release" ADD CONSTRAINT "Release_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
@@ -355,26 +543,80 @@ ALTER TABLE "TimeEntryRevision" ADD CONSTRAINT "TimeEntryRevision_timeEntryId_fk
 -- AddForeignKey
 ALTER TABLE "TimeEntryRevision" ADD CONSTRAINT "TimeEntryRevision_changedById_fkey" FOREIGN KEY ("changedById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
+-- AddForeignKey
+ALTER TABLE "ImportBatch" ADD CONSTRAINT "ImportBatch_uploadedById_fkey" FOREIGN KEY ("uploadedById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
--- ---------------------------------------------------------------------------
--- Guarantees Prisma's schema language cannot express.
+-- AddForeignKey
+ALTER TABLE "SalesRecord" ADD CONSTRAINT "SalesRecord_batchId_fkey" FOREIGN KEY ("batchId") REFERENCES "ImportBatch"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ImportDrop" ADD CONSTRAINT "ImportDrop_batchId_fkey" FOREIGN KEY ("batchId") REFERENCES "ImportBatch"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Package" ADD CONSTRAINT "Package_batchId_fkey" FOREIGN KEY ("batchId") REFERENCES "ImportBatch"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Package" ADD CONSTRAINT "Package_closedById_fkey" FOREIGN KEY ("closedById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "PackageItem" ADD CONSTRAINT "PackageItem_packageId_fkey" FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ScanEvent" ADD CONSTRAINT "ScanEvent_packageId_fkey" FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ScanEvent" ADD CONSTRAINT "ScanEvent_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- ===========================================================================
+-- Guarantees Prisma's schema language cannot express
+-- ===========================================================================
 --
--- These are applied by the migration history, so `prisma migrate deploy` puts
--- them in for you. They are repeated here because this file is also used as a
--- standalone "create everything" script, and a database without them will
--- happily store a third person on a show or a shift that ends before it starts.
--- ---------------------------------------------------------------------------
+-- Everything above is generated. Everything below is written by hand, and is
+-- the reason a bad row cannot exist rather than merely being unlikely: each one
+-- is a rule the application also enforces, made true by the database so that a
+-- future caller who forgets cannot make it false.
+--
+-- These live in the migrations too. If you add one there, add it here.
 
--- A show is run by exactly two people, so there is no seat 3.
+-- A show has two seats and no third. Seat carries no meaning beyond that — the
+-- pair swap jobs halfway through — but a seat 3 would silently create a
+-- three-person show.
 ALTER TABLE "Assignment"
-  ADD CONSTRAINT "Assignment_seat_is_one_or_two" CHECK (seat IN (1, 2));
+  ADD CONSTRAINT "Assignment_seat_is_one_or_two" CHECK ("seat" IN (1, 2));
 
--- A shift cannot end before it began. NULL means still on the clock.
+-- A shift cannot end before it started.
 ALTER TABLE "TimeEntry"
   ADD CONSTRAINT "TimeEntry_ends_after_it_starts"
   CHECK ("clockOutAt" IS NULL OR "clockOutAt" > "clockInAt");
 
--- One person can only be clocked in once at a time. A partial unique index, so
--- any number of closed entries are fine but only one may be open.
+-- Nobody can be clocked in twice at once. Partial, so it constrains only the
+-- open entries and a person can still have any number of closed ones.
 CREATE UNIQUE INDEX "TimeEntry_one_open_per_user"
   ON "TimeEntry" ("userId") WHERE "clockOutAt" IS NULL;
+
+-- One person's hours for one show are printed once and once only. Without this,
+-- two pages loading at the same moment as a show starts would each print a copy
+-- and somebody would be paid twice.
+CREATE UNIQUE INDEX "TimeEntry_userId_showId_scheduled_key"
+  ON "TimeEntry" ("userId", "showId") WHERE "source" = 'SCHEDULE';
+
+-- Neither count on a box can go negative. scannedQty is deliberately allowed to
+-- exceed expectedQty: an unexpected watch added on purpose is recorded as
+-- expected 0, scanned 1, and the box is marked incomplete.
+ALTER TABLE "PackageItem"
+  ADD CONSTRAINT "PackageItem_expectedQty_not_negative" CHECK ("expectedQty" >= 0);
+ALTER TABLE "PackageItem"
+  ADD CONSTRAINT "PackageItem_scannedQty_not_negative" CHECK ("scannedQty" >= 0);
+
+-- A rate below zero is not a rate. Cheaper to refuse here than to find a
+-- negative wage in a payroll export.
+ALTER TABLE "Settings"
+  ADD CONSTRAINT "Settings_streamerHourlyCents_not_negative" CHECK ("streamerHourlyCents" >= 0),
+  ADD CONSTRAINT "Settings_shippingHourlyCents_not_negative" CHECK ("shippingHourlyCents" >= 0),
+  ADD CONSTRAINT "Settings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0);
+
+ALTER TABLE "User"
+  ADD CONSTRAINT "User_hourlyRateCents_not_negative"
+    CHECK ("hourlyRateCents" IS NULL OR "hourlyRateCents" >= 0),
+  ADD CONSTRAINT "User_commissionBps_not_negative"
+    CHECK ("commissionBps" IS NULL OR "commissionBps" >= 0);

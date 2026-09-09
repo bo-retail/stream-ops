@@ -1,11 +1,11 @@
-﻿/**
+/**
  * Payroll, against a real database.
  *
  * The unit tests cover the arithmetic. This covers the join, which is where the
  * money actually goes wrong: hours live on the timesheet, sales live in an
- * upload, and what connects them is the shift tag on a listing â€” not the show
- * the watch sold in. Getting that backwards pays the wrong team, and every
- * figure still looks plausible.
+ * upload, and what connects them is the show a watch sold in — not the shift
+ * tag on the listing, which says only which show it was prepared for. Getting
+ * that backwards pays the wrong team, and every figure still looks plausible.
  *
  * Everything here is synthetic and on a date far in the past, so it cannot
  * collide with a real show (which is unique on date, platform and slot) or
@@ -16,14 +16,17 @@
  *   npx tsx scripts/check-payroll.mts
  */
 import "dotenv/config";
+import { assertDevDatabase } from "./dev-only.mjs";
 import { prisma } from "../src/lib/db";
 import { toDbDate } from "../src/lib/domain/dates";
 import { getPayrollPeriod } from "../src/lib/server/payroll";
 
+assertDevDatabase("check-payroll.mts");
+
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
   const ok = JSON.stringify(actual) === JSON.stringify(expected);
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : ` â€” expected ${expected}, got ${actual}`}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : ` — expected ${expected}, got ${actual}`}`);
   if (!ok) failures++;
 }
 
@@ -167,7 +170,7 @@ await sale({ platform: "TIKTOK", show: "TikTok PM", shiftTag: `${TAG_DAY} PM`, c
 
   This is the real 09/08 case: eleven watches, $751, tagged AM and bought during
   the PM show. Whoever was live when the buyer paid earned it, so this belongs
-  to the night pair â€” and the tag has nothing to do with pay.
+  to the night pair — and the tag has nothing to do with pay.
 */
 await sale({ platform: "TIKTOK", show: "TikTok PM", shiftTag: `${TAG_DAY} AM`, cents: 50_000 });
 
@@ -230,7 +233,7 @@ check(
 
 // The one that matters. Whoever was live when the buyer paid earned it, so the
 // watch listed for the morning show and bought during the evening one is the
-// evening pair's â€” the tag is not consulted.
+// evening pair's — the tag is not consulted.
 const nightSales = 200_000 + 50_000 + 9_000; // $2,590
 check(
   "a watch bought during the night show is the night pair's, whatever it was tagged",
@@ -384,7 +387,7 @@ await prisma.settings.update({
 });
 await clearFixtures();
 console.log(
-  `Removed â€” ${await prisma.user.count({ where: { email: { endsWith: DOMAIN } } })} fixture accounts, ` +
+  `Removed — ${await prisma.user.count({ where: { email: { endsWith: DOMAIN } } })} fixture accounts, ` +
     `${await prisma.importBatch.count({ where: { showDate: toDbDate(DAY) } })} fixture uploads left. ` +
     `Rates put back as they were.`,
 );
