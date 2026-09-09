@@ -434,6 +434,21 @@ built on the same parse.
 5. **Scan flow** — duplicate model counting, over-scan refusal, unexpected-item refusal,
    override paths, close gating, already-packed, unrecognised label.
 6. **The existing 169 tests must still pass**, plus `npm run typecheck` and a clean build.
+7. **`node scripts/check-shipping.mjs`** — the database guarantees, proved by trying to
+   violate each one against a real Postgres and rolling back, in the same style as
+   `check-constraints.mjs`. Two boxes cannot share a tracking number; a stock number
+   cannot appear twice in one box; neither count can go negative; a scanned count *may*
+   exceed the expected one, because that is a deliberate override; a box that has been
+   scanned cannot be deleted; somebody who has packed cannot be deleted; and deleting an
+   upload leaves its boxes standing.
+
+> **Verifying the migration without touching production.** `npx prisma dev` starts a
+> local Postgres with no install — it is already a dependency, and `src/lib/db.ts`
+> already refers to it. Point `DATABASE_URL` at it, run `prisma migrate deploy` to replay
+> the whole history from empty, then `prisma migrate diff --from-config-datasource
+> --to-schema prisma/schema.prisma --exit-code` to prove the result matches the schema.
+> Done on 2026-09-09: 15 migrations applied, no difference detected, all eight constraint
+> checks passed.
 
 > **Fixtures must not contain customer data.** The eBay export carries unmasked buyer
 > names, addresses and phone numbers. Committing the real files as test fixtures would put

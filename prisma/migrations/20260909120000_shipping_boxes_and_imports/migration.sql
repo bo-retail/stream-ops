@@ -228,8 +228,12 @@ ALTER TABLE "Package" ADD CONSTRAINT "Package_closedById_fkey"
 ALTER TABLE "PackageItem" ADD CONSTRAINT "PackageItem_packageId_fkey"
   FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
+-- Restrict, not Cascade: a box that has been scanned can no longer be deleted
+-- at all. Re-uploading a corrected report may drop a box nobody has touched,
+-- but the moment a packer scans one it becomes evidence, and the database
+-- refuses rather than trusting every future caller to remember.
 ALTER TABLE "ScanEvent" ADD CONSTRAINT "ScanEvent_packageId_fkey"
-  FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  FOREIGN KEY ("packageId") REFERENCES "Package"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- Restrict, not SetNull: a scan without a name is not evidence. An account that
 -- has packed a box cannot be deleted — deactivate it instead, which is what the

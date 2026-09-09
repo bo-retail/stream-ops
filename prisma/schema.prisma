@@ -653,7 +653,11 @@ model ScanEvent {
   rawScan     String?
   note        String?
 
-  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  /// Restrict, not Cascade: a box that has been scanned can no longer be
+  /// deleted at all. Re-uploading a corrected report may drop a box nobody has
+  /// touched, but the moment a packer scans one it becomes evidence, and the
+  /// database refuses rather than trusting every future caller to remember.
+  package Package @relation(fields: [packageId], references: [id], onDelete: Restrict)
   user    User    @relation("ScanBy", fields: [userId], references: [id])
 
   @@index([packageId, at])
