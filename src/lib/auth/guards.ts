@@ -137,6 +137,21 @@ export async function requireBossOrThrow(): Promise<AuthUser> {
   return user;
 }
 
+/*
+  There was an `assertCanViewEmployee(viewer, targetUserId)` here, and nothing
+  ever called it.
+
+  It was not covering a hole: no employee-facing page takes a user id from the
+  URL, and every one of them reads with `userId: user.id` from the session. The
+  two pages that do take an id — a packer's day and a box's scan history — are
+  the shipping director's, and are meant to show anybody.
+
+  It is gone rather than left for later because a security function that guards
+  nothing is worse than no function at all: the next person to add a page that
+  does take an id would have found it, assumed the app already worked that way,
+  and had no reason to look further.
+*/
+
 /** The throwing form of {@link requireShipping}, for scanner actions. */
 export async function requireShippingOrThrow(): Promise<AuthUser> {
   const user = await requireUserOrThrow();
@@ -155,13 +170,3 @@ export async function requireShippingDirectorOrThrow(): Promise<AuthUser> {
   return user;
 }
 
-/**
- * Guards employee-scoped reads. An employee may only ever request their own
- * records; the boss may request anyone's.
- */
-export function assertCanViewEmployee(viewer: AuthUser, targetUserId: string): void {
-  if (viewer.role === "BOSS") return;
-  if (viewer.id !== targetUserId) {
-    throw new AuthorizationError("You can only view your own records.");
-  }
-}
