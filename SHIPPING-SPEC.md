@@ -434,7 +434,11 @@ built on the same parse.
 5. **Scan flow** — duplicate model counting, over-scan refusal, unexpected-item refusal,
    override paths, close gating, already-packed, unrecognised label.
 6. **The existing 169 tests must still pass**, plus `npm run typecheck` and a clean build.
-7. **`node scripts/check-shipping.mjs`** — the database guarantees, proved by trying to
+7. **`npx tsx scripts/check-import.mts`** — a whole day written end to end: 473 watches
+   into 220 boxes, the 17-watch box rebuilt with its duplicate counts, then the same day
+   uploaded a second time to prove it stays at 220 boxes and that a box closed in between
+   keeps its status, its stamp and its scans.
+8. **`node scripts/check-shipping.mjs`** — the database guarantees, proved by trying to
    violate each one against a real Postgres and rolling back, in the same style as
    `check-constraints.mjs`. Two boxes cannot share a tracking number; a stock number
    cannot appear twice in one box; neither count can go negative; a scanned count *may*
