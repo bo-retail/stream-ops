@@ -46,9 +46,11 @@ export interface TimeEntryView {
   /** Business-zone date the shift started on. Used for grouping and reports. */
   dateISO: DateISO;
   note: string | null;
-  source: "SELF" | "ADMIN";
+  source: "SELF" | "ADMIN" | "SCHEDULE";
   version: number;
   edited: boolean;
+  /** Printed from the published schedule rather than clocked or typed. */
+  fromSchedule: boolean;
 }
 
 export interface RevisionView {
@@ -101,7 +103,7 @@ type Row = {
   clockInAt: Date;
   clockOutAt: Date | null;
   note: string | null;
-  source: "SELF" | "ADMIN";
+  source: "SELF" | "ADMIN" | "SCHEDULE";
   version: number;
   user: { name: string; team: "STREAMING" | "SHIPPING" };
   show: {
@@ -117,9 +119,26 @@ type Row = {
 function toView(row: Row, timezone: string): TimeEntryView {
   const { clock, day } = formatters(timezone);
 
+  /*
+    Only a self-clocked entry is measured against a shift.
+
+    Clamping exists to answer "they turned up twenty minutes early, do we pay
+    it" — a question that only arises when somebody pressed a button. It must
+    not touch the other two sources:
+
+      SCHEDULE  the times *are* the shift, so clamping is a no-op until the
+                boss corrects one — at which point clamping would quietly undo
+                the correction and pay the original hours anyway.
+      ADMIN     somebody typed those hours deliberately, with a reason.
+
+    Historical clocked entries keep their behaviour exactly, which is why this
+    turns on the source rather than on the presence of a show.
+  */
+  const clampable = row.source === "SELF";
+
   // A cancelled show is not a shift anybody was meant to work, so it stops
   // bounding the hours — whatever they actually clocked stands.
-  const shift = row.show && row.show.status === "SCHEDULED" ? row.show : null;
+  const shift = clampable && row.show && row.show.status === "SCHEDULED" ? row.show : null;
 
   const paid = paidWindow(
     { clockInAt: row.clockInAt, clockOutAt: row.clockOutAt },
@@ -162,6 +181,7 @@ function toView(row: Row, timezone: string): TimeEntryView {
     // Not simply version > 1: clocking out is version 2 of every ordinary
     // entry. Only an admin edit sets the source to ADMIN.
     edited: row.source === "ADMIN" && row.version > 1,
+    fromSchedule: row.source === "SCHEDULE",
   };
 }
 
@@ -215,41 +235,23 @@ export async function getEntriesInRange(range: {
 }
 
 /**
- * The show a clock-in right now should be measured against.
+ * Nothing. A clock-in is no longer attached to a show.
  *
- * Only shows this person is actually on, only ones still scheduled, and only
- * within a few hours of now — so somebody clocking in at 3am is not silently
- * measured against a show that finished at 7pm.
+ * It used to find the show somebody was turning up for, so their hours could be
+ * measured against it. That question has gone: a streamer's show hours come
+ * from the published schedule and are printed when the show starts, so pressing
+ * the button is never how a show gets paid.
+ *
+ * What the clock is for now is the work that is *not* on the schedule — helping
+ * with packing, an errand — and that has no shift to be measured against by
+ * definition. Shipping was always this way.
+ *
+ * Kept as a named function rather than deleted at the call site so the reason
+ * has somewhere to live; `showForClockIn` in the domain layer keeps working out
+ * which show an instant belongs to, which the historical entries still rely on.
  */
-export async function findShiftForClockIn(
-  userId: string,
-  at: Date,
-): Promise<{ id: string; startsAt: Date; endsAt: Date } | null> {
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { team: true } });
-  // Shipping has no schedule at all — nothing to measure against, by design.
-  if (!user || user.team === "SHIPPING") return null;
-
-  const halfDay = 12 * 60 * 60 * 1000;
-  const rows = await prisma.assignment.findMany({
-    where: {
-      userId,
-      show: {
-        status: "SCHEDULED",
-        // Only a published schedule counts. A draft can still be rearranged, so
-        // clamping somebody's pay to a shift that has not been announced would
-        // dock them against hours they were never told to work.
-        release: { scheduleStatus: "PUBLISHED" },
-        startsAt: { lte: new Date(at.getTime() + halfDay) },
-        endsAt: { gte: new Date(at.getTime() - halfDay) },
-      },
-    },
-    select: { show: { select: { id: true, startsAt: true, endsAt: true } } },
-  });
-
-  return showForClockIn(
-    at,
-    rows.map((r) => r.show),
-  );
+export async function findShiftForClockIn(): Promise<null> {
+  return null;
 }
 
 /** Every version an entry has held, newest first. */
@@ -320,6 +322,121 @@ export function totalsByPerson(entries: TimeEntryView[]): PersonTotal[] {
   return [...byUser.values()].sort(
     (a, b) => a.team.localeCompare(b.team) || a.name.localeCompare(b.name),
   );
+}
+
+/* ==========================================================================
+   Hours from the schedule.
+   ========================================================================== */
+
+/** How far back a catch-up run will reach. Older than this is history. */
+const MATERIALISE_DAYS = 90;
+
+/**
+ * Writes a streamer's hours for every show that has started.
+ *
+ * Streamers do not clock for their shows. Being on a published schedule is the
+ * commitment — if somebody is on it and it has gone out, they are working it —
+ * so the hours are printed as the show begins rather than waiting for two
+ * button presses that only ever reproduced the same figure, or failed to.
+ *
+ * Printed, and then left alone. The entry holds the show's hours as they stood
+ * when it started; editing the show afterwards does not move anybody's pay. A
+ * correction goes through the timesheet like any other, with a reason, keeping
+ * every previous version.
+ *
+ * Idempotent, and safely so: a partial unique index on (userId, showId) for
+ * SCHEDULE entries means two pages loading at the same moment as a show starts
+ * cannot both print a copy. The duplicate is swallowed rather than raised,
+ * because losing the race is the expected outcome, not a fault.
+ *
+ * Called on read rather than by a scheduler. There is no cron in this app, and
+ * adding one to write a row that any interested page could write itself would
+ * be a piece of infrastructure to keep alive for no gain.
+ */
+export async function materialiseScheduledHours(now: Date = new Date()): Promise<number> {
+  const from = new Date(now.getTime() - MATERIALISE_DAYS * 86_400_000);
+
+  const due = await prisma.assignment.findMany({
+    where: {
+      show: {
+        status: "SCHEDULED",
+        startsAt: { gte: from, lte: now },
+        release: { scheduleStatus: "PUBLISHED" },
+      },
+      // Shipping has no schedule; an admin is not on the rota either.
+      user: { isActive: true, team: "STREAMING", role: "EMPLOYEE" },
+    },
+    select: {
+      userId: true,
+      showId: true,
+      show: { select: { startsAt: true, endsAt: true } },
+    },
+  });
+
+  if (due.length === 0) return 0;
+
+  const already = await prisma.timeEntry.findMany({
+    where: {
+      source: "SCHEDULE",
+      showId: { in: due.map((d) => d.showId) },
+    },
+    select: { userId: true, showId: true },
+  });
+  const done = new Set(already.map((e) => `${e.userId}|${e.showId}`));
+
+  const missing = due.filter((d) => !done.has(`${d.userId}|${d.showId}`));
+  if (missing.length === 0) return 0;
+
+  let written = 0;
+  for (const row of missing) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        const entry = await tx.timeEntry.create({
+          data: {
+            userId: row.userId,
+            showId: row.showId,
+            clockInAt: row.show.startsAt,
+            clockOutAt: row.show.endsAt,
+            source: "SCHEDULE",
+            version: 1,
+          },
+          select: { id: true },
+        });
+        // The first revision records the entry as originally printed, so the
+        // history is complete rather than starting at the first correction.
+        await tx.timeEntryRevision.create({
+          data: {
+            timeEntryId: entry.id,
+            version: 1,
+            clockInAt: row.show.startsAt,
+            clockOutAt: row.show.endsAt,
+            reason: "Printed from the published schedule",
+            changedById: row.userId,
+          },
+        });
+      });
+      written++;
+    } catch (error) {
+      // Somebody else's page got there first. That is the index doing its job.
+      if (!isUniqueViolation(error)) throw error;
+    }
+  }
+
+  return written;
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: string }).code === "P2002"
+  );
+}
+
+/** How many people have already been credited for a show. */
+export async function scheduledHoursPrinted(showId: string): Promise<number> {
+  return prisma.timeEntry.count({ where: { showId, source: "SCHEDULE" } });
 }
 
 /** The pay period a date falls in — the same 1st–15th / 16th–end split. */

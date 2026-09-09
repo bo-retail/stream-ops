@@ -4,7 +4,11 @@ import type { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { formatDate, isDateISO } from "@/lib/domain/dates";
 import { formatPeriod, periodFor } from "@/lib/domain/periods";
-import { getEntriesInRange, totalsByPerson } from "@/lib/server/timeclock";
+import {
+  getEntriesInRange,
+  materialiseScheduledHours,
+  totalsByPerson,
+} from "@/lib/server/timeclock";
 
 /**
  * Clocked hours as a workbook, for the CFO to hand to QuickBooks.
@@ -66,6 +70,10 @@ export async function GET(request: NextRequest) {
   if (period.end < period.start) {
     return new NextResponse("The end date is before the start date.", { status: 400 });
   }
+
+  // Print anything that has come due before the figures leave the building.
+  // Payroll must not be short a show because nobody happened to open a page.
+  await materialiseScheduledHours();
 
   const entries = await getEntriesInRange({ from: period.start, to: period.end });
   const totals = totalsByPerson(entries);

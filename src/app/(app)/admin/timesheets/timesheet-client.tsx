@@ -25,9 +25,11 @@ export interface SheetEntry {
   leftEarlyMinutes: number;
   unpaidMinutes: number;
   note: string | null;
-  source: "SELF" | "ADMIN";
+  source: "SELF" | "ADMIN" | "SCHEDULE";
   edited: boolean;
   version: number;
+  /** Printed from the published schedule rather than clocked or typed. */
+  fromSchedule: boolean;
 }
 
 export interface SheetPerson {

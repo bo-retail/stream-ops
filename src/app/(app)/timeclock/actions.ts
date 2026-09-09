@@ -5,7 +5,6 @@ import { z } from "zod";
 import { requireUserOrThrow } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { paidWindow } from "@/lib/domain/hours";
-import { findShiftForClockIn } from "@/lib/server/timeclock";
 
 export interface ClockState {
   error?: string;
@@ -54,14 +53,17 @@ export async function clockIn(_prev: ClockState, formData: FormData): Promise<Cl
   }
 
   const now = new Date();
-  const shift = await findShiftForClockIn(user.id, now);
 
   try {
     const entry = await prisma.timeEntry.create({
       data: {
         userId: user.id,
         clockInAt: now,
-        showId: shift?.id ?? null,
+        // No show is attached. A streamer's show hours come from the published
+        // schedule and are printed when the show starts, so anything they clock
+        // is off-schedule work by definition — and shipping never had a shift
+        // to be measured against in the first place.
+        showId: null,
         note: note || null,
         source: "SELF",
         version: 1,

@@ -1,0 +1,207 @@
+/**
+ * Streamers' hours come from the published schedule, not from a clock.
+ *
+ * The rules this proves, in the order they matter:
+ *
+ *   printed when the show starts, not before, and only from a published release
+ *   printed once, however many times anything asks
+ *   the hours are the show's, both people on it
+ *   editing the show afterwards does not move anybody's pay
+ *   the boss can correct them, and the correction stands
+ *   shipping is untouched
+ *
+ *   DATABASE_URL=<a development database> \
+ *   NODE_OPTIONS=--conditions=react-server \
+ *   npx tsx scripts/check-scheduled-hours.mts
+ */
+import "dotenv/config";
+import { prisma } from "../src/lib/db";
+import { toDbDate } from "../src/lib/domain/dates";
+import { getEntriesInRange, materialiseScheduledHours, scheduledHoursPrinted } from "../src/lib/server/timeclock";
+
+let failures = 0;
+function check(name: string, actual: unknown, expected: unknown) {
+  const ok = JSON.stringify(actual) === JSON.stringify(expected);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : ` — expected ${expected}, got ${actual}`}`);
+  if (!ok) failures++;
+}
+
+const FIXTURE = "check-scheduled-hours";
+
+/*
+  Well clear of anything real.
+
+  A show is unique on (date, platform, slot), so a fixture on yesterday collides
+  with whatever actually ran yesterday. Sixty days back is inside the ninety-day
+  window a catch-up run reaches, and outside any live schedule.
+*/
+const DATE = new Date(Date.now() - 60 * 86_400_000).toISOString().slice(0, 10);
+const FUTURE = new Date(Date.now() + 45 * 86_400_000).toISOString().slice(0, 10);
+
+/** Removes anything an earlier run left behind, so this is re-runnable. */
+async function clearFixtures() {
+  const users = await prisma.user.findMany({
+    where: { email: { endsWith: "@check-scheduled-hours.test" } },
+    select: { id: true },
+  });
+  const ids = users.map((u) => u.id);
+  if (ids.length > 0) {
+    await prisma.timeEntryRevision.deleteMany({ where: { timeEntry: { userId: { in: ids } } } });
+    await prisma.timeEntry.deleteMany({ where: { userId: { in: ids } } });
+  }
+  await prisma.release.deleteMany({ where: { name: { startsWith: FIXTURE } } });
+  if (ids.length > 0) await prisma.user.deleteMany({ where: { id: { in: ids } } });
+}
+await clearFixtures();
+
+/* --------------------------------------------------------------- fixtures */
+
+const [alice, bob, packer] = await Promise.all(
+  [
+    { name: "Alice Streamer", team: "STREAMING" as const },
+    { name: "Bob Streamer", team: "STREAMING" as const },
+    { name: "Pat Packer", team: "SHIPPING" as const },
+  ].map((p, i) =>
+    prisma.user.create({
+      data: {
+        name: p.name,
+        email: `p${i}@check-scheduled-hours.test`,
+        passwordHash: "x",
+        role: "EMPLOYEE",
+        team: p.team,
+      },
+      select: { id: true },
+    }),
+  ),
+);
+
+/** A show, with both seats filled, on a release that may or may not be published. */
+async function makeShow(opts: {
+  dateISO: string;
+  published: boolean;
+  startsAt: Date;
+  endsAt: Date;
+  platform: "TIKTOK" | "EBAY";
+  slot: "DAY" | "NIGHT";
+}) {
+  const release = await prisma.release.create({
+    data: {
+      name: `${FIXTURE} ${opts.dateISO} ${opts.platform} ${opts.slot}`,
+      startDate: toDbDate(opts.dateISO),
+      endDate: toDbDate(opts.dateISO),
+      status: "CLOSED",
+      scheduleStatus: opts.published ? "PUBLISHED" : "DRAFT",
+      shows: {
+        create: {
+          date: toDbDate(opts.dateISO),
+          platform: opts.platform,
+          slot: opts.slot,
+          startsAt: opts.startsAt,
+          endsAt: opts.endsAt,
+          assignments: {
+            create: [
+              { userId: alice.id, seat: 1 },
+              { userId: bob.id, seat: 2 },
+            ],
+          },
+        },
+      },
+    },
+    select: { shows: { select: { id: true } } },
+  });
+  return release.shows[0].id;
+}
+
+// Ran, 19:00 to 01:00 — six hours, crossing midnight the way a night show does.
+const ranStart = new Date(`${DATE}T19:00:00.000Z`);
+const ranEnd = new Date(ranStart.getTime() + 6 * 3_600_000);
+const ran = await makeShow({ dateISO: DATE, published: true, startsAt: ranStart, endsAt: ranEnd, platform: "TIKTOK", slot: "NIGHT" });
+
+// Published, but has not started yet.
+const future = await makeShow({
+  dateISO: FUTURE,
+  published: true,
+  startsAt: new Date(Date.now() + 45 * 86_400_000),
+  endsAt: new Date(Date.now() + 45 * 86_400_000 + 6 * 3_600_000),
+  platform: "TIKTOK",
+  slot: "DAY",
+});
+
+// Started, but the release was never published.
+const draft = await makeShow({
+  dateISO: DATE,
+  published: false,
+  startsAt: ranStart,
+  endsAt: ranEnd,
+  platform: "EBAY",
+  slot: "NIGHT",
+});
+
+console.log("Built three shows: one that ran, one still to come, one never published.\n");
+
+/* --------------------------------------------------------------- printing */
+
+const printed = await materialiseScheduledHours();
+check("hours were printed", printed >= 2, true);
+check("both people on the show got them", await scheduledHoursPrinted(ran), 2);
+check("a show that has not started yet gets nothing", await scheduledHoursPrinted(future), 0);
+check("nor does one on an unpublished release", await scheduledHoursPrinted(draft), 0);
+
+const again = await materialiseScheduledHours();
+check("running it again prints nothing", again, 0);
+check("and there is still one entry each", await scheduledHoursPrinted(ran), 2);
+
+const entry = await prisma.timeEntry.findFirstOrThrow({
+  where: { showId: ran, userId: alice.id },
+  select: { clockInAt: true, clockOutAt: true, source: true, showId: true, revisions: true },
+});
+check("the entry holds the show's hours", entry.clockInAt.toISOString(), ranStart.toISOString());
+check("start to finish", entry.clockOutAt?.toISOString(), ranEnd.toISOString());
+check("marked as coming from the schedule", entry.source, "SCHEDULE");
+check("with its first version on record", entry.revisions.length, 1);
+check("saying where it came from", entry.revisions[0].reason, "Printed from the published schedule");
+
+const view = await getEntriesInRange({ from: DATE, to: DATE, userId: alice.id });
+check("it reads as six hours", view[0]?.paidMinutes, 360);
+check("and is flagged as scheduled rather than clocked", view[0]?.fromSchedule, true);
+check("with nothing docked for lateness that never applied", [view[0]?.lateMinutes, view[0]?.leftEarlyMinutes], [0, 0]);
+
+/* ---------------------------------------------- the show changes afterwards */
+
+await prisma.show.update({
+  where: { id: ran },
+  data: { endsAt: new Date(ranEnd.getTime() + 3_600_000) },
+});
+await materialiseScheduledHours();
+
+const afterEdit = await getEntriesInRange({ from: DATE, to: DATE, userId: alice.id });
+check("stretching the show does not move pay already printed", afterEdit[0]?.paidMinutes, 360);
+check("and does not print a second entry", await scheduledHoursPrinted(ran), 2);
+
+/* ------------------------------------------------- the boss corrects them */
+
+// Somebody left an hour early. The correction has to stand, not be quietly
+// clamped back up to the show's hours.
+const shortened = new Date(ranEnd.getTime() - 3_600_000);
+await prisma.timeEntry.updateMany({
+  where: { showId: ran, userId: alice.id },
+  data: { clockOutAt: shortened, source: "ADMIN", version: 2 },
+});
+
+const corrected = await getEntriesInRange({ from: DATE, to: DATE, userId: alice.id });
+check("a correction is paid as corrected", corrected[0]?.paidMinutes, 300);
+check("and is not clamped back up to the show's hours", corrected[0]?.paidMinutes !== 360, true);
+
+/* ------------------------------------------------------------- shipping */
+
+check("shipping is never given scheduled hours", await prisma.timeEntry.count({ where: { userId: packer.id } }), 0);
+
+/* ------------------------------------------------------------------ cleanup */
+
+console.log("\nCleaning up.");
+await clearFixtures();
+console.log(`Removed — ${await prisma.user.count({ where: { email: { endsWith: "@check-scheduled-hours.test" } } })} fixture accounts left.`);
+
+await prisma.$disconnect();
+console.log(failures === 0 ? "\nAll scheduled-hours checks passed." : `\n${failures} check(s) FAILED.`);
+process.exit(failures === 0 ? 0 : 1);

@@ -360,6 +360,13 @@ enum TimeEntrySource {
   SELF
   /// An admin entered or corrected it on their behalf.
   ADMIN
+  /// Written from the published schedule when the show started.
+  ///
+  /// Streamers do not clock for their shows: being on a published schedule is
+  /// the commitment, so the hours are printed as the show begins and then stay
+  /// put. Editing the show afterwards does not move them — a correction goes
+  /// through the timesheet like any other, with a reason and a kept history.
+  SCHEDULE
 }
 
 /// One clock-in, and the clock-out that closes it.
@@ -402,6 +409,12 @@ model TimeEntry {
   /// Finding whoever is still clocked in, without scanning the table.
   @@index([userId, clockOutAt])
   @@index([showId])
+  /// One person's hours for one show are printed once and once only.
+  ///
+  /// Enforced in the database by a partial unique index on (userId, showId)
+  /// WHERE source = 'SCHEDULE', which Prisma's schema language cannot express —
+  /// see the migration. Without it, two pages loading at the same moment as a
+  /// show starts would each print a copy and somebody would be paid twice.
 }
 
 /// Append-only history of every version a time entry has held.

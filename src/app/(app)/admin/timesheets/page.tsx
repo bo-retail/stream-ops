@@ -5,7 +5,11 @@ import { requireBoss } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { formatMinutes, isDateISO } from "@/lib/domain/dates";
 import { formatPeriod, formatPeriodShort, periodFor, recentPeriods } from "@/lib/domain/periods";
-import { getEntriesInRange, totalsByPerson } from "@/lib/server/timeclock";
+import {
+  getEntriesInRange,
+  materialiseScheduledHours,
+  totalsByPerson,
+} from "@/lib/server/timeclock";
 import { getWeekContext } from "@/lib/server/settings";
 import { listAllUsers } from "@/lib/server/team";
 import { AddEntryPanel, PersonTotals, Timesheet } from "./timesheet-client";
@@ -23,6 +27,10 @@ export default async function TimesheetsPage({
   const { from } = await searchParams;
 
   const period = periodFor(from && isDateISO(from) ? from : today);
+
+  // Print any show hours that have come due since this was last opened. Cheap,
+  // idempotent, and the reason no scheduler has to be kept alive to do it.
+  await materialiseScheduledHours();
 
   const [entries, people, log] = await Promise.all([
     getEntriesInRange({ from: period.start, to: period.end }),
@@ -57,6 +65,7 @@ export default async function TimesheetsPage({
     lateMinutes: e.lateMinutes,
     leftEarlyMinutes: e.leftEarlyMinutes,
     unpaidMinutes: e.unpaidMinutes,
+    fromSchedule: e.fromSchedule,
     note: e.note,
     source: e.source,
     edited: e.edited,

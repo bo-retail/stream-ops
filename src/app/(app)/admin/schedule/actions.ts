@@ -18,6 +18,7 @@ import { PLATFORM_SHORT, SEATS, SEATS_PER_SHOW, SLOT_SHORT } from "@/lib/domain/
 import type { Platform, Slot } from "@/lib/domain/types";
 import { getReleaseView } from "@/lib/server/schedule";
 import { getSettings } from "@/lib/server/settings";
+import { scheduledHoursPrinted } from "@/lib/server/timeclock";
 
 export interface ActionState {
   error?: string;
@@ -224,6 +225,16 @@ export async function updateShowHours(
   const hours = (endsAt.getTime() - startsAt.getTime()) / 3_600_000;
   if (hours > 16) return { error: "A show cannot run longer than 16 hours." };
 
+  /*
+    Hours are printed when a show starts and then stay put, so changing a show
+    that has already run does not move anybody's pay — which is the safe
+    behaviour, and also the surprising one if you assumed otherwise.
+
+    Said out loud rather than left to be discovered at the end of the period,
+    and it names the screen where the correction actually belongs.
+  */
+  const credited = await scheduledHoursPrinted(d.showId);
+
   await prisma.$transaction([
     prisma.show.update({
       where: { id: d.showId },
@@ -243,6 +254,16 @@ export async function updateShowHours(
   ]);
 
   refresh();
+
+  if (credited > 0) {
+    return {
+      ok:
+        `${d.start}–${d.end}${crossesMidnight ? " (ends next day)" : ""}, ${hours} hours. ` +
+        `Careful: ${credited} ${credited === 1 ? "person has" : "people have"} already been paid ` +
+        `for this show at its old hours, and that has not changed. If their pay should change too, ` +
+        `correct it on Timesheets.`,
+    };
+  }
   return { ok: `${d.start}–${d.end}${crossesMidnight ? " (ends next day)" : ""}, ${hours} hours.` };
 }
 
@@ -277,6 +298,8 @@ export async function toggleShowCancelled(
 
   const cancelling = show.status === "SCHEDULED";
   const reason = parsed.data.reason?.trim();
+  // Cancelling does not un-pay a show that already ran and was credited.
+  const credited = cancelling ? await scheduledHoursPrinted(show.id) : 0;
 
   await prisma.$transaction([
     prisma.show.update({
@@ -298,6 +321,16 @@ export async function toggleShowCancelled(
   ]);
 
   refresh();
+
+  if (cancelling && credited > 0) {
+    return {
+      ok:
+        `Cancelled. The people on it are free for other shows. ` +
+        `Careful: ${credited} ${credited === 1 ? "person has" : "people have"} already been paid ` +
+        `for it, and cancelling does not take that back. Remove the hours on Timesheets if it ` +
+        `genuinely never ran.`,
+    };
+  }
   return {
     ok: cancelling
       ? "Cancelled. The people on it are free for other shows."

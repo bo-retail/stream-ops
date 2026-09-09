@@ -5,7 +5,12 @@ import { prisma } from "@/lib/db";
 import { formatMinutes } from "@/lib/domain/dates";
 import { formatPeriod, periodFor } from "@/lib/domain/periods";
 import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
-import { getEntriesInRange, getOpenEntry } from "@/lib/server/timeclock";
+import {
+  getEntriesInRange,
+  getOpenEntry,
+  materialiseScheduledHours,
+} from "@/lib/server/timeclock";
+import { Alert } from "@/components/ui";
 import { getWeekContext } from "@/lib/server/settings";
 import { ClockPanel, MyEntries } from "./clock-client";
 import type { ClockEntry } from "./clock-client";
@@ -21,6 +26,11 @@ export default async function TimeClockPage() {
   // period would imply you could clock into it. Past hours live on the boss's
   // timesheets, which is also where a correction has to be made anyway.
   const period = periodFor(today);
+  const isStreamer = user.team === "STREAMING" && user.role === "EMPLOYEE";
+
+  // Print any show hours that have come due, so a streamer opening this sees
+  // today's show already on it rather than wondering where it went.
+  await materialiseScheduledHours();
 
   const [open, entries] = await Promise.all([
     getOpenEntry(user.id),
@@ -76,6 +86,17 @@ export default async function TimeClockPage() {
   return (
     <>
       <PageHeader title="Time clock" description={formatPeriod(period)} />
+
+      {isStreamer ? (
+        <div className="mb-5">
+          <Alert tone="info" title="You do not clock in for your shows">
+            Your show hours are added automatically from the published schedule, as each show
+            starts — they are already on the list below. Use the clock only for work that is not
+            on the schedule, like helping with packing. If a show&rsquo;s hours are wrong, ask
+            your admin to correct them.
+          </Alert>
+        </div>
+      ) : null}
 
       <div className="grid gap-5 lg:grid-cols-[24rem_1fr]">
         <div className="space-y-4">
