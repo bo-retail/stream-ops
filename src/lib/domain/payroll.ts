@@ -19,7 +19,6 @@
  *               1% split.
  */
 
-import { parseShiftTag } from "./imports/types";
 import type { DateISO, Platform, Slot } from "./types";
 
 /** The business-wide rates. Whole cents, and basis points for the percentage. */
@@ -97,41 +96,23 @@ export function showKey(k: ShowKey): string {
 }
 
 /**
- * Which show's team is paid for a sale.
+ * Which show's team is paid for a sale: the one it sold in.
  *
- * The shift tag, not the show it sold in. The two are different questions and
- * the master specification is explicit about it: an item listed for the morning
- * show can sell in the evening one, and the morning team is still the one that
- * sold it. `SalesRecord.show` answers "where did the money come from" — the
- * Sales insights tab — and this answers "who earned it".
+ * Whoever was live when the buyer paid earned it. A watch listed for the
+ * morning show that somebody buys during the evening one was sold by the
+ * evening pair, and it is theirs.
  *
- * The tag carries a date and AM/PM, and sometimes a platform token. Where it
- * does not, the marketplace the row came out of is the answer: a row in a TikTok
- * export is a TikTok sale whatever the tag says.
+ * There is deliberately no function here to work that out, because the
+ * ingestion has already done it and put the answer in `SalesRecord.show` — from
+ * the order's timestamp on TikTok, and from the Custom Label on eBay, which
+ * records no time of day at all and so has nothing else to go on (R15). Working
+ * it out a second time here is how the payroll screen and the sales screen come
+ * to disagree about the same show. See `lib/server/payroll`.
  *
- * Returns null when the tag cannot be read at all. The caller must not guess:
- * an unreadable tag is money that has to be shown as unattributed rather than
- * quietly attached to somebody's pay.
+ * The shift tag is not consulted for pay. It answers a different question —
+ * which show a listing was *prepared* for — and it is what the workbook's
+ * per-shift breakdown is built on.
  */
-export function payableShowFor(shiftTag: string, rowPlatform: Platform): ShowKey | null {
-  const tag = parseShiftTag(shiftTag);
-  if (!tag) return null;
-
-  return {
-    dateISO: tag.dateISO,
-    platform: platformFromToken(tag.token) ?? rowPlatform,
-    slot: tag.half === "AM" ? "DAY" : "NIGHT",
-  };
-}
-
-/** `TT` → TikTok, `EB` → eBay. Anything else is not a platform token. */
-export function platformFromToken(token: string | null): Platform | null {
-  if (!token) return null;
-  const t = token.toUpperCase();
-  if (t === "TT" || t === "TIKTOK") return "TIKTOK";
-  if (t === "EB" || t === "EBAY") return "EBAY";
-  return null;
-}
 
 /* --------------------------------------------------------------- formatting */
 

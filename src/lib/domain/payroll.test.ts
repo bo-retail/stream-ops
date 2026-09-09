@@ -8,8 +8,6 @@ import {
   parseMoneyToCents,
   parsePercentToBps,
   payFor,
-  payableShowFor,
-  platformFromToken,
   showKey,
 } from "./payroll";
 import type { Rates } from "./payroll";
@@ -95,53 +93,16 @@ describe("commission on a show", () => {
   });
 });
 
-describe("which show earned the sale", () => {
-  // The shift tag, not where it sold. An item listed for the morning show can
-  // sell in the evening one, and the morning team still earned it.
-  it("reads the date and the half out of the tag", () => {
-    expect(payableShowFor("09.08.26 PM", "TIKTOK")).toEqual({
-      dateISO: "2026-09-08",
-      platform: "TIKTOK",
-      slot: "NIGHT",
-    });
-    expect(payableShowFor("09.08.26 AM", "EBAY")).toEqual({
-      dateISO: "2026-09-08",
-      platform: "EBAY",
-      slot: "DAY",
-    });
-  });
-
-  it("takes the platform from the tag when it carries one", () => {
-    // Sold on eBay, tagged for the TikTok show — the TikTok team is paid.
-    expect(payableShowFor("08.29.26 TT AM", "EBAY")?.platform).toBe("TIKTOK");
-    expect(payableShowFor("08.29.26 EB PM", "TIKTOK")?.platform).toBe("EBAY");
-  });
-
-  it("falls back to the marketplace the row came from", () => {
-    expect(payableShowFor("09.08.26 PM", "EBAY")?.platform).toBe("EBAY");
-  });
-
-  // A tag can name a day that is not the day it sold: that is the whole reason
-  // the tag exists rather than using the sale's date.
-  it("pays the day on the tag, not the day it sold", () => {
-    expect(payableShowFor("09.07.26 PM", "TIKTOK")?.dateISO).toBe("2026-09-07");
-  });
-
-  it("refuses to guess at an unreadable tag", () => {
-    expect(payableShowFor("", "TIKTOK")).toBeNull();
-    expect(payableShowFor("no idea", "TIKTOK")).toBeNull();
-    expect(payableShowFor("13.45.26 PM", "TIKTOK")).toBeNull();
-  });
-
-  it("ignores a token that is not a platform", () => {
-    expect(platformFromToken("XYZ")).toBeNull();
-    expect(platformFromToken(null)).toBeNull();
-    expect(payableShowFor("09.08.26 XYZ PM", "EBAY")?.platform).toBe("EBAY");
-  });
-
+describe("keying a show", () => {
+  // A sale and a rota row have to reduce to the same string or the join is a
+  // guess. Which show a sale belongs to is settled by the ingestion, not here —
+  // see the note in payroll.ts.
   it("keys a show the same way from either side", () => {
     expect(showKey({ dateISO: "2026-09-08", platform: "TIKTOK", slot: "NIGHT" })).toBe(
       "2026-09-08|TIKTOK|NIGHT",
+    );
+    expect(showKey({ dateISO: "2026-09-08", platform: "EBAY", slot: "DAY" })).toBe(
+      "2026-09-08|EBAY|DAY",
     );
   });
 });

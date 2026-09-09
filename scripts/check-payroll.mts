@@ -1,9 +1,9 @@
-/**
+﻿/**
  * Payroll, against a real database.
  *
  * The unit tests cover the arithmetic. This covers the join, which is where the
  * money actually goes wrong: hours live on the timesheet, sales live in an
- * upload, and what connects them is the shift tag on a listing — not the show
+ * upload, and what connects them is the shift tag on a listing â€” not the show
  * the watch sold in. Getting that backwards pays the wrong team, and every
  * figure still looks plausible.
  *
@@ -23,7 +23,7 @@ import { getPayrollPeriod } from "../src/lib/server/payroll";
 let failures = 0;
 function check(name: string, actual: unknown, expected: unknown) {
   const ok = JSON.stringify(actual) === JSON.stringify(expected);
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : ` — expected ${expected}, got ${actual}`}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok ? "" : ` â€” expected ${expected}, got ${actual}`}`);
   if (!ok) failures++;
 }
 
@@ -158,26 +158,27 @@ async function sale(opts: {
   });
 }
 
-// $1,000 on the day show and $2,000 on the night show, both tagged plainly.
+// $1,000 on the day show and $2,000 on the night show.
 await sale({ platform: "TIKTOK", show: "TikTok AM", shiftTag: `${TAG_DAY} AM`, cents: 100_000 });
 await sale({ platform: "TIKTOK", show: "TikTok PM", shiftTag: `${TAG_DAY} PM`, cents: 200_000 });
 
-// $500 that SOLD on the night show but was LISTED for the day one. The tag is
-// what is paid on, so this belongs to the day team — the case the whole
-// shiftTag column exists for.
+/*
+  $500 that SOLD during the night show but was LISTED for the day one.
+
+  This is the real 09/08 case: eleven watches, $751, tagged AM and bought during
+  the PM show. Whoever was live when the buyer paid earned it, so this belongs
+  to the night pair â€” and the tag has nothing to do with pay.
+*/
 await sale({ platform: "TIKTOK", show: "TikTok PM", shiftTag: `${TAG_DAY} AM`, cents: 50_000 });
 
-// $300 sold on eBay but tagged for the TikTok day show. The token wins over the
-// marketplace the row came out of.
-await sale({ platform: "EBAY", show: "eBay PM", shiftTag: `${TAG_DAY} TT AM`, cents: 30_000 });
-
-// $700 tagged for an eBay show that nobody is rostered on.
+// $700 on an eBay show nobody is rostered on. Nobody can be paid it.
 await sale({ platform: "EBAY", show: "eBay PM", shiftTag: `${TAG_DAY} PM`, cents: 70_000 });
 
-// $90 whose tag is gibberish. Nobody can be paid it.
+// A gibberish tag changes nothing now: eBay reads the show off the tag and
+// falls back to PM, and pay follows the show either way.
 await sale({ platform: "TIKTOK", show: "TikTok PM", shiftTag: "who knows", cents: 9_000 });
 
-console.log(`Built two shows and six sales on ${DAY}.\n`);
+console.log(`Built two shows and five sales on ${DAY}.\n`);
 
 /* --------------------------------------------------------------- the hours */
 
@@ -206,17 +207,17 @@ const by = (name: string) => run.people.find((p) => p.name === name);
 
 check("everybody who worked is on it", run.people.length, 4);
 
-/* ---- the day show: $1,000 tagged AM + $500 that sold PM + $300 from eBay */
+/* ------------------------- the day show: only the $1,000 that sold in it */
 
-const daySales = 100_000 + 50_000 + 30_000; // $1,800
+const daySales = 100_000; // $1,000
 check(
-  "a sale is paid on its shift tag, not on where it sold",
+  "a show earns what sold in it",
   run.shows.find((s) => s.key.slot === "DAY")?.netRevenueCents,
   daySales,
 );
 check("both people on the day show earn on it", by("Maya Day")?.shows.length, 1);
-check("one per cent each", by("Maya Day")?.commissionCents, 1800);
-check("and the same for the other one", by("Devon Day")?.commissionCents, 1800);
+check("one per cent each", by("Maya Day")?.commissionCents, 1000);
+check("and the same for the other one", by("Devon Day")?.commissionCents, 1000);
 
 // 1% each, not 1% split: the show pays out 2% of its sales in total.
 check(
@@ -225,35 +226,53 @@ check(
   Math.round(daySales * 0.02),
 );
 
-/* --------------------------------------- the night show: $2,000, one person */
+/* --- the night show: $2,000 + the $500 tagged AM + the $90 with no tag */
 
-check("the night show keeps only what is tagged for it", by("Ana Night")?.commissionCents, 2000);
+// The one that matters. Whoever was live when the buyer paid earned it, so the
+// watch listed for the morning show and bought during the evening one is the
+// evening pair's â€” the tag is not consulted.
+const nightSales = 200_000 + 50_000 + 9_000; // $2,590
+check(
+  "a watch bought during the night show is the night pair's, whatever it was tagged",
+  run.shows.find((s) => s.key.slot === "NIGHT")?.netRevenueCents,
+  nightSales,
+);
+check("and they are paid on all of it", by("Ana Night")?.commissionCents, 2590);
+check(
+  "the day pair is not paid any of it",
+  by("Maya Day")?.shows.some((s) => s.netRevenueCents === nightSales),
+  false,
+);
+
+// Every penny sold lands on exactly one show. Nothing counted twice, nothing
+// lost between them.
+check(
+  "every sale reaches exactly one show",
+  run.shows.reduce((n, s) => n + s.netRevenueCents, 0) +
+    run.unattributed.reduce((n, s) => n + s.netRevenueCents, 0),
+  100_000 + 200_000 + 50_000 + 70_000 + 9_000,
+);
 
 /* ---------------------------------------------------------------- the hours */
 
 check("six hours at $18", by("Maya Day")?.hourlyPayCents, 10_800);
-check("plus commission", by("Maya Day")?.totalCents, 10_800 + 1800);
+check("plus commission", by("Maya Day")?.totalCents, 10_800 + 1000);
 check("shipping is paid eight hours at $16", by("Pat Packer")?.hourlyPayCents, 12_800);
 check("and earns no commission at all", by("Pat Packer")?.commissionCents, 0);
 check("nor is credited with any show", by("Pat Packer")?.shows.length, 0);
 
 /* ------------------------------------------------------------ what nobody earns */
 
-check("sales for an unrostered show are reported", run.unattributed.length >= 1, true);
+check("sales for an unrostered show are reported", run.unattributed.length, 1);
 check(
-  "including the $700 nobody is on",
-  run.unattributed.some((s) => s.netRevenueCents === 70_000),
-  true,
-);
-check(
-  "and the $90 with an unreadable tag",
-  run.unattributed.some((s) => s.netRevenueCents === 9_000),
-  true,
+  "the $700 nobody is rostered for",
+  run.unattributed[0]?.netRevenueCents,
+  70_000,
 );
 check(
   "none of it reached anybody's pay",
   run.people.reduce((n, p) => n + p.commissionCents, 0),
-  1800 + 1800 + 2000,
+  1000 + 1000 + 2590,
 );
 
 /* ------------------------------------------------------------- the totals */
@@ -274,8 +293,8 @@ await prisma.user.update({
 const withOwn = await getPayrollPeriod(period.start, period.end);
 const anaOwn = withOwn.people.find((p) => p.name === "Ana Night");
 check("her own hourly rate is used", anaOwn?.hourlyPayCents, 15_000); // 6h at $25
-check("and her own commission", anaOwn?.commissionCents, 5000); // 2.5% of $2,000
-check("nobody else moved", withOwn.people.find((p) => p.name === "Maya Day")?.totalCents, 12_600);
+check("and her own commission", anaOwn?.commissionCents, 6475); // 2.5% of $2,590
+check("nobody else moved", withOwn.people.find((p) => p.name === "Maya Day")?.totalCents, 11_800);
 
 // Clearing it puts her back on the standard rate rather than on nothing.
 await prisma.user.update({
@@ -316,9 +335,9 @@ const after = await getPayrollPeriod(period.start, period.end);
 check(
   "a re-uploaded day does not double anybody's commission",
   after.people.find((p) => p.name === "Maya Day")?.commissionCents,
-  1800,
+  1000,
 );
-check("nor the total", after.totals.commissionCents, 1800 + 1800 + 2000);
+check("nor the total", after.totals.commissionCents, 1000 + 1000 + 2590);
 
 /* -------------------------------------------- changing the rate moves the pay */
 
@@ -330,7 +349,7 @@ const doubled = await getPayrollPeriod(period.start, period.end);
 check(
   "doubling the commission doubles what it pays",
   doubled.people.find((p) => p.name === "Maya Day")?.commissionCents,
-  3600,
+  2000,
 );
 check(
   "and leaves the hours where they were",
@@ -365,7 +384,7 @@ await prisma.settings.update({
 });
 await clearFixtures();
 console.log(
-  `Removed — ${await prisma.user.count({ where: { email: { endsWith: DOMAIN } } })} fixture accounts, ` +
+  `Removed â€” ${await prisma.user.count({ where: { email: { endsWith: DOMAIN } } })} fixture accounts, ` +
     `${await prisma.importBatch.count({ where: { showDate: toDbDate(DAY) } })} fixture uploads left. ` +
     `Rates put back as they were.`,
 );

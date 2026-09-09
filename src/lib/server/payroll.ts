@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { addDays, fromDbDate, toDbDate } from "@/lib/domain/dates";
-import { payFor, payableShowFor, showKey } from "@/lib/domain/payroll";
+import { fromDbDate, toDbDate } from "@/lib/domain/dates";
+import { payFor, showKey } from "@/lib/domain/payroll";
 import type { PersonPay, Rates, ShowKey } from "@/lib/domain/payroll";
 import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
 import type { DateISO, Platform, Slot } from "@/lib/domain/types";
@@ -17,10 +17,16 @@ import { getEntriesInRange, totalsByPerson } from "./timeclock";
  * Commission comes from the shows somebody was on and what those shows sold —
  * two facts that live a long way apart, and joining them is most of this file.
  *
- * The join is the shift tag, not the show a watch sold in. The master
- * specification is explicit that they are different questions: an item listed
- * for the morning show can sell in the evening one, and the morning team still
- * earned it. See `payableShowFor`.
+ * The join is where the watch sold, not the tag on the listing. Whoever was
+ * live when the buyer paid earned it: a watch listed for the morning show that
+ * somebody buys during the evening one was sold by the evening pair, and it is
+ * theirs.
+ *
+ * That is `SalesRecord.show`, which the ingestion has already worked out — from
+ * the order's timestamp on TikTok, and from the Custom Label on eBay, which
+ * records no time of day at all and so has nothing else to go on (R15). Using
+ * it here means a show's commission is exactly one per cent of what the Sales
+ * insights tab says that show made. The two screens cannot disagree.
  */
 
 export interface ShowSales {
@@ -61,32 +67,29 @@ function labelFor(platform: Platform, slot: Slot): string {
 /**
  * What each show sold, keyed the way a rota row can be keyed too.
  *
- * The window is wider than the period on purpose. A sale is attributed by the
- * date on its tag, and a tag can name a day other than the one the file was
- * exported for — an item listed for Sunday's show that sold on Monday arrives
- * in Monday's upload. Reading only the period's own uploads would drop it. The
- * results are filtered back to the period afterwards, by tag date.
+ * `show` is where the watch sold — the column the Sales insights tab totals —
+ * so a show's commission is one per cent of the figure already on that screen.
+ * `showDate` is the day it belongs to, which is why this needs no window wider
+ * than the period: unlike a shift tag, it cannot name some other day.
  */
-const TAG_SPILL_DAYS = 7;
-
 async function salesByShow(from: DateISO, to: DateISO): Promise<Map<string, ShowSales>> {
-  const batchIds = await latestBatchIds(addDays(from, -TAG_SPILL_DAYS), addDays(to, TAG_SPILL_DAYS));
+  const batchIds = await latestBatchIds(from, to);
   const byShow = new Map<string, ShowSales>();
   if (batchIds.length === 0) return byShow;
 
   const rows = await prisma.salesRecord.groupBy({
-    by: ["shiftTag", "platform"],
+    by: ["show", "showDate", "platform"],
     where: { batchId: { in: batchIds } },
     _sum: { netItemPriceCents: true, qty: true },
   });
 
   for (const row of rows) {
-    const key = payableShowFor(row.shiftTag, row.platform);
-    // An unreadable tag is money that cannot be attributed to anybody. It is
-    // not silently dropped — `unattributedTagless` below reports it — but it
-    // cannot be added to a show that was never named.
-    if (!key) continue;
-    if (key.dateISO < from || key.dateISO > to) continue;
+    const key: ShowKey = {
+      dateISO: fromDbDate(row.showDate),
+      platform: row.platform,
+      // "TikTok AM" / "eBay PM" — the half is the last two characters.
+      slot: row.show.trim().toUpperCase().endsWith("AM") ? "DAY" : "NIGHT",
+    };
 
     const id = showKey(key);
     const found = byShow.get(id) ?? {
@@ -103,22 +106,6 @@ async function salesByShow(from: DateISO, to: DateISO): Promise<Map<string, Show
   }
 
   return byShow;
-}
-
-/** Net revenue on tags nobody could read, which is nobody's commission. */
-async function taglessRevenue(from: DateISO, to: DateISO): Promise<number> {
-  const batchIds = await latestBatchIds(from, to);
-  if (batchIds.length === 0) return 0;
-
-  const rows = await prisma.salesRecord.groupBy({
-    by: ["shiftTag", "platform"],
-    where: { batchId: { in: batchIds } },
-    _sum: { netItemPriceCents: true },
-  });
-
-  return rows
-    .filter((r) => payableShowFor(r.shiftTag, r.platform) === null)
-    .reduce((n, r) => n + (r._sum.netItemPriceCents ?? 0), 0);
 }
 
 export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<PayrollPeriod> {
@@ -231,18 +218,6 @@ export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<Payr
   }
 
   people.sort((a, b) => a.team.localeCompare(b.team) || a.name.localeCompare(b.name));
-
-  const tagless = await taglessRevenue(from, to);
-  if (tagless > 0) {
-    unattributed.push({
-      key: { dateISO: from, platform: "TIKTOK", slot: "DAY" },
-      label: "Sales whose shift tag could not be read",
-      netRevenueCents: tagless,
-      units: 0,
-      showId: null,
-      people: [],
-    });
-  }
 
   return {
     from,
