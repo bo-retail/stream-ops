@@ -77,6 +77,32 @@ export async function requireStreamer(): Promise<AuthUser> {
   return user;
 }
 
+/**
+ * For the packing screen: anyone who works the shipping side.
+ *
+ * The director is admitted because she occasionally packs, and the boss because
+ * the boss sees everything. Streamers are not: they have no boxes.
+ */
+export async function requireShipping(): Promise<AuthUser> {
+  const user = await requireUser();
+  if (user.role === "BOSS") return user;
+  if (user.team !== "SHIPPING") redirect("/dashboard");
+  return user;
+}
+
+/**
+ * For the shipping log, the day's counters and the report upload.
+ *
+ * A packer is deliberately excluded. She sees the box in front of her and
+ * nothing else — not the day's totals, and not anybody else's numbers.
+ */
+export async function requireShippingDirector(): Promise<AuthUser> {
+  const user = await requireUser();
+  if (user.role === "BOSS") return user;
+  if (user.role !== "MANAGER" || user.team !== "SHIPPING") redirect("/dashboard");
+  return user;
+}
+
 export class AuthorizationError extends Error {
   constructor(message = "You do not have access to that.") {
     super(message);
@@ -97,6 +123,24 @@ export async function requireUserOrThrow(): Promise<AuthUser> {
 export async function requireBossOrThrow(): Promise<AuthUser> {
   const user = await requireUserOrThrow();
   if (user.role !== "BOSS") throw new AuthorizationError("Only an admin can do that.");
+  return user;
+}
+
+/** The throwing form of {@link requireShipping}, for scanner actions. */
+export async function requireShippingOrThrow(): Promise<AuthUser> {
+  const user = await requireUserOrThrow();
+  if (user.role === "BOSS") return user;
+  if (user.team !== "SHIPPING") throw new AuthorizationError("Only the shipping team can do that.");
+  return user;
+}
+
+/** The throwing form of {@link requireShippingDirector}, for uploads. */
+export async function requireShippingDirectorOrThrow(): Promise<AuthUser> {
+  const user = await requireUserOrThrow();
+  if (user.role === "BOSS") return user;
+  if (user.role !== "MANAGER" || user.team !== "SHIPPING") {
+    throw new AuthorizationError("Only the shipping director can do that.");
+  }
   return user;
 }
 

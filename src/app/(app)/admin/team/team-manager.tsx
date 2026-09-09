@@ -7,6 +7,7 @@ import { KeyRound, UserPlus } from "lucide-react";
 import { Alert, Badge, Button, Card, CardHeader, Field, Input, Select, Table, Td, Th } from "@/components/ui";
 import { createTeamMember, resetUserPassword, setUserActive, setUserPosition } from "./actions";
 import type { TeamState } from "./actions";
+import { POSITIONS } from "./position";
 import type { Position } from "./position";
 
 export interface TeamRow {
@@ -75,9 +76,11 @@ export function TeamManager({ rows }: { rows: TeamRow[] }) {
           </Field>
           <Field label="Position" htmlFor="position">
             <Select id="position" name="position" defaultValue="STREAMER">
-              <option value="STREAMER">Streamer</option>
-              <option value="SHIPPING">Shipping</option>
-              <option value="ADMIN">Admin</option>
+              {POSITIONS.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
             </Select>
           </Field>
           <AddButton />
@@ -106,15 +109,17 @@ export function TeamManager({ rows }: { rows: TeamRow[] }) {
                 <Td className="text-ink-muted">{row.email}</Td>
                 <Td>
                   <Select
-                    className="h-8 w-32 text-xs"
+                    className="h-8 w-40 text-xs"
                     value={row.position}
                     disabled={pending}
                     aria-label={`Position for ${row.name}`}
                     onChange={(e) => run(() => setUserPosition(row.id, e.target.value as Position))}
                   >
-                    <option value="STREAMER">Streamer</option>
-                    <option value="SHIPPING">Shipping</option>
-                    <option value="ADMIN">Admin</option>
+                    {POSITIONS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
                   </Select>
                 </Td>
                 <Td>

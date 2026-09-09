@@ -8,9 +8,11 @@ import {
   CalendarDays,
   CalendarRange,
   DollarSign,
+  FileSpreadsheet,
   LayoutDashboard,
   LogOut,
   Menu,
+  PackageIcon,
   Settings,
   Users,
   Wallet,
@@ -35,6 +37,8 @@ const ICONS = {
   payroll: Wallet,
   team: Users,
   settings: Settings,
+  shipping: PackageIcon,
+  reports: FileSpreadsheet,
 } as const;
 
 function isActive(pathname: string, href: string): boolean {

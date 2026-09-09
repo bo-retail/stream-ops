@@ -5,7 +5,13 @@ import { z } from "zod";
 import { requireBossOrThrow } from "@/lib/auth/guards";
 import { generateTemporaryPassword, hashPassword } from "@/lib/auth/password";
 import { prisma } from "@/lib/db";
-import { POSITION_LABEL, fieldsToPosition, positionToFields } from "./position";
+import {
+  POSITION_LABEL,
+  canBeScheduled,
+  fieldsToPosition,
+  positionName,
+  positionToFields,
+} from "./position";
 import type { Position } from "./position";
 
 export interface TeamState {
@@ -18,7 +24,7 @@ export interface TeamState {
 const CreateSchema = z.object({
   name: z.string().trim().min(2, "Enter the person's name.").max(120),
   email: z.string().trim().toLowerCase().pipe(z.email("Enter a valid email address.")).and(z.string().max(200)),
-  position: z.enum(["STREAMER", "SHIPPING", "ADMIN"]),
+  position: z.enum(["STREAMER", "SHIPPING", "SHIPPING_DIRECTOR", "ADMIN"]),
 });
 
 export async function createTeamMember(_prev: TeamState, formData: FormData): Promise<TeamState> {
@@ -135,22 +141,23 @@ export async function setUserPosition(userId: string, position: Position): Promi
 
   const fields = positionToFields(position);
 
-  // Moving to shipping takes somebody out of the scheduler. Their existing
-  // assignments are left alone rather than deleted — deleting them would
-  // silently empty seats on a published schedule — so the boss is told.
-  const upcoming =
-    position === "SHIPPING"
-      ? await prisma.assignment.count({
-          where: { userId, show: { status: "SCHEDULED", startsAt: { gte: new Date() } } },
-        })
-      : 0;
+  // Anything other than streamer takes somebody out of the scheduler — shipping
+  // and the shipping director both, for different reasons. Their existing
+  // assignments are left alone rather than deleted, because deleting them would
+  // silently empty seats on a published schedule, so the boss is told instead.
+  const leavingTheRota = canBeScheduled(current) && !canBeScheduled(position);
+  const upcoming = leavingTheRota
+    ? await prisma.assignment.count({
+        where: { userId, show: { status: "SCHEDULED", startsAt: { gte: new Date() } } },
+      })
+    : 0;
 
   await prisma.$transaction([
     prisma.user.update({ where: { id: userId }, data: fields }),
     // Priority is chosen per release now, so there is no standing setting to
     // clear. What must not survive is a release still being planned that names
     // somebody who has just stopped being a streamer.
-    ...(position === "STREAMER"
+    ...(canBeScheduled(position)
       ? []
       : [
           prisma.releasePriority.deleteMany({
@@ -163,7 +170,7 @@ export async function setUserPosition(userId: string, position: Position): Promi
         entityId: userId,
         action: "SET_POSITION",
         actorId: boss.id,
-        summary: `${user.name}: ${current.toLowerCase()} → ${position.toLowerCase()}${
+        summary: `${user.name}: ${positionName(current)} → ${positionName(position)}${
           upcoming > 0 ? ` (${upcoming} upcoming show(s) left in place)` : ""
         }`,
         before: { role: user.role, team: user.team },
@@ -176,9 +183,9 @@ export async function setUserPosition(userId: string, position: Position): Promi
   revalidatePath("/admin/schedule");
   revalidatePath("/admin/settings");
 
-  if (position === "SHIPPING" && upcoming > 0) {
+  if (upcoming > 0) {
     return {
-      ok: `${user.name} is on shipping now. They are still on ${upcoming} upcoming show(s) — take them off the schedule if that is wrong.`,
+      ok: `${user.name} is ${POSITION_LABEL[position]} now. They are still on ${upcoming} upcoming show(s) — take them off the schedule if that is wrong.`,
     };
   }
   return { ok: `${user.name} is now ${POSITION_LABEL[position]}.` };
