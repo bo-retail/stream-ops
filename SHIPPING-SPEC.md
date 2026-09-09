@@ -451,13 +451,28 @@ built on the same parse.
    scanned cannot be deleted; somebody who has packed cannot be deleted; and deleting an
    upload leaves its boxes standing.
 
-> **Verifying the migration without touching production.** `npx prisma dev` starts a
-> local Postgres with no install — it is already a dependency, and `src/lib/db.ts`
-> already refers to it. Point `DATABASE_URL` at it, run `prisma migrate deploy` to replay
-> the whole history from empty, then `prisma migrate diff --from-config-datasource
-> --to-schema prisma/schema.prisma --exit-code` to prove the result matches the schema.
-> Done on 2026-09-09: 15 migrations applied, no difference detected, all eight constraint
-> checks passed.
+> **Verifying against a real database, without touching production.** Use a local
+> PostgreSQL — `winget install PostgreSQL.PostgreSQL.17` — with its own role and two
+> databases:
+>
+> ```sql
+> CREATE ROLE streamops_dev LOGIN PASSWORD '…' CREATEDB;
+> CREATE DATABASE streamops_dev   OWNER streamops_dev;
+> CREATE DATABASE streamops_shadow OWNER streamops_dev;
+> ```
+>
+> Point `.env` at it (gitignored), `npx prisma migrate deploy` to replay the whole
+> history from empty, then `npx prisma migrate diff --from-config-datasource --to-schema
+> prisma/schema.prisma --exit-code` to prove the result matches the schema.
+>
+> `npx prisma dev` needs no install and is tempting, but it runs Postgres compiled to
+> WebAssembly and did not survive this workload: it corrupted its write-ahead log, then
+> wedged with the process alive and every connection refused. Fine for a quick look,
+> not for importing a real day. The app is deliberately not run as a superuser locally
+> either — that masks permission bugs that only appear in production.
+>
+> Done on 2026-09-09 against PostgreSQL 17.11: 15 migrations applied, no difference
+> detected, and all three check scripts green.
 
 > **Fixtures must not contain customer data.** The eBay export carries unmasked buyer
 > names, addresses and phone numbers. Committing the real files as test fixtures would put
