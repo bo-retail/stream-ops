@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
-import { Card, CardHeader, EmptyState, PageHeader } from "@/components/ui";
+import { PageHeader } from "@/components/ui";
 import { requireShipping } from "@/lib/auth/guards";
+import { ScanClient } from "./scan-client";
 
 export const metadata: Metadata = { title: "Packing" };
 
@@ -10,7 +11,9 @@ export const metadata: Metadata = { title: "Packing" };
  * Open to the shipping team, the director and the boss. A streamer has no boxes
  * and is sent back to their dashboard.
  *
- * Waiting on the shipping tables, so nothing is queried here yet.
+ * Nothing is loaded here. The screen holds one box at a time and every box
+ * arrives through a scan, so a page that fetched a day's worth of boxes would
+ * be loading 220 of them for a packer who will look at one.
  */
 export default async function PackingPage() {
   await requireShipping();
@@ -19,19 +22,9 @@ export default async function PackingPage() {
     <>
       <PageHeader
         title="Packing"
-        description="Scan a shipping label to open its box."
+        description="Scan a shipping label to open its box, then scan each watch as it goes in."
       />
-      <Card>
-        <CardHeader
-          title="Not yet connected"
-          description="Waiting on the shipping tables."
-        />
-        <EmptyState title="The scanner is not wired up yet">
-          Scanning a label will open the box and list what belongs in it, one line per
-          stock number with a count. Each watch is scanned in as it goes in the box, and
-          the box closes only when every count is met.
-        </EmptyState>
-      </Card>
+      <ScanClient />
     </>
   );
 }
