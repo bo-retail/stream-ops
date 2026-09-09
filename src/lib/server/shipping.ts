@@ -311,8 +311,11 @@ export async function deleteImport(
   return { ok: true, impact };
 }
 
-/** Yesterday, in the business zone — what the shipping screens open on. */
-export async function packingDayISO(): Promise<DateISO> {
-  const settings = await getSettings();
-  return addDays(todayISO(settings.timezone), -1);
-}
+/**
+ * Yesterday, in the business zone — what the shipping screens open on.
+ *
+ * Re-exported rather than defined here: the box created for an unrecognised
+ * label needs the same day, and two definitions of it is exactly how those
+ * boxes came to be filed on a date the director never looked at.
+ */
+export { packingDayISO } from "./settings";

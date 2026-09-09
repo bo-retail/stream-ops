@@ -73,13 +73,10 @@ export function ScanClient() {
         break;
       case "refused":
         setBox(outcome.box);
-        setStatus({
-          tone: "danger",
-          text: outcome.message,
-          offerAdd: outcome.message.includes("not in this box")
-            ? outcome.message.split(" ")[0]
-            : undefined,
-        });
+        // The stock number comes off the outcome, not out of the sentence. This
+        // used to match on the wording of the refusal, so rewording one would
+        // have removed the only way to record a watch that really is in the box.
+        setStatus({ tone: "danger", text: outcome.message, offerAdd: outcome.stockNumber });
         break;
       case "error":
         setStatus({ tone: "danger", text: outcome.message });

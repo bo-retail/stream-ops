@@ -19,9 +19,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { prisma } from "../src/lib/db";
 import { runImport } from "../src/lib/server/imports";
+import { toDbDate } from "../src/lib/domain/dates";
 import {
   createUnknownBox,
   getBoxById,
+  listUnrecognisedBoxes,
   openBoxByScan,
   overrideItem,
   packItem,
@@ -29,6 +31,7 @@ import {
   unsealBox,
 } from "../src/lib/server/packing";
 import type { ScanOutcome } from "../src/lib/server/packing";
+import { packingDayISO } from "../src/lib/server/settings";
 
 assertDevDatabase("check-packing.mts");
 
@@ -97,11 +100,22 @@ check("the fourth is refused", r.kind, "refused");
 check("and says why", r.kind === "refused" && r.message.includes("All 3"), true);
 check("without changing the count", boxOf(r)?.items.find((i) => i.stockNumber === "49746")?.scanned, 3);
 
+/*
+  Both refusals have to name the watch as a field, not only in the sentence.
+
+  The screen offers "it really is in the box — add it anyway" from this, and it
+  used to read the stock number back out of the message text. Rewording a
+  refusal would have removed the packer's only way to record a watch that really
+  is in the parcel, silently, with every test still passing.
+*/
+check("the refusal names the watch as a field", r.kind === "refused" && r.stockNumber, "49746");
+
 check("case does not matter to a scanner", (await packItem(packer.id, box.id, " 48080 ")).kind, "box");
 
 r = await packItem(packer.id, box.id, "NOT-IN-THIS-BOX");
 check("a watch from another box is refused", r.kind, "refused");
 check("and named", r.kind === "refused" && r.message.includes("NOT-IN-THIS-BOX"), true);
+check("as a field too", r.kind === "refused" && r.stockNumber, "NOT-IN-THIS-BOX");
 
 /* --------------------------------------------------------------- closing up */
 
@@ -153,6 +167,24 @@ r = await createUnknownBox(packer.id, UNKNOWN);
 check("an unrecognised label can still be packed", r.kind, "box");
 const ghost = boxOf(r)!;
 check("and is flagged as such", ghost.isUnrecognised, true);
+
+/*
+  It must land on the day being packed.
+
+  This used to take UTC midnight of "now", while the packing screen and the
+  shipping log both work on yesterday in the business zone. So the one thing
+  that puts a box in front of the director to reconcile was filing it on a date
+  she never looked at — and after 20:00 Eastern, UTC has already rolled over, so
+  it went to tomorrow.
+*/
+check("it lands on the day being packed", ghost.showDate, await packingDayISO());
+check(
+  "so the director's reconcile queue finds it",
+  (await listUnrecognisedBoxes(toDbDate(await packingDayISO()))).some(
+    (b) => b.tracking === UNKNOWN,
+  ),
+  true,
+);
 r = await packItem(packer.id, ghost.id, "ANY-WATCH");
 check("anything scanned into it is accepted", boxOf(r)?.totalScanned, 1);
 r = await sealBox(packer.id, ghost.id, false);

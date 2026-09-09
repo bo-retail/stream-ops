@@ -1,8 +1,9 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { fromDbDate } from "@/lib/domain/dates";
+import { fromDbDate, toDbDate } from "@/lib/domain/dates";
 import { matchTracking, normaliseScan, normaliseStockNumber } from "@/lib/domain/imports/tracking";
 import type { DateISO } from "@/lib/domain/types";
+import { packingDayISO } from "./settings";
 
 /**
  * Reading a box for the packing screen.
@@ -150,8 +151,16 @@ export type ScanOutcome =
   | { kind: "alreadyPacked"; box: PackingBoxView }
   /** No uploaded order has this tracking number. Packable anyway. */
   | { kind: "unknownLabel"; tracking: string }
-  /** The scan was rejected. The box is unchanged. */
-  | { kind: "refused"; box: PackingBoxView; message: string }
+  /**
+   * The scan was rejected. The box is unchanged.
+   *
+   * `stockNumber` is set when the refusal is about a specific watch, and it is
+   * what the screen offers to add anyway. Carried as a field rather than left to
+   * be read back out of `message`: the screen used to parse the sentence, so
+   * rewording a refusal would have quietly removed the packer's only way to
+   * record a watch that really is in the box.
+   */
+  | { kind: "refused"; box: PackingBoxView; message: string; stockNumber?: string }
   | { kind: "error"; message: string };
 
 /** Re-reads the box and wraps it, after something changed it. */
@@ -203,8 +212,17 @@ export async function createUnknownBox(userId: string, rawScan: string): Promise
       : { kind: "alreadyPacked", box: existing };
   }
 
-  const showDate = new Date();
-  showDate.setUTCHours(0, 0, 0, 0);
+  /*
+    The day being packed, not the day it is here.
+
+    This used to take UTC midnight of "now". The packing screen and the shipping
+    log both work on yesterday in the business zone, so a box created that way
+    landed on a date nobody was looking at — and after 20:00 Eastern, UTC has
+    already rolled over, so it landed on tomorrow. Being unrecognised is the one
+    thing that puts a box in front of the director to reconcile, and it was
+    filing them where she would not see them.
+  */
+  const showDate = toDbDate(await packingDayISO());
 
   const created = await prisma.package.create({
     data: {
@@ -272,7 +290,12 @@ export async function packItem(
     await prisma.scanEvent.create({
       data: { packageId, userId, kind: "ITEM_REFUSED", stockNumber, rawScan, note: "Not in this box" },
     });
-    return { kind: "refused", box, message: `${stockNumber} is not in this box.` };
+    return {
+      kind: "refused",
+      box,
+      message: `${stockNumber} is not in this box.`,
+      stockNumber,
+    };
   }
 
   const claimed = await prisma.$queryRaw<{ scannedQty: number }[]>`
@@ -295,10 +318,21 @@ export async function packItem(
         note: `All ${line.expected} already scanned`,
       },
     });
+    /*
+      Offered here too, and it was not before.
+
+      "All three are already in the box" was a dead end: if a fourth one really
+      was in the parcel, there was no way to record it at all. It is the same
+      situation as an unlisted watch — the report says no and the box says yes —
+      and the answer is the same. Adding it takes the scanned count past the
+      expected one, which is what marks the box incomplete and puts it in front
+      of the director.
+    */
     return {
       kind: "refused",
       box,
       message: `All ${line.expected} of ${stockNumber} are already in the box.`,
+      stockNumber,
     };
   }
 
