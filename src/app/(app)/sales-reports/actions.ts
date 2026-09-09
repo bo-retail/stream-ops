@@ -5,7 +5,7 @@ import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { isDateISO } from "@/lib/domain/dates";
 import { readFiles, runImport } from "@/lib/server/imports";
-import { deleteImport } from "@/lib/server/shipping";
+import { deleteImport, reportRemovalImpact } from "@/lib/server/shipping";
 import type { ImportFlag } from "@/lib/domain/imports/types";
 
 export interface UploadState {
@@ -137,7 +137,7 @@ export async function uploadReports(
  * For the wrong files or the wrong day, noticed straight away. It refuses once
  * anybody has scanned against the day — see `deleteImport`.
  */
-export async function removeReport(batchId: string): Promise<UploadState> {
+export async function removeReport(batchId: string, reason?: string): Promise<UploadState> {
   let user;
   try {
     user = await requireShippingDirectorOrThrow();
@@ -145,29 +145,75 @@ export async function removeReport(batchId: string): Promise<UploadState> {
     return { error: "Only the shipping director or an admin can remove a report." };
   }
 
-  const batch = await prisma.importBatch.findUnique({
-    where: { id: batchId },
-    select: { showDate: true, watchCount: true },
-  });
-  if (!batch) return { error: "That upload no longer exists." };
+  const impact = await reportRemovalImpact(batchId);
+  if (!impact) return { error: "That upload no longer exists." };
 
-  const result = await deleteImport(batchId);
+  /*
+    Written before anything is deleted, not after.
+
+    If the day carried scan history, this line is what is left of it: the
+    detail goes, the fact that it went does not. Written first so a failure
+    halfway through cannot leave the deletion unrecorded.
+  */
+  if (impact.scans > 0) {
+    await prisma.auditLog.create({
+      data: {
+        entityType: "ImportBatch",
+        entityId: batchId,
+        action: "IMPORT_DELETED",
+        actorId: user.id,
+        summary:
+          `Removing the report for ${impact.dateISO} — ${impact.watches} watches, ${impact.boxes} boxes, ` +
+          `and DESTROYING the scan history: ${impact.scannedBoxes} packed box(es), ${impact.scans} scan(s). ` +
+          `Reason: ${reason?.trim()}`,
+        before: {
+          showDate: impact.dateISO,
+          batches: impact.batches,
+          watches: impact.watches,
+          boxes: impact.boxes,
+          scannedBoxes: impact.scannedBoxes,
+          scans: impact.scans,
+        },
+      },
+    });
+  }
+
+  const result = await deleteImport(batchId, reason);
   if (!result.ok) return { error: result.reason };
 
-  await prisma.auditLog.create({
-    data: {
-      entityType: "ImportBatch",
-      entityId: batchId,
-      action: "IMPORT_DELETED",
-      actorId: user.id,
-      summary: `Removed the sales report for ${batch.showDate.toISOString().slice(0, 10)} — ${batch.watchCount} watches and ${result.boxesRemoved} unpacked boxes`,
-    },
-  });
+  if (impact.scans === 0) {
+    await prisma.auditLog.create({
+      data: {
+        entityType: "ImportBatch",
+        entityId: batchId,
+        action: "IMPORT_DELETED",
+        actorId: user.id,
+        summary:
+          `Removed the sales report for ${impact.dateISO} — ${impact.watches} watches and ` +
+          `${impact.boxes} box(es), none of them packed` +
+          (reason?.trim() ? `. Reason: ${reason.trim()}` : ""),
+      },
+    });
+  }
 
   revalidatePath("/sales-reports");
   revalidatePath("/shipping");
   revalidatePath("/shipping/log");
   revalidatePath("/dashboard");
 
-  return { ok: `Removed. ${result.boxesRemoved} box(es) went with it.` };
+  return {
+    ok:
+      `Removed ${impact.dateISO} — ${impact.boxes} box(es) and ${impact.watches} watches.` +
+      (impact.scans > 0 ? ` ${impact.scans} scan record(s) were destroyed with them.` : ""),
+  };
+}
+
+/** What removing a report would take, for the confirmation to show. */
+export async function getRemovalImpact(batchId: string) {
+  try {
+    await requireShippingDirectorOrThrow();
+  } catch {
+    return null;
+  }
+  return reportRemovalImpact(batchId);
 }

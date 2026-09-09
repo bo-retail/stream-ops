@@ -224,53 +224,91 @@ export async function missingReportDaysSafe(lookBackDays = LOOK_BACK_DAYS): Prom
   }
 }
 
+/** What removing a day's report would take with it. */
+export interface RemovalImpact {
+  dateISO: DateISO;
+  batches: number;
+  watches: number;
+  boxes: number;
+  /** Boxes somebody has already scanned. These carry the scan history. */
+  scannedBoxes: number;
+  /** Scan events that would be destroyed — the dispute record for that day. */
+  scans: number;
+}
+
+export async function reportRemovalImpact(batchId: string): Promise<RemovalImpact | null> {
+  const batch = await prisma.importBatch.findUnique({
+    where: { id: batchId },
+    select: { showDate: true },
+  });
+  if (!batch) return null;
+
+  const showDate = batch.showDate;
+  const [batches, watches, boxes, scannedBoxes, scans] = await Promise.all([
+    prisma.importBatch.count({ where: { showDate } }),
+    prisma.salesRecord.count({ where: { showDate } }),
+    prisma.package.count({ where: { showDate } }),
+    prisma.package.count({ where: { showDate, scans: { some: {} } } }),
+    prisma.scanEvent.count({ where: { package: { showDate } } }),
+  ]);
+
+  return { dateISO: fromDbDate(showDate), batches, watches, boxes, scannedBoxes, scans };
+}
+
 /**
- * Undoes an upload.
+ * Removes a day's report and everything that came from it.
  *
- * The wrong files, or the wrong day. Everything the upload created goes: the
- * sales records, the exceptions, and the boxes nobody has touched.
+ * The wrong files, or the wrong day. Everything for that show day goes: the
+ * uploads, the sales records, the exceptions, the boxes — and, if any have been
+ * packed, their scan history with them.
  *
- * It refuses outright once anybody has scanned against the day. A box that has
- * been scanned is evidence — the database itself will not let it go — and
- * removing the report underneath it would leave boxes whose contents nothing
- * explains. Undo is for a mistake noticed straight away, not a way out of a
- * morning's work.
+ * That last part is the reason this asks for an explanation rather than a
+ * confirmation. A scan record is the answer to a customer saying they were sent
+ * the wrong watch, and once it is gone that question has no answer. The
+ * database refuses to drop a scanned box on its own; getting past that is a
+ * deliberate act by the owner, so it is treated like one.
+ *
+ * What survives is the audit line, written before the detail goes: which day,
+ * how many boxes and scans, who, and why. The record of the deletion outlives
+ * what was deleted.
+ *
+ * Where a mistake is noticed before anybody packs, uploading the corrected
+ * files is still the better move — it replaces the open boxes and leaves the
+ * packed ones alone. This is the way out when that is not enough.
  */
 export async function deleteImport(
   batchId: string,
-): Promise<{ ok: true; boxesRemoved: number } | { ok: false; reason: string }> {
-  const batch = await prisma.importBatch.findUnique({
-    where: { id: batchId },
-    select: { id: true, showDate: true },
-  });
-  if (!batch) return { ok: false, reason: "That upload no longer exists." };
+  reason?: string,
+): Promise<{ ok: true; impact: RemovalImpact } | { ok: false; reason: string }> {
+  const impact = await reportRemovalImpact(batchId);
+  if (!impact) return { ok: false, reason: "That upload no longer exists." };
 
-  const scanned = await prisma.package.count({
-    where: { showDate: batch.showDate, scans: { some: {} } },
-  });
-  if (scanned > 0) {
+  const why = reason?.trim() ?? "";
+  if (impact.scans > 0 && why.length < 3) {
     return {
       ok: false,
       reason:
-        `${scanned} box${scanned === 1 ? " has" : "es have"} already been scanned against ` +
-        `${fromDbDate(batch.showDate)}. Removing the report would leave them with nothing ` +
-        `explaining what is in them. Upload the corrected files instead — that replaces the ` +
-        `open boxes and leaves the packed ones alone.`,
+        `${impact.scannedBoxes} box${impact.scannedBoxes === 1 ? " has" : "es have"} been packed ` +
+        `against ${impact.dateISO}, and removing the report destroys ${impact.scans} scan ` +
+        `record${impact.scans === 1 ? "" : "s"} with them — the answer to any dispute about those ` +
+        `parcels. Say why, and it will go through.`,
     };
   }
 
-  const removed = await prisma.$transaction(async (tx) => {
-    // Boxes outlive their batch by design (the link is SET NULL), so they are
-    // removed here explicitly rather than left behind with nothing behind them.
-    const boxes = await tx.package.deleteMany({
-      where: { showDate: batch.showDate, scans: { none: {} } },
-    });
-    // Sales rows and exceptions cascade from the batch.
-    await tx.importBatch.delete({ where: { id: batchId } });
-    return boxes.count;
+  const showDate = toDbDate(impact.dateISO);
+
+  await prisma.$transaction(async (tx) => {
+    // In this order: scans hold a foreign key that refuses to release a packed
+    // box, and boxes outlive their batch by design, so working from the outside
+    // in is what leaves nothing stranded.
+    await tx.scanEvent.deleteMany({ where: { package: { showDate } } });
+    await tx.packageItem.deleteMany({ where: { package: { showDate } } });
+    await tx.package.deleteMany({ where: { showDate } });
+    // Sales rows and exceptions cascade from the batches.
+    await tx.importBatch.deleteMany({ where: { showDate } });
   });
 
-  return { ok: true, boxesRemoved: removed };
+  return { ok: true, impact };
 }
 
 /** Yesterday, in the business zone — what the shipping screens open on. */

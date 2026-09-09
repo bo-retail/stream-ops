@@ -14,7 +14,7 @@ import ExcelJS from "exceljs";
 import { prisma } from "../src/lib/db";
 import { readFiles, runImport } from "../src/lib/server/imports";
 import { openBoxByScan, packItem, sealBox } from "../src/lib/server/packing";
-import { deleteImport, listShowDays } from "../src/lib/server/shipping";
+import { deleteImport, listShowDays, reportRemovalImpact } from "../src/lib/server/shipping";
 import { buildShippingWorkbook } from "../src/lib/server/shipping-workbook";
 
 const dir = process.env.STREAMOPS_IMPORT_FIXTURES;
@@ -76,7 +76,7 @@ check("a day imports", first.status, "OK");
 check("with its boxes", await prisma.package.count({ where: { showDate } }), 220);
 
 const undone = await deleteImport(first.batchId!);
-check("an untouched day can be undone", undone.ok, true);
+check("an untouched day can be undone without ceremony", undone.ok, true);
 check("and its boxes go with it", await prisma.package.count({ where: { showDate } }), 0);
 check("as do its sales", await prisma.salesRecord.count({ where: { showDate } }), 0);
 check(
@@ -93,18 +93,25 @@ check("a box opens", opened.kind, "box");
 const box = opened.kind === "box" ? opened.box : null;
 await packItem(user.id, box!.id, "49746");
 
+// Once anybody has packed, removing the report destroys the scan record for
+// those parcels. That is allowed — it is the owner's call — but not by
+// accident: it needs a reason, which outlives what it describes.
 const refused = await deleteImport(second.batchId!);
-check("a day with scans against it cannot be undone", refused.ok, false);
+check("a day with scans will not go without a reason", refused.ok, false);
 check(
-  "and says why, in terms of the boxes",
-  !refused.ok && refused.reason.includes("already been scanned"),
+  "and says what would be destroyed",
+  !refused.ok && refused.reason.includes("scan record"),
   true,
 );
 check("nothing was removed", await prisma.package.count({ where: { showDate } }), 220);
 
+const tooShort = await deleteImport(second.batchId!, "x");
+check("a token reason is not a reason", tooShort.ok, false);
+
 /* -------------------------------------------- re-uploading over the top */
 
-// The alternative it points you at: upload the corrected files instead.
+// The gentler alternative, for a mistake caught before anybody packs: upload
+// the corrected files instead.
 for (const item of box!.items.filter((i) => i.outstanding > 0)) {
   for (let n = 0; n < item.outstanding; n++) await packItem(user.id, box!.id, item.stockNumber);
 }
@@ -152,6 +159,27 @@ const summarySheet = wb.getWorksheet("Summary")!;
 check("and a person on the summary", summarySheet.rowCount >= 5, true);
 
 check("a day with no boxes produces nothing", await buildShippingWorkbook("2000-01-01", "2000-01-01"), null);
+
+/* --------------------------------------- removing it anyway, with a reason */
+
+// The owner's way out. Allowed, but never by accident: it destroys the scan
+// record for parcels that have already gone, and the reason outlives it.
+const latest = await prisma.importBatch.findFirstOrThrow({
+  where: { showDate },
+  orderBy: { uploadedAt: "desc" },
+  select: { id: true },
+});
+
+const impactBefore = await reportRemovalImpact(latest.id);
+check("the impact names the packed boxes", impactBefore!.scannedBoxes, 1);
+check("and counts the scans that would go with them", impactBefore!.scans > 0, true);
+
+const forced = await deleteImport(latest.id, "wrong day's files, nothing real was packed");
+check("with a reason, it goes through", forced.ok, true);
+check("the boxes are gone", await prisma.package.count({ where: { showDate } }), 0);
+check("so is the scan history", await prisma.scanEvent.count({ where: { package: { showDate } } }), 0);
+check("so are the uploads", await prisma.importBatch.count({ where: { showDate } }), 0);
+check("and the sales", await prisma.salesRecord.count({ where: { showDate } }), 0);
 
 /* ------------------------------------------------------------------ cleanup */
 
