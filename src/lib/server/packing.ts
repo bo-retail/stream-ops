@@ -444,6 +444,162 @@ export interface DayCounters {
   unrecognised: number;
 }
 
+/**
+ * What one person did on one day.
+ *
+ * First and last scan rather than login times: people sign in once and stay
+ * signed in for weeks, so a login timestamp says nothing about a shift. The
+ * first and last box somebody closed brackets when they were actually working,
+ * which is a more honest measure anyway — it reflects activity, not presence.
+ *
+ * This is not a timesheet and must not be read as one. It knows nothing about
+ * breaks or anything else they did. The clock remains the payroll record.
+ */
+export interface PackerDay {
+  userId: string;
+  name: string;
+  boxes: number;
+  items: number;
+  firstScan: Date | null;
+  lastScan: Date | null;
+}
+
+export async function getPackerDays(showDate: Date): Promise<PackerDay[]> {
+  const [closed, items, bounds] = await Promise.all([
+    prisma.package.groupBy({
+      by: ["closedById"],
+      where: { showDate, closedById: { not: null } },
+      _count: { _all: true },
+    }),
+    prisma.scanEvent.groupBy({
+      by: ["userId"],
+      where: { package: { showDate }, kind: "ITEM_ACCEPTED" },
+      _count: { _all: true },
+    }),
+    prisma.scanEvent.groupBy({
+      by: ["userId"],
+      where: { package: { showDate } },
+      _min: { at: true },
+      _max: { at: true },
+    }),
+  ]);
+
+  const ids = new Set<string>([
+    ...closed.map((c) => c.closedById!).filter(Boolean),
+    ...items.map((i) => i.userId),
+    ...bounds.map((b) => b.userId),
+  ]);
+  if (ids.size === 0) return [];
+
+  const people = await prisma.user.findMany({
+    where: { id: { in: [...ids] } },
+    select: { id: true, name: true },
+  });
+  const nameOf = new Map(people.map((p) => [p.id, p.name]));
+  const boxesOf = new Map(closed.map((c) => [c.closedById!, c._count._all]));
+  const itemsOf = new Map(items.map((i) => [i.userId, i._count._all]));
+  const boundsOf = new Map(bounds.map((b) => [b.userId, b]));
+
+  return [...ids]
+    .map((userId) => ({
+      userId,
+      name: nameOf.get(userId) ?? "Somebody who has since been removed",
+      boxes: boxesOf.get(userId) ?? 0,
+      items: itemsOf.get(userId) ?? 0,
+      firstScan: boundsOf.get(userId)?._min.at ?? null,
+      lastScan: boundsOf.get(userId)?._max.at ?? null,
+    }))
+    .sort((a, b) => b.boxes - a.boxes || a.name.localeCompare(b.name));
+}
+
+export interface BoxSummary {
+  id: string;
+  tracking: string;
+  buyer: string;
+  status: "OPEN" | "CLOSED_COMPLETE" | "CLOSED_INCOMPLETE";
+  isUnrecognised: boolean;
+  closedByName: string | null;
+  closedAt: Date | null;
+  expected: number;
+  scanned: number;
+}
+
+async function listBoxes(where: object): Promise<BoxSummary[]> {
+  const rows = await prisma.package.findMany({
+    where,
+    orderBy: { closedAt: "desc" },
+    select: {
+      id: true,
+      trackingNumber: true,
+      buyer: true,
+      status: true,
+      isUnrecognised: true,
+      closedAt: true,
+      closedBy: { select: { name: true } },
+      items: { select: { expectedQty: true, scannedQty: true } },
+    },
+  });
+
+  return rows.map((r) => ({
+    id: r.id,
+    tracking: r.trackingNumber,
+    buyer: r.buyer,
+    status: r.status,
+    isUnrecognised: r.isUnrecognised,
+    closedByName: r.closedBy?.name ?? null,
+    closedAt: r.closedAt,
+    expected: r.items.reduce((n, i) => n + i.expectedQty, 0),
+    scanned: r.items.reduce((n, i) => n + i.scannedQty, 0),
+  }));
+}
+
+/** Boxes that went out short, or with something added against the report. */
+export function listIncompleteBoxes(showDate: Date): Promise<BoxSummary[]> {
+  return listBoxes({ showDate, status: "CLOSED_INCOMPLETE" });
+}
+
+/** Labels that were in no uploaded report. The reconcile queue. */
+export function listUnrecognisedBoxes(showDate: Date): Promise<BoxSummary[]> {
+  return listBoxes({ showDate, isUnrecognised: true });
+}
+
+export interface ScanRow {
+  at: Date;
+  kind: string;
+  stockNumber: string | null;
+  note: string | null;
+  byName: string;
+}
+
+/**
+ * Every scan that went into one box, oldest first.
+ *
+ * The dispute record. It establishes that a model was scanned into a specific
+ * box, by a named person, at a known moment — and that another was refused.
+ * What it cannot do is tell two watches of the same model apart, because the
+ * barcode is the model.
+ */
+export async function getBoxScans(packageId: string): Promise<ScanRow[]> {
+  const rows = await prisma.scanEvent.findMany({
+    where: { packageId },
+    orderBy: { at: "asc" },
+    select: {
+      at: true,
+      kind: true,
+      stockNumber: true,
+      note: true,
+      user: { select: { name: true } },
+    },
+  });
+  return rows.map((r) => ({
+    at: r.at,
+    kind: r.kind,
+    stockNumber: r.stockNumber,
+    note: r.note,
+    byName: r.user.name,
+  }));
+}
+
 /** Boxes sent of the day's total — the headline on the log. */
 export async function getDayCounters(showDate: Date, dateISO: DateISO): Promise<DayCounters> {
   const rows = await prisma.package.groupBy({

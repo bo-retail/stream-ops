@@ -1,5 +1,18 @@
 import type { Metadata } from "next";
-import { Badge, Card, CardHeader, EmptyState, PageHeader, Table, Td, Th } from "@/components/ui";
+import { Download } from "lucide-react";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Table,
+  Td,
+  Th,
+} from "@/components/ui";
 import { MissingReports } from "@/components/missing-reports";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { formatDate } from "@/lib/domain/dates";
@@ -19,7 +32,9 @@ export const metadata: Metadata = { title: "Sales report entry" };
  * dropdown at 7am is one mis-click from putting a day's boxes on the wrong date.
  */
 export default async function SalesReportsPage() {
-  await requireShippingDirector();
+  // The director loads the files; the sales figures behind them are the boss's.
+  const user = await requireShippingDirector();
+  const isBoss = user.role === "BOSS";
   const [days, missing] = await Promise.all([listShowDays(), missingReportDays()]);
 
   return (
@@ -33,6 +48,33 @@ export default async function SalesReportsPage() {
         <MissingReports days={missing} />
 
         <UploadForm />
+
+        {isBoss ? (
+          <Card>
+            <CardHeader
+              title="Download the sales workbook"
+              description="A single day from the table below, or a range here — a pay period, a month."
+            />
+            {/* A plain GET form: the browser navigates to the export and the
+                file arrives. Nothing to go wrong client-side. */}
+            <form
+              action="/api/sales/export"
+              method="get"
+              className="flex flex-wrap items-end gap-3 p-4"
+            >
+              <Field label="From" htmlFor="from">
+                <Input id="from" name="from" type="date" required />
+              </Field>
+              <Field label="To" htmlFor="to">
+                <Input id="to" name="to" type="date" required />
+              </Field>
+              <Button type="submit" variant="secondary">
+                <Download className="h-4 w-4" aria-hidden />
+                Download range
+              </Button>
+            </form>
+          </Card>
+        ) : null}
 
         <Card>
           <CardHeader
@@ -53,6 +95,7 @@ export default async function SalesReportsPage() {
                   <Th>Watches</Th>
                   <Th>Boxes</Th>
                   <Th>Packed</Th>
+                  {isBoss ? <Th className="text-right">Sales</Th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -84,6 +127,20 @@ export default async function SalesReportsPage() {
                         "—"
                       )}
                     </Td>
+                    {isBoss ? (
+                      <Td className="text-right">
+                        {day.report?.status === "OK" ? (
+                          <a
+                            href={`/api/sales/export?date=${day.dateISO}`}
+                            className="text-sm font-medium text-brand-700 underline underline-offset-2"
+                          >
+                            Download
+                          </a>
+                        ) : (
+                          <span className="text-sm text-ink-subtle">—</span>
+                        )}
+                      </Td>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>

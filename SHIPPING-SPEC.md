@@ -443,7 +443,18 @@ built on the same parse.
    cancelled (not), one never published (not), today (not — its shows have not finished),
    and one outside the look-back window (not). Plus that a *refused* upload does not count
    as a report, and a successful one clears it.
-9. **`node scripts/check-shipping.mjs`** — the database guarantees, proved by trying to
+9. **`npx tsx scripts/check-packing.mts`** — a box walked through the scanner: a full IMpb
+   label opens the right one; `49746` scans three times and the fourth is refused without
+   moving the count; a watch from another box is refused and named; a short box will not
+   close by the ordinary route; an over-filled one will not either; both overrides record
+   what happened; a closed box says "already packed"; an unrecognised label can still be
+   packed. Then the evidence: 17 accepted scans, 2 refusals and the close, all on record.
+10. **`npx tsx scripts/check-workbook.mts`** — the workbook is the shape the CFO already
+   reads: three sheets in order, the same 25 columns, frozen and filtered, Arial, money
+   formatted as money, `Summary` built from live `COUNTIFS`/`SUMIFS` rather than pasted
+   values, the distinct-buyer count rounded, and — the one that matters — a day uploaded
+   twice still exports 473 watches rather than 946.
+11. **`node scripts/check-shipping.mjs`** — the database guarantees, proved by trying to
    violate each one against a real Postgres and rolling back, in the same style as
    `check-constraints.mjs`. Two boxes cannot share a tracking number; a stock number
    cannot appear twice in one box; neither count can go negative; a scanned count *may*
@@ -486,8 +497,8 @@ built on the same parse.
 
 Named so nobody builds them by accident:
 
-- The sales and commission **screens**. The data is captured from day one and the
-  workbook can be downloaded (§6.2); the on-screen reporting comes later.
+- The sales and commission **screens**. The data is captured, and the workbook can be
+  downloaded (§6.2); on-screen sales reporting comes later.
 - Commission itself — the rate, and how it splits between the two people on a show, are
   not yet decided.
 - Anything that assigns work to a packer. Paper does that.
