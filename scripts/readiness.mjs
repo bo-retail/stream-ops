@@ -11,8 +11,63 @@ import "dotenv/config";
 import { Client } from "pg";
 import bcrypt from "bcryptjs";
 
-const db = new Client({ connectionString: process.env.DATABASE_URL });
-await db.connect();
+/*
+  A connection that survives being dropped.
+
+  This holds one connection open across the whole report, and part of that
+  report is a bcrypt comparison per account — seconds of pure CPU with nothing
+  said to the database. A managed Postgres that scales to zero will happily hang
+  up during that, and the script died on an unhandled ECONNRESET halfway
+  through, having printed half an answer.
+
+  So the connection is re-made when it is found to be gone. Every query here is
+  a read, so retrying one cannot do anything twice.
+*/
+const connectionUrl = process.env.DATABASE_URL;
+let client = null;
+
+async function connect() {
+  const c = new Client({
+    connectionString: connectionUrl,
+    connectionTimeoutMillis: 30_000,
+    keepAlive: true,
+  });
+  // Without a listener, a dropped connection is an unhandled 'error' event and
+  // takes the process down before the retry below ever runs.
+  c.on("error", () => {});
+  await c.connect();
+  return c;
+}
+
+const db = {
+  async query(...args) {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        if (!client) client = await connect();
+        return await client.query(...args);
+      } catch (error) {
+        const dropped = ["ECONNRESET", "EPIPE", "ETIMEDOUT", "57P01"].includes(
+          error.code ?? "",
+        );
+        if (!dropped || attempt === 3) throw error;
+        try {
+          await client?.end();
+        } catch {
+          /* it is already gone */
+        }
+        client = null;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+  },
+  async end() {
+    try {
+      await client?.end();
+    } catch {
+      /* already closed */
+    }
+  },
+};
 
 let blockers = 0;
 let warnings = 0;
