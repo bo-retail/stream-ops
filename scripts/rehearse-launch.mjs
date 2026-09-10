@@ -17,7 +17,7 @@
  *   node scripts/rehearse-launch.mjs
  */
 import "dotenv/config";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "pg";
@@ -75,6 +75,35 @@ for (const m of ALREADY_LIVE) {
     console.error(`Could not apply ${m}: ${error.message}`);
     process.exit(1);
   }
+}
+
+/*
+  And the ledger Prisma keeps, populated the way production's is.
+
+  Without this the rehearsal is not the same shape as the thing it rehearses:
+  the real database knows which migrations it has, and anything that applies
+  more has to read and write that record correctly. Building it here is what
+  lets `apply-migrations.mjs` be tested against a true "before" state.
+*/
+await db.query(`
+  create table if not exists _prisma_migrations (
+    id varchar(36) primary key,
+    checksum varchar(64) not null,
+    finished_at timestamptz,
+    migration_name varchar(255) not null,
+    logs text,
+    rolled_back_at timestamptz,
+    started_at timestamptz not null default now(),
+    applied_steps_count integer not null default 0
+  )
+`);
+for (const m of ALREADY_LIVE) {
+  const bytes = readFileSync(join(MIGRATIONS, m, "migration.sql"));
+  await db.query(
+    `insert into _prisma_migrations (id, checksum, migration_name, started_at, finished_at, applied_steps_count)
+     values ($1, $2, $3, now(), now(), 1)`,
+    [randomUUID(), createHash("sha256").update(bytes).digest("hex"), m],
+  );
 }
 
 /* ===================================================================
@@ -234,27 +263,42 @@ console.log();
    4. Run the launch, exactly as LAUNCH.md says
    =================================================================== */
 
-console.log("Running the launch.\n");
+/*
+  Deliberately by running the real thing, not a copy of what it does.
 
-// Step 6 of the guide: the enum values, each committed on its own.
-const STEP_6 = [
-  `ALTER TYPE "Role" ADD VALUE IF NOT EXISTS 'MANAGER' BEFORE 'BOSS'`,
-  `ALTER TYPE "TimeEntrySource" ADD VALUE IF NOT EXISTS 'SCHEDULE'`,
-];
-for (const sql of STEP_6) await db.query(sql);
-check("step 6 — the first two enum values commit on their own", true);
+  `apply-migrations.mjs` is what will touch production, so this rehearses that
+  script rather than a second implementation of the same idea — otherwise the
+  rehearsal proves the migrations are safe while saying nothing about the tool
+  that applies them. It commits the enum values itself and writes the ledger.
+*/
+console.log("Running the launch — scripts/apply-migrations.mjs --confirm\n");
 
-// Step 7: the migrations themselves.
-for (const m of LAUNCH_MIGRATIONS) {
-  const sql = readFileSync(join(MIGRATIONS, m, "migration.sql"), "utf8");
-  try {
-    await db.query(sql);
-    console.log(`PASS  step 7 — applied ${m}`);
-  } catch (error) {
-    console.log(`FAIL  step 7 — ${m}: ${error.message}`);
-    failures++;
-  }
+const { spawnSync } = await import("node:child_process");
+const run = spawnSync(
+  process.execPath,
+  [join("scripts", "apply-migrations.mjs"), "--confirm"],
+  { encoding: "utf8", env: { ...process.env, DIRECT_URL: target, DATABASE_URL: target } },
+);
+for (const line of (run.stdout ?? "").trimEnd().split("\n")) console.log(`   │ ${line}`);
+if (run.stderr?.trim()) for (const line of run.stderr.trimEnd().split("\n")) console.log(`   │ ${line}`);
+check("the applier ran cleanly", run.status === 0, `exit ${run.status}`);
+
+// The ledger has to end up saying exactly what Prisma would have written, or
+// the next ordinary `prisma migrate` will disagree with reality.
+const { rows: ledger } = await db.query(
+  `select migration_name, checksum, finished_at, applied_steps_count
+   from _prisma_migrations order by started_at`,
+);
+check("every migration is recorded", ledger.length === all.length, `${ledger.length} of ${all.length}`);
+check("all of them finished", ledger.every((m) => m.finished_at !== null));
+check("each counted one step", ledger.every((m) => m.applied_steps_count === 1));
+
+let badSum = 0;
+for (const row of ledger) {
+  const bytes = readFileSync(join(MIGRATIONS, row.migration_name, "migration.sql"));
+  if (createHash("sha256").update(bytes).digest("hex") !== row.checksum) badSum++;
 }
+check("every checksum matches its file", badSum === 0, `${badSum} wrong`);
 
 /* ===================================================================
    5. Did anything move?
