@@ -586,6 +586,11 @@ enum PackageStatus {
   OPEN
   CLOSED_COMPLETE
   CLOSED_INCOMPLETE
+  /// Went out, but was never scanned here — a day marked sent in bulk because
+  /// it had already shipped, or because the scanner was down. Deliberately not
+  /// one of the two above: "complete" would claim a verification that never
+  /// happened, and "incomplete" would claim a discrepancy nobody found.
+  CLOSED_UNVERIFIED
 }
 
 /// One box: one tracking number, one parcel, one buyer.
@@ -661,6 +666,10 @@ enum ScanKind {
   ITEM_OVERRIDE
   CLOSE_COMPLETE
   CLOSE_INCOMPLETE
+  /// Closed in bulk without being scanned, with the reason on the row. So "why
+  /// is this box closed with nothing in its history" is answerable from the
+  /// history itself.
+  CLOSE_UNVERIFIED
   REOPEN
 }
 

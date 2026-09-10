@@ -23,7 +23,10 @@ import { toDbDate } from "../src/lib/domain/dates";
 import {
   createUnknownBox,
   getBoxById,
+  getBoxScans,
+  getDayCounters,
   listUnrecognisedBoxes,
+  markDaySent,
   openBoxByScan,
   overrideItem,
   packItem,
@@ -222,6 +225,73 @@ check(
   await prisma.scanEvent.count({ where: { packageId: box.id } }),
   events.length + 1,
 );
+
+/* ------------------------------------------- a day that already went out */
+
+/*
+  The lever for a day nobody scanned.
+
+  Two situations produce one: the days before this app had a packing screen,
+  whose reports still want loading for the sales; and a day the scanner was
+  down. The parcels went out either way, and the boxes would otherwise sit open
+  forever with the log reading "0 sent of 220" for good.
+
+  What it must NOT do is claim they were checked.
+*/
+const beforeMark = await getDayCounters(showDate, imported.showDate!);
+check("there are boxes still open on the day", beforeMark.total - beforeMark.sent > 0, true);
+
+const refused = await markDaySent(packer.id, showDate, "no");
+check("it will not run without a reason", "error" in refused, true);
+
+const marked = await markDaySent(packer.id, showDate, "shipped before we used StreamOps");
+check("it closes what was open", "closed" in marked && marked.closed, beforeMark.total - beforeMark.sent);
+
+const afterMark = await getDayCounters(showDate, imported.showDate!);
+check("the whole day now reads as sent", afterMark.sent, afterMark.total);
+check("nothing is left outstanding", afterMark.total - afterMark.sent, 0);
+check(
+  "and they are counted as never scanned here",
+  afterMark.unverified,
+  beforeMark.total - beforeMark.sent,
+);
+
+// The one that matters. A box nobody checked must never read as verified.
+const oneMarked = await prisma.package.findFirstOrThrow({
+  where: { showDate, status: "CLOSED_UNVERIFIED" },
+  select: { id: true, closedById: true, closedAt: true },
+});
+check("it is not marked complete", (await getBoxById(oneMarked.id))?.status, "CLOSED_UNVERIFIED");
+check("it is stamped with who said so", oneMarked.closedById, packer.id);
+check("and when", oneMarked.closedAt !== null, true);
+
+const markScans = await getBoxScans(oneMarked.id);
+const closeLine = markScans.find((s) => s.kind === "CLOSE_UNVERIFIED");
+check("its own history says why", closeLine !== undefined, true);
+check(
+  "carrying the reason, not just the fact",
+  closeLine?.note?.includes("shipped before we used StreamOps"),
+  true,
+);
+
+/*
+  A box that was already closed must be untouched by it.
+
+  `second` was closed incomplete by hand a few checks ago and never reopened, so
+  it is the one to test against. Not `box` — that was deliberately reopened just
+  above, which makes it genuinely open, and marking it sent is correct.
+*/
+check(
+  "a box already closed keeps the status it earned",
+  (await getBoxById(second.id))?.status,
+  "CLOSED_INCOMPLETE",
+);
+
+check("running it again finds nothing open", "error" in (await markDaySent(packer.id, showDate, "again")), true);
+
+// Reopening still works on one, so a mistake is recoverable box by box.
+r = await unsealBox(packer.id, oneMarked.id, "marked by mistake");
+check("one can still be reopened afterwards", boxOf(r)?.status, "OPEN");
 
 /* ------------------------------------------------------------------ cleanup */
 

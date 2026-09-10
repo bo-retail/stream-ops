@@ -28,7 +28,15 @@ const KIND_LABEL: Record<string, { text: string; tone: "ok" | "warn" | "danger" 
   ITEM_OVERRIDE: { text: "Added against the report", tone: "warn" },
   CLOSE_COMPLETE: { text: "Closed", tone: "ok" },
   CLOSE_INCOMPLETE: { text: "Closed incomplete", tone: "warn" },
+  CLOSE_UNVERIFIED: { text: "Marked sent without scanning", tone: "warn" },
   REOPEN: { text: "Reopened", tone: "warn" },
+};
+
+/** How a closed box reads. Never "closed" alone — which kind matters. */
+const BOX_STATE: Record<string, string> = {
+  CLOSED_COMPLETE: "Closed",
+  CLOSED_INCOMPLETE: "Closed incomplete",
+  CLOSED_UNVERIFIED: "Marked sent without being scanned here",
 };
 
 export default async function BoxPage({ params }: { params: Promise<{ id: string }> }) {
@@ -74,9 +82,7 @@ export default async function BoxPage({ params }: { params: Promise<{ id: string
             description={
               box.status === "OPEN"
                 ? "Still open."
-                : `${box.status === "CLOSED_COMPLETE" ? "Closed" : "Closed incomplete"}${
-                    box.closedByName ? ` by ${box.closedByName}` : ""
-                  }.`
+                : `${BOX_STATE[box.status]}${box.closedByName ? ` by ${box.closedByName}` : ""}.`
             }
           />
           {box.items.length === 0 ? (

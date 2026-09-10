@@ -108,6 +108,9 @@ export default async function PersonDayPage({
                     <Td>
                       {b.status === "CLOSED_INCOMPLETE" ? (
                         <Badge tone="warn">Incomplete</Badge>
+                      ) : b.status === "CLOSED_UNVERIFIED" ? (
+                        // Never "Complete": nobody checked this one.
+                        <Badge tone="warn">Not scanned</Badge>
                       ) : b.isUnrecognised ? (
                         <Badge tone="warn">Not in any report</Badge>
                       ) : (

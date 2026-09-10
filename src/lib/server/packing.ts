@@ -12,6 +12,15 @@ import { packingDayISO } from "./settings";
  * action, so this is the one shape the whole flow speaks in.
  */
 
+/**
+ * Where a box has got to.
+ *
+ * `CLOSED_UNVERIFIED` is a box that went out without being scanned here — a day
+ * marked sent in bulk. It is a separate state on purpose: it must not be
+ * counted as verified, and it is not a discrepancy either.
+ */
+export type BoxStatus = "OPEN" | "CLOSED_COMPLETE" | "CLOSED_INCOMPLETE" | "CLOSED_UNVERIFIED";
+
 export interface PackingItemView {
   stockNumber: string;
   expected: number;
@@ -28,7 +37,7 @@ export interface PackingBoxView {
   buyer: string;
   shipToName: string;
   shipToState: string;
-  status: "OPEN" | "CLOSED_COMPLETE" | "CLOSED_INCOMPLETE";
+  status: BoxStatus;
   isUnrecognised: boolean;
   items: PackingItemView[];
   totalExpected: number;
@@ -65,7 +74,7 @@ type Row = {
   buyer: string;
   shipToName: string;
   shipToState: string;
-  status: "OPEN" | "CLOSED_COMPLETE" | "CLOSED_INCOMPLETE";
+  status: BoxStatus;
   isUnrecognised: boolean;
   closedAt: Date | null;
   closedBy: { name: string } | null;
@@ -476,6 +485,65 @@ export interface DayCounters {
   sent: number;
   incomplete: number;
   unrecognised: number;
+  /** Of the sent ones, how many went out without being scanned here. */
+  unverified: number;
+}
+
+/**
+ * Marks every box still open on a day as sent, without scanning them.
+ *
+ * For a day that has already shipped. Two situations produce one: the days
+ * before this app had a packing screen, whose reports still want loading for
+ * the sales; and a day the scanner was down, or nobody remembered to use it.
+ * The parcels went out either way, and somebody has to be able to say so
+ * without scanning six hundred labels after the fact.
+ *
+ * The boxes are closed as CLOSED_UNVERIFIED, never as complete. Nobody checked
+ * them, and the scan log is the thing that answers a customer dispute — writing
+ * "complete" into it would be the one lie that makes the whole record worth
+ * less. Each box also gets a CLOSE_UNVERIFIED line carrying the reason, so the
+ * question "why is this box closed with nothing in its history" is answerable
+ * from the history rather than only from the audit log.
+ *
+ * Boxes that were partly scanned keep every scan they have. Reopening one
+ * afterwards works exactly as it always did.
+ */
+export async function markDaySent(
+  userId: string,
+  showDate: Date,
+  reason: string,
+): Promise<{ closed: number } | { error: string }> {
+  const why = reason.trim();
+  if (why.length < 3) {
+    return { error: "Say why this day is being marked sent without scanning." };
+  }
+
+  const open = await prisma.package.findMany({
+    where: { showDate, status: "OPEN" },
+    select: { id: true },
+  });
+  if (open.length === 0) return { error: "Nothing is still open on that day." };
+
+  const ids = open.map((p) => p.id);
+  const at = new Date();
+
+  await prisma.$transaction([
+    prisma.package.updateMany({
+      where: { id: { in: ids } },
+      data: { status: "CLOSED_UNVERIFIED", closedById: userId, closedAt: at },
+    }),
+    prisma.scanEvent.createMany({
+      data: ids.map((packageId) => ({
+        packageId,
+        userId,
+        at,
+        kind: "CLOSE_UNVERIFIED" as const,
+        note: `Marked sent without scanning: ${why}`,
+      })),
+    }),
+  ]);
+
+  return { closed: ids.length };
 }
 
 /**
@@ -550,7 +618,7 @@ export interface BoxSummary {
   id: string;
   tracking: string;
   buyer: string;
-  status: "OPEN" | "CLOSED_COMPLETE" | "CLOSED_INCOMPLETE";
+  status: BoxStatus;
   isUnrecognised: boolean;
   closedByName: string | null;
   closedAt: Date | null;
@@ -667,12 +735,14 @@ export async function getDayCounters(showDate: Date, dateISO: DateISO): Promise<
   let sent = 0;
   let incomplete = 0;
   let unrecognised = 0;
+  let unverified = 0;
   for (const row of rows) {
     total += row._count._all;
     if (row.status !== "OPEN") sent += row._count._all;
     if (row.status === "CLOSED_INCOMPLETE") incomplete += row._count._all;
+    if (row.status === "CLOSED_UNVERIFIED") unverified += row._count._all;
     if (row.isUnrecognised) unrecognised += row._count._all;
   }
 
-  return { dateISO, total, sent, incomplete, unrecognised };
+  return { dateISO, total, sent, incomplete, unrecognised, unverified };
 }

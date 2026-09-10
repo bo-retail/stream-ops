@@ -25,6 +25,7 @@ import {
 } from "@/lib/server/packing";
 import { packingDayISO } from "@/lib/server/shipping";
 import { getSettings } from "@/lib/server/settings";
+import { MarkDaySent } from "./mark-sent";
 
 export const metadata: Metadata = { title: "Shipping log" };
 
@@ -114,13 +115,28 @@ export default async function ShippingLogPage({
             tone={counters.incomplete > 0 ? "warn" : undefined}
             sub={counters.incomplete > 0 ? "Went out short or with extras" : "None"}
           />
-          <Stat
-            label="Unrecognised labels"
-            value={counters.unrecognised || "—"}
-            tone={counters.unrecognised > 0 ? "warn" : undefined}
-            sub={counters.unrecognised > 0 ? "Not in any report" : "None"}
-          />
+          {counters.unverified > 0 ? (
+            <Stat
+              label="Not scanned here"
+              value={counters.unverified}
+              tone="warn"
+              sub="Marked sent without being checked"
+            />
+          ) : (
+            <Stat
+              label="Unrecognised labels"
+              value={counters.unrecognised || "—"}
+              tone={counters.unrecognised > 0 ? "warn" : undefined}
+              sub={counters.unrecognised > 0 ? "Not in any report" : "None"}
+            />
+          )}
         </div>
+
+        <MarkDaySent
+          dateISO={dateISO}
+          dayLabel={formatDate(dateISO, "long")}
+          openBoxes={toGo}
+        />
 
         <Card>
           <CardHeader

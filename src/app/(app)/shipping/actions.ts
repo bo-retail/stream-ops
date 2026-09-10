@@ -2,8 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { requireShippingDirectorOrThrow, requireShippingOrThrow } from "@/lib/auth/guards";
+import { prisma } from "@/lib/db";
+import { isDateISO, toDbDate } from "@/lib/domain/dates";
 import {
   createUnknownBox,
+  markDaySent,
   openBoxByScan,
   overrideItem,
   packItem,
@@ -85,6 +88,56 @@ export async function closeBox(
   const outcome = await sealBox(user.id, packageId, force, note);
   if (outcome.kind === "box") refresh();
   return outcome;
+}
+
+export interface MarkSentState {
+  error?: string;
+  ok?: string;
+}
+
+/**
+ * Marks a whole day sent without scanning it.
+ *
+ * The director's, not a packer's: it closes hundreds of boxes at once and
+ * declares that nobody verified any of them. A reason is required and goes on
+ * every box as well as the audit log — "the scanner was down" and "these
+ * shipped before we had the app" are different facts, and in six months only
+ * the written one will be recoverable.
+ */
+export async function markDayAsSent(
+  _prev: MarkSentState,
+  formData: FormData,
+): Promise<MarkSentState> {
+  let user;
+  try {
+    user = await requireShippingDirectorOrThrow();
+  } catch {
+    return { error: "Only the shipping director or an admin can do that." };
+  }
+
+  const dateISO = String(formData.get("date") ?? "");
+  const reason = String(formData.get("reason") ?? "");
+  if (!isDateISO(dateISO)) return { error: "That is not a valid day." };
+
+  const result = await markDaySent(user.id, toDbDate(dateISO), reason);
+  if ("error" in result) return { error: result.error };
+
+  await prisma.auditLog.create({
+    data: {
+      entityType: "Package",
+      entityId: dateISO,
+      action: "MARK_DAY_SENT",
+      actorId: user.id,
+      summary:
+        `Marked ${result.closed} box(es) on ${dateISO} as sent without scanning. ` +
+        `Reason: ${reason.trim()}`,
+    },
+  });
+
+  refresh();
+  return {
+    ok: `${result.closed} box(es) marked sent. They are recorded as never scanned here.`,
+  };
 }
 
 /** Reopening is a correction, so it needs the director rather than a packer. */

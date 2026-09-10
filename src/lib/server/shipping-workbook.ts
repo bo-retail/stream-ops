@@ -37,6 +37,7 @@ const KIND_LABEL: Record<string, string> = {
   ITEM_OVERRIDE: "Added against the report",
   CLOSE_COMPLETE: "Closed",
   CLOSE_INCOMPLETE: "Closed incomplete",
+  CLOSE_UNVERIFIED: "Marked sent without scanning",
   REOPEN: "Reopened",
 };
 
@@ -44,6 +45,10 @@ const STATUS_LABEL: Record<string, string> = {
   OPEN: "Still open",
   CLOSED_COMPLETE: "Complete",
   CLOSED_INCOMPLETE: "Incomplete",
+  // Spelled out rather than abbreviated: this column ends up in front of
+  // somebody arguing about a parcel, and "Unverified" alone reads like a
+  // system state rather than "nobody checked this one".
+  CLOSED_UNVERIFIED: "Sent — not scanned here",
 };
 
 export interface ShippingWorkbook {

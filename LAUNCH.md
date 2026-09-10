@@ -9,7 +9,8 @@ Read this once before starting. Then do it with this open beside you.
 **You can stop between any two steps.** Nothing is half-done in a way that
 breaks. The one place that matters is called out when you get there.
 
-**Time:** about 30 minutes, most of it waiting.
+**Time:** about 45 minutes — roughly 20 for the update itself, and another 25
+loading the three days you have already run and shipped.
 
 ---
 
@@ -180,12 +181,13 @@ npx prisma migrate status
 
 This takes about 15 seconds and **changes nothing**. It only looks.
 
-**What you should see:** near the bottom, a list of three things not yet applied:
+**What you should see:** near the bottom, a list of four things not yet applied:
 
 ```
 20260909120000_shipping_boxes_and_imports
 20260909180000_scheduled_hours
 20260909210000_pay_rates
+20260910100000_sent_without_scanning
 ```
 
 ## → Stop here and send me what it printed.
@@ -215,6 +217,18 @@ halfway on some versions of the database software.
    ALTER TYPE "TimeEntrySource" ADD VALUE IF NOT EXISTS 'SCHEDULE';
    ```
 
+4. Clear the box. Paste this **on its own** and click **Run**:
+
+   ```sql
+   ALTER TYPE "PackageStatus" ADD VALUE IF NOT EXISTS 'CLOSED_UNVERIFIED';
+   ```
+
+5. Clear the box. Paste this **on its own** and click **Run**:
+
+   ```sql
+   ALTER TYPE "ScanKind" ADD VALUE IF NOT EXISTS 'CLOSE_UNVERIFIED';
+   ```
+
 **What you should see:** something like `ALTER TYPE` or "Query executed
 successfully" each time.
 
@@ -240,6 +254,7 @@ The following migration(s) have been applied:
   20260909120000_shipping_boxes_and_imports
   20260909180000_scheduled_hours
   20260909210000_pay_rates
+  20260910100000_sent_without_scanning
 All migrations have been successfully applied.
 ```
 
@@ -330,7 +345,59 @@ They will see only the packing screen and the clock. Nothing else.
 
 ---
 
-# Step 11 — Check the pay period before you pay anybody
+# Step 11 — Load the days that already shipped
+
+You have been running shows since Monday, and those parcels have already gone
+out. Their sales still want loading — that is where the revenue, the insights
+and the streamers' commission come from — but nobody is going to scan six
+hundred labels that are already in the post.
+
+So load each day, then tell the app they went out.
+
+**Do this for each day — Monday, Tuesday, Wednesday:**
+
+## 11a — Upload the day
+
+**Sales report entry** → pick the day → drop in that day's export files →
+**Upload**.
+
+It reads the date out of the files themselves and refuses if that disagrees with
+the day you picked, so you cannot put Monday's orders on Tuesday by accident.
+
+## 11b — Tell it those parcels have gone
+
+**Shipping log** → use **← Previous day** until the title says that day.
+
+You will see a yellow box: *"These parcels already went out"*, saying how many
+are still open.
+
+1. Click **Mark this day as sent**
+2. Type the reason: `shipped before we started using StreamOps`
+3. Click **Yes — mark N sent**
+
+**What this does:** closes every open box for that day at once, and records each
+one as **sent, but never scanned here** — *not* as checked. Nobody verified
+them, and the record says so honestly. The daily counter goes to
+`220 of 220 sent` and stops nagging.
+
+**What you still get:** if a customer complains about a Monday parcel, you can
+open the Shipping log for Monday, find that tracking number, and see what the
+report said was in it. What you do not get is proof of what was physically put
+in, because nobody scanned it. That is the truth, and the app says so rather
+than pretending otherwise.
+
+> **This button is not just for launch.** Any day the scanner dies, the wifi
+> drops, or the team forgets to use the app — the parcels still go out, and this
+> is how you tell the system so. It is behind a confirmation and needs a reason
+> typed in every time, on purpose.
+
+**From tonight's shows onward, pack normally.** Upload in the morning, scan the
+labels, close the boxes. You should never need this button again unless
+something breaks.
+
+---
+
+# Step 12 — Check the pay period before you pay anybody
 
 Go to **Payroll** and look at **1–15 Sep**.
 
@@ -344,7 +411,7 @@ correction sticks and is recorded.
 
 ---
 
-# Step 12 — Try the new things
+# Step 13 — Try the new things
 
 Still signed in as yourself:
 
@@ -362,7 +429,7 @@ and tell me.
 
 ---
 
-# Step 13 — Close the PowerShell window
+# Step 14 — Close the PowerShell window
 
 Just close it. That is what removes your production database address from your
 computer's memory. Nothing else to do.
