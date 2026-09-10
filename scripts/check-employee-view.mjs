@@ -11,6 +11,21 @@ import { Client } from "pg";
 const BASE = process.argv[2] ?? "http://localhost:3000";
 const secret = new TextEncoder().encode(process.env.AUTH_SECRET);
 
+/*
+  This one talks to the running app, not just the database.
+
+  Without the site up it used to die on an unhandled fetch failure — a wall of
+  ECONNREFUSED that reads like the app is broken when in fact nobody started it.
+  Skipping with a sentence is the difference between "go and start it" and
+  twenty minutes spent looking for a fault that is not there.
+*/
+try {
+  await fetch(BASE, { method: "HEAD" });
+} catch {
+  console.log(`SKIP  nothing is answering at ${BASE}. Start the app first: npm run dev`);
+  process.exit(0);
+}
+
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 

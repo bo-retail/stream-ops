@@ -52,6 +52,29 @@ yet, and the new pages break until you catch up. So: **do not run step 8 early.*
 
 ---
 
+## This has been rehearsed
+
+Before you run any of it, the whole thing was run end to end on a throwaway
+database: rebuilt to match production as it stands, filled with the shapes a
+real one holds — people, a published release, shows, placements, clocked hours,
+an admin correction with its revision history, a day off, an audit trail —
+fingerprinted row by row, put through the exact steps below, and fingerprinted
+again.
+
+**Every existing row came out byte-for-byte identical.** Then the new features
+were exercised on top of it — a day's reports imported, boxes packed, a day
+marked sent, payroll run — and the original rows were checked again and had
+still not moved.
+
+You can run that rehearsal yourself at any time. It never opens your real
+database:
+
+```powershell
+node scripts/rehearse-launch.mjs
+```
+
+---
+
 # Step 1 — Open PowerShell in the right folder
 
 Open PowerShell (Windows key → `powershell` → Enter), then paste this and press

@@ -31,9 +31,44 @@ function check(name: string, actual: unknown, expected: unknown) {
 const settings = await getSettings();
 const today = todayISO(settings.timezone);
 
-const HAS_SHOWS_NO_REPORT = addDays(today, -2);
-const ALL_CANCELLED = addDays(today, -3);
-const NEVER_PUBLISHED = addDays(today, -4);
+/*
+  Days inside the look-back window that have no real shows on them.
+
+  A show is unique on (date, platform, slot), so a fixture on a day the business
+  actually ran collides and the script dies on a constraint violation rather
+  than telling you anything. Fixed offsets from today cannot avoid that: what
+  they land on changes as the date rolls over, and after launch every recent day
+  has shows on it — which is exactly when somebody would run this against a copy
+  of production to check something.
+
+  So the days are chosen rather than assumed. Three free ones are needed inside
+  the fourteen-day window this feature looks back over; the fixtures have to be
+  in it for the test to mean anything, which is why they cannot simply be moved
+  to last year.
+*/
+const WINDOW = 14;
+const candidates = Array.from({ length: WINDOW }, (_, i) => addDays(today, -(i + 1)));
+const taken = new Set(
+  (
+    await prisma.show.findMany({
+      where: { date: { in: candidates.map(toDbDate) } },
+      select: { date: true },
+      distinct: ["date"],
+    })
+  ).map((s) => s.date.toISOString().slice(0, 10)),
+);
+const free = candidates.filter((d) => !taken.has(d));
+
+if (free.length < 3) {
+  console.log(
+    `SKIP  need three days in the last ${WINDOW} with no shows on them; only ${free.length} are free.\n` +
+      `      Every other day already has a real schedule, and a fixture would collide with it.`,
+  );
+  await prisma.$disconnect();
+  process.exit(0);
+}
+
+const [HAS_SHOWS_NO_REPORT, ALL_CANCELLED, NEVER_PUBLISHED] = free;
 const TOO_OLD = addDays(today, -40);
 
 /** A release covering one date, with two shows on it. */

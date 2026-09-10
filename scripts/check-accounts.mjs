@@ -26,6 +26,17 @@ assertDevDatabase("check-accounts.mjs");
 const BASE = process.argv[2] ?? "http://localhost:3000";
 const secret = new TextEncoder().encode(process.env.AUTH_SECRET);
 
+/*
+  The second half of this talks to the running app.
+
+  Without it up, the database checks passed and then the whole thing died on an
+  unhandled fetch failure — so it reported success and failure at once, and the
+  exit code said only "failed". Better to say which half ran.
+*/
+const appIsUp = await fetch(BASE, { method: "HEAD" })
+  .then(() => true)
+  .catch(() => false);
+
 const db = new Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 
@@ -84,6 +95,15 @@ try {
   check("the account is flagged to change it on first sign-in", row1.mustChangePassword === true);
 
   /* ------------------ 2. that flag actually forces the change screen ------ */
+
+  // Everything from here needs the site itself, not just the database.
+  if (!appIsUp) {
+    console.log(
+      `\nSKIP  the rest needs the app running — nothing is answering at ${BASE}.` +
+        `\n      Start it with npm run dev and run this again to check the redirects,` +
+        `\n      deactivation, and what each role may reach.`,
+    );
+  } else {
 
   for (const path of ["/dashboard", "/timeclock", "/availability"]) {
     const r = await visit(user, path);
@@ -211,8 +231,11 @@ try {
     !/Availability needed/i.test(shippingHtml) && !/My availability/i.test(shippingHtml),
   );
 
+  } // end of the checks that need the app running
+
   /* --------------------------------------- 8. the last admin is safe ----- */
 
+  // Back to the database, so this runs either way.
   const admins = (
     await db.query(`select count(*)::int as n from "User" where role = 'BOSS' and "isActive"`)
   ).rows[0].n;
