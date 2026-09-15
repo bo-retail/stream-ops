@@ -6,6 +6,7 @@ import { buildBoxes, checkIntegrity, summariseDay } from "@/lib/domain/imports/b
 import type { Box } from "@/lib/domain/imports/boxes";
 import { parseCsv } from "@/lib/domain/imports/csv";
 import { parseEbayFile } from "@/lib/domain/imports/ebay";
+import { platformsDropped, platformsOf } from "@/lib/domain/imports/expected";
 import { parseTikTokFile } from "@/lib/domain/imports/tiktok";
 import { detectPlatform } from "@/lib/domain/imports/types";
 import type { DroppedRow, ImportFlag, WatchSale } from "@/lib/domain/imports/types";
@@ -194,6 +195,38 @@ export async function runImport(
   uploadedById: string,
 ): Promise<ImportOutcome> {
   const { sales, dropped, flags, boxes, showDate, fileInfo } = readFiles(files);
+
+  /*
+    An upload that would take a marketplace away from a day.
+
+    A new upload replaces the day's report: its sales are the ones counted, and
+    open boxes it does not mention are removed. 09/11 went in without its eBay
+    file, and the natural fix is to upload just that file — which would have
+    dropped every TikTok sale and every unpacked TikTok box for the day. So an
+    upload has to carry every marketplace the day already has.
+  */
+  if (showDate !== null) {
+    const current = await prisma.importBatch.findFirst({
+      where: { showDate: toDbDate(showDate), status: "OK" },
+      orderBy: { uploadedAt: "desc" },
+      select: { files: true },
+    });
+    const lost = platformsDropped(
+      platformsOf(current?.files),
+      fileInfo.map((f) => f.platform),
+    );
+    if (lost.length > 0) {
+      const names = lost.map((p) => (p === "TIKTOK" ? "TikTok" : "eBay")).join(" and ");
+      flags.push({
+        severity: "blocking",
+        message:
+          `${showDate} already has its ${names} report loaded, and these files do not include it. ` +
+          `A new upload replaces the day's report, so this would remove those sales and their unpacked ` +
+          `boxes. Upload all of the day's files together.`,
+      });
+    }
+  }
+
   const blocked = flags.some((f) => f.severity === "blocking");
 
   if (blocked || showDate === null) {

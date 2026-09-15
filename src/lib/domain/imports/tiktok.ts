@@ -166,6 +166,7 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
   const dropped: DroppedRow[] = [];
   const tagCounts = new Map<string, number>();
   const malformed: string[] = [];
+  let blankTags = 0;
 
   for (const record of records) {
     const orderRef = record["Order ID"];
@@ -204,7 +205,10 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
 
     const rawTag = record["Seller SKU"];
     const parsedTag = parseShiftTag(rawTag);
-    if (!parsedTag) malformed.push(`${orderRef} (${record["Product Name"]}, $${amount})`);
+    if (!parsedTag) {
+      if (rawTag.trim() === "") blankTags++;
+      else malformed.push(`${orderRef} (${record["Product Name"]}, $${amount})`);
+    }
     const tag = parsedTag ? rawTag : defaultShiftTag(showDate, half);
     tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
 
@@ -254,6 +258,24 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
         `${file.name}: ${malformed.length} row(s) had an unreadable shift tag and were credited to ` +
         `${defaultShiftTag(showDate, half)} (R13) — ${malformed.slice(0, 3).join("; ")}` +
         (malformed.length > 3 ? ` and ${malformed.length - 3} more` : ""),
+    });
+  }
+
+  /*
+    A blank tag is not a junk one.
+
+    TikTok listings stopped carrying the show tag in September 2026: every row of
+    the 09/14 exports has an empty Seller SKU. Each was a warning — 474 on one
+    morning — which buries the warnings that matter. On TikTok the file decides
+    the show and the pay (R1), so an empty tag loses nothing and is noted once. A
+    tag that is present and unreadable, like the "1" on 09/08, still warns.
+  */
+  if (blankTags > 0) {
+    flags.push({
+      severity: "info",
+      message:
+        `${file.name}: the show tag (Seller SKU) is blank on ${blankTags} row(s). They are credited to this ` +
+        `file's show, ${defaultShiftTag(showDate, half)} — on TikTok the file decides the show and the pay anyway.`,
     });
   }
 

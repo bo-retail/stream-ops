@@ -21,8 +21,10 @@ import {
   getDayCounters,
   getPackerDays,
   listIncompleteBoxes,
+  listOpenBoxes,
   listUnrecognisedBoxes,
 } from "@/lib/server/packing";
+import { PLATFORM_SHORT } from "@/lib/domain/types";
 import { packingDayISO } from "@/lib/server/shipping";
 import { getSettings } from "@/lib/server/settings";
 import { MarkDaySent } from "./mark-sent";
@@ -51,11 +53,12 @@ export default async function ShippingLogPage({
   const showDate = toDbDate(dateISO);
   const settings = await getSettings();
 
-  const [counters, packers, incomplete, unrecognised] = await Promise.all([
+  const [counters, packers, incomplete, unrecognised, openBoxes] = await Promise.all([
     getDayCounters(showDate, dateISO),
     getPackerDays(showDate),
     listIncompleteBoxes(showDate),
     listUnrecognisedBoxes(showDate),
+    listOpenBoxes(showDate),
   ]);
 
   const clock = new Intl.DateTimeFormat("en-GB", {
@@ -131,6 +134,61 @@ export default async function ShippingLogPage({
             />
           )}
         </div>
+
+        {/*
+          The labels nobody has scanned yet, by tracking number.
+
+          A count cannot be acted on. On 09/10–11 sixteen labels were never
+          scanned; every one of them had shipped, and nothing on this screen
+          could show that. With the numbers the director can check the stack or
+          look one up the same morning. Collapsed, because first thing it is the
+          whole day.
+        */}
+        {openBoxes.length > 0 ? (
+          <Card>
+            <details>
+              <summary className="cursor-pointer px-4 py-3 sm:px-5">
+                <span className="text-sm font-semibold text-ink">
+                  Labels not scanned yet ({openBoxes.length})
+                </span>
+                <span className="block text-sm text-ink-muted">
+                  Every box from the report that is still open, by tracking number.
+                </span>
+              </summary>
+              <Table>
+                <thead>
+                  <tr>
+                    <Th>Tracking</Th>
+                    <Th>Marketplace</Th>
+                    <Th>Buyer</Th>
+                    <Th>Watches</Th>
+                    <Th>Scanned so far</Th>
+                    <Th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {openBoxes.map((b) => (
+                    <tr key={b.id}>
+                      <Td className="tabular text-xs">{b.tracking}</Td>
+                      <Td className="text-ink-muted">{PLATFORM_SHORT[b.platform]}</Td>
+                      <Td className="text-ink-muted">{b.buyer || "—"}</Td>
+                      <Td className="tabular">{b.expected}</Td>
+                      <Td className="tabular text-ink-muted">{b.scanned || "—"}</Td>
+                      <Td className="text-right">
+                        <Link
+                          href={`/shipping/log/box/${b.id}`}
+                          className="text-sm font-medium text-brand-700 underline underline-offset-2"
+                        >
+                          Every scan
+                        </Link>
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </Table>
+            </details>
+          </Card>
+        ) : null}
 
         <MarkDaySent
           dateISO={dateISO}

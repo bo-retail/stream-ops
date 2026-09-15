@@ -17,7 +17,7 @@ import { assertDevDatabase } from "./dev-only.mjs";
 import { prisma } from "../src/lib/db";
 import { addDays, toDbDate, todayISO } from "../src/lib/domain/dates";
 import { getSettings } from "../src/lib/server/settings";
-import { listShowDays, missingReportDays } from "../src/lib/server/shipping";
+import { listShowDays, missingReportDays, missingReports } from "../src/lib/server/shipping";
 
 assertDevDatabase("check-show-days.mts");
 
@@ -134,7 +134,19 @@ const created: string[] = [];
 created.push(await makeDay(HAS_SHOWS_NO_REPORT, { published: true, cancelled: false, name: "check: needs a report" }));
 created.push(await makeDay(ALL_CANCELLED, { published: true, cancelled: true, name: "check: all cancelled" }));
 created.push(await makeDay(NEVER_PUBLISHED, { published: false, cancelled: false, name: "check: still a draft" }));
-created.push(await makeDay(today, { published: true, cancelled: false, name: "check: today" }));
+/*
+  Today needs published shows for "today is never chased" to mean anything. On a
+  real schedule it almost always has them already, and a fixture would collide
+  with them on the (date, platform, slot) index — which is how this script used
+  to die on any copy of production. Real shows test the rule just as well.
+*/
+const todayHasShows =
+  (await prisma.show.count({
+    where: { date: toDbDate(today), status: "SCHEDULED", release: { scheduleStatus: "PUBLISHED" } },
+  })) > 0;
+if (!todayHasShows) {
+  created.push(await makeDay(today, { published: true, cancelled: false, name: "check: today" }));
+}
 created.push(await makeDay(TOO_OLD, { published: true, cancelled: false, name: "check: long ago" }));
 
 console.log("Built five show days to test the rule against.\n");
@@ -164,8 +176,40 @@ check(
   true,
 );
 
+/* -------------------------------- a report without one marketplace is not done */
+
+// 09/11 went in with its TikTok exports and no eBay one, and read as loaded.
+const partial = await prisma.importBatch.create({
+  data: {
+    showDate: toDbDate(HAS_SHOWS_NO_REPORT),
+    status: "OK",
+    // After the refused upload above: the day list shows the most recent attempt.
+    uploadedAt: new Date(Date.now() + 1_000),
+    files: [{ name: "check-tiktok.csv", platform: "TIKTOK" }],
+    flags: [],
+  },
+  select: { id: true },
+});
+const partialRow = (await missingReports()).find((m) => m.dateISO === HAS_SHOWS_NO_REPORT);
+check("a report with TikTok and no eBay is still chased", partialRow !== undefined, true);
+check("naming what is missing", partialRow?.missing, "the eBay export");
+check(
+  "and the day list says so too",
+  (await listShowDays()).find((d) => d.dateISO === HAS_SHOWS_NO_REPORT)?.missing,
+  "the eBay export",
+);
+
 const ok = await prisma.importBatch.create({
-  data: { showDate: toDbDate(HAS_SHOWS_NO_REPORT), status: "OK", files: [], flags: [] },
+  data: {
+    showDate: toDbDate(HAS_SHOWS_NO_REPORT),
+    status: "OK",
+    uploadedAt: new Date(Date.now() + 2_000),
+    files: [
+      { name: "check-tiktok.csv", platform: "TIKTOK" },
+      { name: "check-ebay.csv", platform: "EBAY" },
+    ],
+    flags: [],
+  },
   select: { id: true },
 });
 check(
@@ -181,13 +225,14 @@ const row = days.find((d) => d.dateISO === HAS_SHOWS_NO_REPORT);
 check("the day list finds it", row !== undefined, true);
 check("with both its live shows", row?.liveShows, 2);
 check("and shows the latest upload, not the refused one", row?.report?.status, "OK");
+check("with nothing missing from it", row?.missing, null);
 check("the cancelled day reports no live shows", days.find((d) => d.dateISO === ALL_CANCELLED)?.liveShows, 0);
 check("the list is newest first", days[0]?.dateISO, today);
 
 /* ------------------------------------------------------------------ cleanup */
 
 console.log("\nCleaning up.");
-await prisma.importBatch.deleteMany({ where: { id: { in: [blocked.id, ok.id] } } });
+await prisma.importBatch.deleteMany({ where: { id: { in: [blocked.id, partial.id, ok.id] } } });
 await clearFixtures();
 
 const left = await prisma.release.count({ where: { id: { in: created } } });

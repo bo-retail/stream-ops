@@ -14,8 +14,9 @@ import type { PackingBoxView, ScanOutcome } from "@/lib/server/packing";
  * presses Enter, so there is nothing to click between scans — she works with a
  * label in one hand and a watch in the other, and the screen keeps up.
  *
- * What the input means depends only on whether a box is open: no box, it is a
- * shipping label; box open, it is a watch.
+ * What the input means depends on whether a box is open: no box, it is a
+ * shipping label; box open, it is a watch — unless it is plainly a label, which
+ * the server answers as one and this screen offers to open (see `packItem`).
  */
 
 type Tone = "ok" | "warn" | "danger" | "info";
@@ -25,6 +26,8 @@ interface Status {
   text: string;
   /** Offered when a watch was refused because it is not on the list. */
   offerAdd?: string;
+  /** A shipping label scanned while this box was open — offered as the next box to open. */
+  switchLabel?: string;
 }
 
 const TONE_STYLES: Record<Tone, string> = {
@@ -76,7 +79,15 @@ export function ScanClient() {
         // The stock number comes off the outcome, not out of the sentence. This
         // used to match on the wording of the refusal, so rewording one would
         // have removed the only way to record a watch that really is in the box.
-        setStatus({ tone: "danger", text: outcome.message, offerAdd: outcome.stockNumber });
+        //
+        // A label or a misread is not a wrong watch: amber rather than red, and a
+        // misread is never offered as something to add to the box.
+        setStatus({
+          tone: outcome.label || outcome.unreadable ? "warn" : "danger",
+          text: outcome.message,
+          offerAdd: outcome.unreadable || outcome.label ? undefined : outcome.stockNumber,
+          switchLabel: outcome.label,
+        });
         break;
       case "error":
         setStatus({ tone: "danger", text: outcome.message });
@@ -99,7 +110,9 @@ export function ScanClient() {
     startTransition(async () => apply(await fn()));
   }
 
-  const over = box?.items.some((i) => i.scanned > i.expected) ?? false;
+  // A box in no report expects nothing, so everything in it is "over" — the
+  // server does not count that against it (see `sealBox`), and neither does this.
+  const over = !box?.isUnrecognised && (box?.items.some((i) => i.scanned > i.expected) ?? false);
   const canCloseCleanly = (box?.complete ?? false) && !over;
 
   return (
@@ -165,6 +178,40 @@ export function ScanClient() {
               >
                 It really is in the box — add it anyway
               </Button>
+            ) : null}
+            {status.switchLabel && box ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {canCloseCleanly ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={pending}
+                    onClick={() => {
+                      const label = status.switchLabel!;
+                      const boxId = box.id;
+                      run(async () => {
+                        const closed = await closeBox(boxId, false);
+                        return closed.kind === "box" ? scanLabel(label) : closed;
+                      });
+                    }}
+                  >
+                    Close this box and open that one
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={pending}
+                  onClick={() => {
+                    const label = status.switchLabel!;
+                    setBox(null);
+                    run(() => scanLabel(label));
+                  }}
+                >
+                  Put this box down and open that one
+                </Button>
+              </div>
             ) : null}
           </div>
         ) : null}

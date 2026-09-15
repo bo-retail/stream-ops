@@ -1,7 +1,12 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { fromDbDate, toDbDate } from "@/lib/domain/dates";
-import { matchTracking, normaliseScan, normaliseStockNumber } from "@/lib/domain/imports/tracking";
+import {
+  looksLikeShippingLabel,
+  matchTracking,
+  normaliseScan,
+  normaliseStockNumber,
+} from "@/lib/domain/imports/tracking";
 import type { DateISO } from "@/lib/domain/types";
 import { packingDayISO } from "./settings";
 
@@ -169,7 +174,16 @@ export type ScanOutcome =
    * rewording a refusal would have quietly removed the packer's only way to
    * record a watch that really is in the box.
    */
-  | { kind: "refused"; box: PackingBoxView; message: string; stockNumber?: string }
+  | {
+      kind: "refused";
+      box: PackingBoxView;
+      message: string;
+      stockNumber?: string;
+      /** What was scanned was a shipping label, so the screen can offer to open that box. */
+      label?: string;
+      /** Matched no watch on any report — a misread, not something to add to the box. */
+      unreadable?: boolean;
+    }
   | { kind: "error"; message: string };
 
 /** Re-reads the box and wraps it, after something changed it. */
@@ -278,6 +292,41 @@ export async function packItem(
   if (!box) return { kind: "error", message: "That box no longer exists." };
   if (box.status !== "OPEN") return { kind: "alreadyPacked", box };
 
+  /*
+    A shipping label, scanned while a box is open.
+
+    The screen reads every scan as a watch while a box is open. On 09/10–11 that
+    produced 36 of the 75 refusals: the next parcel's label scanned before this
+    box was closed, or this box's own label scanned a second time. Each was
+    logged as a watch "not in this box" — which it was not — and made the record
+    look like the floor catching wrong watches all morning.
+
+    So a label is answered as a label. Nothing goes in the box and nothing is
+    written to the scan log, because no watch was involved. It is checked before
+    the unrecognised-box branch too: that box accepts anything, and on 09/11 it
+    accepted a second shipping label as a watch, twice.
+  */
+  if (looksLikeShippingLabel(rawScan)) {
+    const labelled = await findBoxByScan(rawScan);
+    if (labelled?.id === box.id) {
+      return {
+        kind: "box",
+        box,
+        message: "That is this box's own label — it is already open. Scan the watches.",
+      };
+    }
+    return {
+      kind: "refused",
+      box,
+      label: rawScan.trim(),
+      message: labelled
+        ? labelled.status === "OPEN"
+          ? `That is the label for another box (${labelled.tracking}). Finish this box first — close it or put it down — then scan that label.`
+          : `That is the label for a box that is already packed (${labelled.tracking}). Finish this box first.`
+        : "That is a shipping label, not a watch. Finish this box first — close it or put it down — then scan the label again.",
+    };
+  }
+
   // An unrecognised box has no list to check against, so what she scans *is*
   // the record of what went in it.
   if (box.isUnrecognised) {
@@ -296,14 +345,47 @@ export async function packItem(
 
   const line = box.items.find((i) => i.stockNumber === stockNumber);
   if (!line) {
+    /*
+      Not in this box — or not a watch at all.
+
+      21 of the 09/10–11 refusals were misreads: 69027 coming through as "WYZ."
+      or "69Z.", 48389 as "4838", a retail UPC. Telling the packer that "watch" is
+      not in this box sends her looking for a wrong watch in her hand when the
+      right one is there and simply did not scan. A stock number that is on no
+      report ever loaded is almost always that, so it says so — and does not
+      offer to add it, because "WYZ." is not something to record as packed.
+
+      Only lines a report asked for count as known. Lines added against a report
+      carry an expected quantity of zero, and one of those on 09/11 was a
+      shipping label scanned in as a watch.
+
+      Still logged, since a scan was turned away, but with its own note so the
+      record can tell a misread from a caught mistake.
+    */
+    const onAReport = await prisma.packageItem.findFirst({
+      where: { stockNumber, expectedQty: { gt: 0 } },
+      select: { id: true },
+    });
+    const unreadable = onAReport === null;
+
     await prisma.scanEvent.create({
-      data: { packageId, userId, kind: "ITEM_REFUSED", stockNumber, rawScan, note: "Not in this box" },
+      data: {
+        packageId,
+        userId,
+        kind: "ITEM_REFUSED",
+        stockNumber,
+        rawScan,
+        note: unreadable ? "Not a stock number on any report — probably a misread" : "Not in this box",
+      },
     });
     return {
       kind: "refused",
       box,
-      message: `${stockNumber} is not in this box.`,
+      message: unreadable
+        ? `Could not match "${stockNumber}" to any watch on a report — probably a misread. Scan it again, or type the stock number and press Enter.`
+        : `${stockNumber} is not in this box.`,
       stockNumber,
+      unreadable,
     };
   }
 
@@ -617,6 +699,7 @@ export async function getPackerDays(showDate: Date): Promise<PackerDay[]> {
 export interface BoxSummary {
   id: string;
   tracking: string;
+  platform: "TIKTOK" | "EBAY";
   buyer: string;
   status: BoxStatus;
   isUnrecognised: boolean;
@@ -633,6 +716,7 @@ async function listBoxes(where: object): Promise<BoxSummary[]> {
     select: {
       id: true,
       trackingNumber: true,
+      platform: true,
       buyer: true,
       status: true,
       isUnrecognised: true,
@@ -645,6 +729,7 @@ async function listBoxes(where: object): Promise<BoxSummary[]> {
   return rows.map((r) => ({
     id: r.id,
     tracking: r.trackingNumber,
+    platform: r.platform,
     buyer: r.buyer,
     status: r.status,
     isUnrecognised: r.isUnrecognised,
@@ -663,6 +748,17 @@ export function listIncompleteBoxes(showDate: Date): Promise<BoxSummary[]> {
 /** Labels that were in no uploaded report. The reconcile queue. */
 export function listUnrecognisedBoxes(showDate: Date): Promise<BoxSummary[]> {
   return listBoxes({ showDate, isUnrecognised: true });
+}
+
+/**
+ * Boxes from the report that nobody has closed yet.
+ *
+ * Sorted by tracking number, so labels printed together sit together and the
+ * list can be checked against a stack. Unrecognised boxes have their own queue.
+ */
+export async function listOpenBoxes(showDate: Date): Promise<BoxSummary[]> {
+  const boxes = await listBoxes({ showDate, status: "OPEN", isUnrecognised: false });
+  return boxes.sort((a, b) => a.tracking.localeCompare(b.tracking));
 }
 
 /** Every box one person closed on one day, newest first. */

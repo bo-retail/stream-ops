@@ -208,6 +208,30 @@ describe("the shift tag", () => {
     expect(result.flags.some((f) => f.message.includes("unreadable shift tag"))).toBe(true);
   });
 
+  it("notes a blank tag once, as information, rather than warning on every row", () => {
+    // Every row of the 09/14 exports has an empty Seller SKU.
+    const result = parse([
+      paidRow({ "Seller SKU": "" }),
+      paidRow({ "Seller SKU": "", "Order ID": "2" }),
+    ]);
+    expect(result.sales.every((s) => s.shiftTag === "09.08.26 AM" && !s.shiftTagValid)).toBe(true);
+    expect(result.flags.some((f) => f.message.includes("unreadable shift tag"))).toBe(false);
+    const notes = result.flags.filter((f) => f.message.includes("blank on 2 row(s)"));
+    expect(notes).toHaveLength(1);
+    expect(notes[0].severity).toBe("info");
+  });
+
+  it("still warns about a junk tag when others on the file are blank", () => {
+    const result = parse([
+      paidRow({ "Seller SKU": "" }),
+      paidRow({ "Seller SKU": "1", "Order ID": "2" }),
+    ]);
+    expect(
+      result.flags.some((f) => f.severity === "warning" && f.message.includes("1 row(s) had an unreadable shift tag")),
+    ).toBe(true);
+    expect(result.flags.some((f) => f.severity === "info" && f.message.includes("blank on 1 row(s)"))).toBe(true);
+  });
+
   it("warns but does not act when most tags disagree with the file's window", () => {
     // An item listed in the morning can sell at night. The file decides the
     // show; the tag is only a sanity check (R1).

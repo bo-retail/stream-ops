@@ -19,7 +19,7 @@ import { SLOT_SHORT } from "@/lib/domain/types";
 import { getReleaseView } from "@/lib/server/schedule";
 import { listReleases } from "@/lib/server/releases";
 import { getSettings, getWeekContext } from "@/lib/server/settings";
-import { missingReportDaysSafe } from "@/lib/server/shipping";
+import { missingReportsSafe } from "@/lib/server/shipping";
 import { salesHeadlineSafe } from "@/lib/server/insights";
 import { formatChange, formatMoneyShort } from "@/lib/domain/insights";
 
@@ -27,7 +27,7 @@ export async function BossDashboard() {
   const { today } = await getWeekContext();
   const settings = await getSettings();
   const releases = await listReleases(30);
-  const missingReports = await missingReportDaysSafe();
+  const missingReports = await missingReportsSafe();
 
   /*
     Two figures, not ten.

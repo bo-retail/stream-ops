@@ -17,7 +17,7 @@
  */
 
 import type { DateISO } from "../types";
-import { findSuffixCollisions, normaliseStockNumber } from "./tracking";
+import { findSuffixCollisions, normaliseStockNumber, trackingCarrier } from "./tracking";
 import type { ImportFlag, ImportPlatform, ShowKey, WatchSale } from "./types";
 
 export interface BoxItem {
@@ -94,11 +94,30 @@ export function buildBoxes(sales: readonly WatchSale[]): Box[] {
 export function checkIntegrity(sales: readonly WatchSale[], boxes: readonly Box[]): ImportFlag[] {
   const flags: ImportFlag[] = [];
 
+  /*
+    A paid watch with no label yet is not a fault in the file.
+
+    The eBay report is downloaded early in the morning, and an order whose label
+    has not been bought by then has no tracking number. On 09/14 that was one $24
+    watch, and refusing the upload for it held back the other 590, every box and
+    the whole day's sales. So it is imported: the sale counts, no box is made for
+    it, and uploading the day again once the label exists adds its box without
+    touching anything already packed.
+  */
   const noTracking = sales.filter((s) => s.tracking === "");
   if (noTracking.length > 0) {
+    const orders = [...new Map(noTracking.map((s) => [s.orderRef, s])).values()];
     flags.push({
-      severity: "blocking",
-      message: `${noTracking.length} paid watch(es) have no tracking number, so they cannot be put in a box. First: order ${noTracking[0].orderRef}.`,
+      severity: "warning",
+      message:
+        `${noTracking.length} paid watch(es) have no shipping label yet, so no box was made for them: ` +
+        orders
+          .slice(0, 5)
+          .map((s) => `order ${s.orderRef} (${s.stockNumber})`)
+          .join(", ") +
+        (orders.length > 5 ? ` and ${orders.length - 5} more` : "") +
+        `. Their sales are counted. Once the label is bought, download the report again and upload ` +
+        `all of the day's files again — the box is added and nothing already packed is touched.`,
     });
   }
 
@@ -145,11 +164,17 @@ export function checkIntegrity(sales: readonly WatchSale[], boxes: readonly Box[
     });
   }
 
-  const lengths = new Set(boxes.map((b) => b.tracking.replace(/\D+/g, "").length));
-  if (lengths.size > 1) {
+  // Every tracking number should be a shape a carrier really uses. This used to
+  // expect 22 digits throughout, and warned on every upload once TikTok began
+  // sending small parcels with GOFO. A shape no carrier has used is most likely
+  // a column that changed meaning, and worth checking before anybody packs.
+  const unfamiliar = boxes.filter((b) => trackingCarrier(b.tracking) === null);
+  if (unfamiliar.length > 0) {
     flags.push({
       severity: "warning",
-      message: `Tracking numbers came in ${lengths.size} different lengths (${[...lengths].sort().join(", ")}). Expected all 22 digits.`,
+      message:
+        `${unfamiliar.length} tracking number(s) are in a format not seen before (e.g. ${unfamiliar[0].tracking}). ` +
+        `Expected USPS (22 digits) or GOFO (GFUS and 14 digits). Check that one of those labels scans before packing.`,
     });
   }
 
@@ -167,13 +192,28 @@ export function checkIntegrity(sales: readonly WatchSale[], boxes: readonly Box[
   }
 
   const mismatches: string[] = [];
+  const pennies: string[] = [];
   for (const [key, group] of byOrder) {
     const total = group.reduce((n, s) => n + s.orderTotal, 0);
     if (total === 0) continue; // nothing claimed, nothing to reconcile
     const parts = group.reduce((n, s) => n + s.netItemPrice + s.shipping + s.taxAndFees, 0);
-    if (Math.abs(parts - total) > 0.01) {
-      mismatches.push(`${key.split("|")[1]} (${parts.toFixed(2)} vs ${total.toFixed(2)})`);
-    }
+    const gap = Math.abs(parts - total);
+    if (gap <= 0.01) continue;
+    const line = `${key.split("|")[1]} (${parts.toFixed(2)} vs ${total.toFixed(2)})`;
+    // Up to 50 cents is a fee the platform adds to the total without a column of
+    // its own. eBay 30574 on 09/14 was 31 cents over, shipped to Colorado, whose
+    // retail delivery fee is that size. It is not revenue and changes nothing.
+    if (gap <= 0.5) pennies.push(line);
+    else mismatches.push(line);
+  }
+  if (pennies.length > 0) {
+    flags.push({
+      severity: "info",
+      message:
+        `${pennies.length} order(s) differ from their order total by 50 cents or less — usually a state delivery ` +
+        `fee the platform adds to the total without a column of its own. Revenue is unaffected. ` +
+        pennies.slice(0, 3).join("; "),
+    });
   }
   if (mismatches.length > 0) {
     flags.push({

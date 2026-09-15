@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   findSuffixCollisions,
+  looksLikeShippingLabel,
   matchTracking,
   normaliseScan,
   normaliseStockNumber,
+  trackingCarrier,
 } from "./tracking";
 import { defaultShiftTag, parseMoney, parseShiftTag } from "./types";
 
@@ -63,6 +65,52 @@ describe("matching a scanned label", () => {
     const result = matchTracking("1119922222", ["22222", "9922222"]);
     expect(result.status).toBe("ambiguous");
     expect(result.status === "ambiguous" && result.candidates).toHaveLength(2);
+  });
+});
+
+describe("GOFO labels", () => {
+  const known = [TRACKING, "GFUS01073044073024", "GFUS01073044402755"];
+
+  it("knows a USPS number from a GOFO one, and neither from anything else", () => {
+    expect(trackingCarrier(TRACKING)).toBe("USPS");
+    expect(trackingCarrier("GFUS01073044073024")).toBe("GOFO");
+    expect(trackingCarrier("1Z999AA10123456784")).toBeNull();
+    expect(trackingCarrier("")).toBeNull();
+  });
+
+  it("opens the box from exactly what the floor's scanner typed", () => {
+    // The scanner's real output on a GOFO label, 09/15.
+    expect(matchTracking("GFUS01073044402755", known)).toEqual({
+      status: "matched",
+      tracking: "GFUS01073044402755",
+    });
+  });
+
+  it("does not care about case", () => {
+    expect(matchTracking("gfus01073044073024", known)).toEqual({
+      status: "matched",
+      tracking: "GFUS01073044073024",
+    });
+  });
+});
+
+describe("telling a shipping label from a watch", () => {
+  it("recognises a USPS label bare, with its routing prefix, and partly read", () => {
+    // All four were scanned as "watches" on 09/10–11.
+    expect(looksLikeShippingLabel(TRACKING)).toBe(true);
+    expect(looksLikeShippingLabel("420330559234690390470911098730")).toBe(true);
+    expect(looksLikeShippingLabel("4207012621129434608106244545770548")).toBe(true);
+    expect(looksLikeShippingLabel("195299434608106244542550365")).toBe(true);
+  });
+
+  it("recognises a GOFO label", () => {
+    expect(looksLikeShippingLabel("GFUS01073044402755")).toBe(true);
+  });
+
+  it("never mistakes a watch, a retail barcode or a misread for one", () => {
+    for (const scan of ["69027", "ACW8105MC-002", "9403OBXL", "886678461240", "WYZ.", "0390470919259698"]) {
+      expect(looksLikeShippingLabel(scan)).toBe(false);
+    }
   });
 });
 

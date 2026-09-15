@@ -14,6 +14,8 @@ export interface UploadTarget {
   dateISO: DateISOString;
   expects: string;
   loaded: boolean;
+  /** Loaded, but without one marketplace's export: "the eBay export". */
+  partial: string | null;
 }
 type DateISOString = string;
 
@@ -83,7 +85,7 @@ export function UploadForm({ targets }: { targets: UploadTarget[] }) {
             {targets.map((t) => (
               <option key={t.dateISO} value={t.dateISO}>
                 {formatDate(t.dateISO, "long")}
-                {t.loaded ? " — already loaded" : ""}
+                {t.loaded ? " — already loaded" : t.partial ? ` — missing ${t.partial}` : ""}
               </option>
             ))}
           </Select>
@@ -94,7 +96,9 @@ export function UploadForm({ targets }: { targets: UploadTarget[] }) {
             That day ran <strong className="text-ink">{chosen.expects}</strong>.
             {chosen.loaded
               ? " It already has a report — uploading again replaces it, leaving any box already packed alone."
-              : ""}
+              : chosen.partial
+                ? ` It has a report, but it is missing ${chosen.partial}. Upload all of that day's files together — a new upload replaces the last one, so the missing file on its own is refused.`
+                : ""}
           </p>
         ) : null}
 

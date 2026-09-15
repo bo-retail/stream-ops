@@ -17,7 +17,7 @@ import { MissingReports } from "@/components/missing-reports";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { formatDate } from "@/lib/domain/dates";
 import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
-import { listShowDays, missingReportDays } from "@/lib/server/shipping";
+import { listShowDays, missingReports } from "@/lib/server/shipping";
 import type { DayShow } from "@/lib/server/shipping";
 import { RemoveReport } from "./remove-report";
 import { UploadForm } from "./upload-form";
@@ -57,14 +57,17 @@ export default async function SalesReportsPage() {
   // The director loads the files; the sales figures behind them are the boss's.
   const user = await requireShippingDirector();
   const isBoss = user.role === "BOSS";
-  const [days, missing] = await Promise.all([listShowDays(), missingReportDays()]);
+  const [days, missing] = await Promise.all([listShowDays(), missingReports()]);
 
   const targets = days
     .filter((d) => d.liveShows > 0)
     .map((d) => ({
       dateISO: d.dateISO,
       expects: d.expected.describe,
-      loaded: d.report?.status === "OK",
+      // A day loaded without one of its marketplaces is still waiting, so it is
+      // not "loaded" for the purpose of choosing what to upload next.
+      loaded: d.report?.status === "OK" && d.missing === null,
+      partial: d.report?.status === "OK" ? d.missing : null,
     }));
 
   return (
@@ -143,6 +146,8 @@ export default async function SalesReportsPage() {
                           <Badge tone="warn">Not loaded</Badge>
                         ) : day.report.status === "BLOCKED" ? (
                           <Badge tone="danger">Refused</Badge>
+                        ) : day.missing ? (
+                          <Badge tone="warn">Missing {day.missing}</Badge>
                         ) : (
                           <Badge tone="ok">
                             {day.report.uploadedByName

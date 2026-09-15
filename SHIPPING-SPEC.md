@@ -176,6 +176,26 @@ Verified passing on the real 09/08 files (473 watches, 220 boxes):
 Check 6 is why suffix matching is safe: two distinct strings of equal length cannot be
 suffixes of one another. It exists to catch the day that stops being true.
 
+> **Changed on 2026-09-15**, after the 09/14 exports and the 09/10–11 packing record:
+>
+> - **Check 1 is a warning, not a block.** A paid eBay order whose label has not been bought
+>   when the report is downloaded has no tracking number. The sale is imported, no box is made,
+>   and uploading the day again once the label exists adds the box.
+> - **Check 7 accepts two carriers.** USPS is 22 digits; GOFO, which TikTok uses for small
+>   parcels from 09/14, is `GFUS` and 14 digits. Any other shape warns. No collision between
+>   the two appeared on 09/14 (106 GOFO, 187 USPS), and check 6 still runs every day.
+> - **Check 8 is information under 50 cents.** eBay includes some state delivery fees in the
+>   order total with no column of its own (30574 on 09/14: 31 cents, Colorado).
+> - **A blank TikTok show tag is information, not a warning.** TikTok listings stopped carrying
+>   `Seller SKU` on 09/14. The file decides a TikTok show regardless (R1). A tag that is present
+>   and unreadable still warns.
+> - **An upload may not drop a marketplace.** A new upload replaces the day's report, so
+>   uploading only the missing eBay file for a day that has its TikTok exports is refused.
+>   A day loaded without one marketplace's export is chased as missing.
+> - **eBay runs a day show again.** Still one eBay file for the day; the Custom Label decides
+>   day or night (R15). An unreadable label is credited to PM with a warning, which now can pay
+>   the wrong pair — so the warning says to fix the listing and upload again.
+
 ### 3.7 Re-uploading
 
 A day may be uploaded again — a corrected export, a missing file. Re-upload **replaces

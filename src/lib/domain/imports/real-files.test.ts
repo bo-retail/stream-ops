@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { buildBoxes, checkIntegrity, summariseDay } from "./boxes";
 import { parseEbayFile } from "./ebay";
 import { parseTikTokFile } from "./tiktok";
+import { matchTracking, trackingCarrier } from "./tracking";
 import type { WatchSale } from "./types";
 
 /**
@@ -124,5 +125,121 @@ suite("the real 09/08 exports", () => {
       expect(box.watchCount).toBeGreaterThan(0);
       expect(box.items.length).toBeGreaterThan(0);
     }
+  });
+});
+
+/**
+ * The 09/14 exports — the morning the exports changed underneath the import.
+ *
+ * Three things were new, and each had made the upload or the packing record
+ * wrong: TikTok's show tag (Seller SKU) was blank on every row; TikTok sent 106
+ * of its parcels with GOFO, whose tracking numbers are `GFUS` and 14 digits; and
+ * eBay order 30537 was paid with no label bought yet, which refused the whole
+ * day.
+ *
+ * Point `STREAMOPS_IMPORT_FIXTURES_0914` at a folder holding that day's three
+ * exports. Like the 09/08 suite, it skips without them, and the files are never
+ * committed.
+ */
+const dir0914 = process.env.STREAMOPS_IMPORT_FIXTURES_0914;
+const available0914 = dir0914 !== undefined && dir0914 !== "" && existsSync(dir0914);
+
+(available0914 ? describe : describe.skip)("the real 09/14 exports", () => {
+  const files = available0914
+    ? readdirSync(dir0914!).filter((f) => f.toLowerCase().endsWith(".csv"))
+    : [];
+  const read = (name: string) => readFileSync(join(dir0914!, name), "utf8");
+
+  const tiktok = files
+    .filter((f) => f.startsWith("All order"))
+    .map((name) => parseTikTokFile({ name, text: read(name) }));
+  const ebay = files
+    .filter((f) => f.toLowerCase().startsWith("ebay"))
+    .map((name) => parseEbayFile({ name, text: read(name) }));
+  const results = [...tiktok, ...ebay];
+
+  const sales = results.flatMap((r) => r.sales);
+  const dropped = results.flatMap((r) => r.dropped);
+  const boxes = buildBoxes(sales);
+  const summary = summariseDay(sales, boxes);
+  const flags = [...results.flatMap((r) => r.flags), ...checkIntegrity(sales, boxes)];
+
+  it("finds the day's three files", () => {
+    expect(tiktok).toHaveLength(2);
+    expect(ebay).toHaveLength(1);
+  });
+
+  it("imports without a single blocking flag", () => {
+    expect(flags.filter((f) => f.severity === "blocking")).toEqual([]);
+  });
+
+  it("produces 591 paid watches in 293 boxes", () => {
+    expect(summary.watches).toBe(591);
+    expect(summary.boxes).toBe(293);
+  });
+
+  it("splits them by show and by marketplace", () => {
+    expect(summary.byShow).toEqual([
+      { show: "eBay AM", watches: 27 },
+      { show: "eBay PM", watches: 90 },
+      { show: "TikTok AM", watches: 209 },
+      { show: "TikTok PM", watches: 265 },
+    ]);
+    expect(summary.byPlatform).toEqual([
+      { platform: "TIKTOK", watches: 474, boxes: 224 },
+      { platform: "EBAY", watches: 117, boxes: 69 },
+    ]);
+    expect(summary.boxesSpanningShows).toBe(24);
+    expect(summary.largestBox).toBe(17);
+  });
+
+  it("drops the cancelled, the unpaid and the summary row, and nothing else", () => {
+    expect(dropped.filter((d) => d.reason.startsWith("Canceled"))).toHaveLength(22);
+    expect(dropped.filter((d) => d.reason === "committed but never paid")).toHaveLength(5);
+    expect(dropped.filter((d) => d.reason.includes("summary row"))).toHaveLength(1);
+    expect(dropped).toHaveLength(28);
+  });
+
+  it("counts the watch with no label yet, makes no box for it, and names it", () => {
+    expect(sales.filter((s) => s.tracking === "").map((s) => s.orderRef)).toEqual(["30537"]);
+    const warnings = flags.filter((f) => f.message.includes("no shipping label yet"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].severity).toBe("warning");
+    expect(warnings[0].message).toContain("order 30537 (50983)");
+  });
+
+  it("takes GOFO in its stride", () => {
+    expect(boxes.filter((b) => trackingCarrier(b.tracking) === "GOFO")).toHaveLength(106);
+    expect(boxes.filter((b) => trackingCarrier(b.tracking) === null)).toEqual([]);
+    expect(flags.some((f) => f.message.includes("format not seen before"))).toBe(false);
+  });
+
+  it("opens the right box from the photographed label and from the scanner's own output", () => {
+    const known = boxes.map((b) => b.tracking);
+    expect(matchTracking("GFUS01073044073024", known)).toEqual({
+      status: "matched",
+      tracking: "GFUS01073044073024",
+    });
+    expect(boxes.find((b) => b.tracking === "GFUS01073044073024")?.items).toEqual([
+      { stockNumber: "69821", expected: 1 },
+    ]);
+    expect(matchTracking("GFUS01073044402755", known).status).toBe("matched");
+    expect(
+      boxes.find((b) => b.tracking === "GFUS01073044402755")?.items.map((i) => i.stockNumber),
+    ).toEqual(["69725", "MPW-0396"]);
+  });
+
+  it("notes the blank show tags once per file, not as warnings", () => {
+    expect(flags.some((f) => f.message.includes("unreadable shift tag"))).toBe(false);
+    const notes = flags.filter((f) => f.message.includes("show tag (Seller SKU) is blank"));
+    expect(notes.map((n) => n.severity)).toEqual(["info", "info"]);
+  });
+
+  it("notes eBay 30574's 31 cents as information", () => {
+    expect(flags.find((f) => f.message.includes("30574"))?.severity).toBe("info");
+  });
+
+  it("leaves exactly one warning: the watch with no label", () => {
+    expect(flags.filter((f) => f.severity === "warning")).toHaveLength(1);
   });
 });

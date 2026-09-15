@@ -178,9 +178,12 @@ export function parseEbayFile(file: EbayFile): ParseResult {
         malformedTags.push(`${srn} (${item["Item Title"]}, ${item["Sold For"]})`);
       }
 
-      // On eBay the tag decides the show (R15). A bad tag is not expected here —
-      // eBay listings are tagged correctly — so it is credited to PM, which
-      // loses no money, and flagged loudly so the listing gets fixed.
+      // On eBay the tag decides the show (R15), because one file carries both
+      // the day and the night show and records no time of day. A bad tag leaves
+      // nothing else to go on, so it is credited to PM and flagged loudly. That
+      // cost nothing while eBay ran nights only; with the day show back, a
+      // day-show watch with a bad tag pays the night pair until the listing is
+      // fixed and the day uploaded again.
       const half: "AM" | "PM" = parsedTag ? parsedTag.half : "PM";
       const show: ShowKey = half === "AM" ? "eBay AM" : "eBay PM";
 
@@ -230,7 +233,8 @@ export function parseEbayFile(file: EbayFile): ParseResult {
       severity: "warning",
       message:
         `${file.name}: ${malformedTags.length} eBay row(s) had an unreadable Custom Label and were credited to the PM show. ` +
-        `eBay listings are expected to be tagged correctly — fix the listing. ` +
+        `eBay has no time of day to tell a day-show sale from a night-show one, so if any of these sold in the day ` +
+        `show its commission is going to the night pair — fix the listing and upload the day again. ` +
         malformedTags.slice(0, 3).join("; "),
     });
   }

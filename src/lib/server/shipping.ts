@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { addDays, fromDbDate, toDbDate, todayISO } from "@/lib/domain/dates";
-import { expectedFilesFor } from "@/lib/domain/imports/expected";
+import { expectedFilesFor, missingExports, platformsOf } from "@/lib/domain/imports/expected";
 import type { DayShow, ExpectedFiles } from "@/lib/domain/imports/expected";
 import type { DateISO } from "@/lib/domain/types";
 import { getSettings } from "./settings";
@@ -29,6 +29,11 @@ export interface ShowDay {
   expected: ExpectedFiles;
   /** Files that actually arrived on the most recent successful upload. */
   loadedFiles: { name: string; platform: string }[];
+  /**
+   * What a successful upload still lacks — "the eBay export" — or null. Null
+   * too when there is no successful upload at all; `report` says that.
+   */
+  missing: string | null;
   report: {
     batchId: string;
     status: "OK" | "BLOCKED";
@@ -133,12 +138,18 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
           }))
         : [];
 
+      const expected = expectedFilesFor(dayShows);
+
       return {
         dateISO,
         liveShows: dayShows.filter((s) => !s.cancelled).length,
         shows: dayShows,
-        expected: expectedFilesFor(dayShows),
+        expected,
         loadedFiles,
+        missing:
+          batch?.status === "OK"
+            ? missingExports(expected, loadedFiles.map((f) => f.platform))
+            : null,
         report: batch
           ? {
               batchId: batch.id,
@@ -156,8 +167,15 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
     });
 }
 
+export interface MissingReport {
+  dateISO: DateISO;
+  /** "no report", or what the loaded one lacks — "the eBay export". */
+  missing: string;
+}
+
 /**
- * Days that ran shows and have no report, so nothing downstream can happen.
+ * Days that ran shows and are missing some or all of their reports, so nothing
+ * downstream can happen for what is missing.
  *
  * A day qualifies when all of these hold:
  *
@@ -166,12 +184,14 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
  *   - it has at least one **scheduled** show in a **published** release. A day
  *     whose shows were all cancelled needs no report, and a draft was never a
  *     commitment to anybody.
- *   - **no successful import** exists for it. A blocked one does not count —
- *     that is precisely the day somebody still has to deal with.
+ *   - its most recent **successful** import is missing, or lacks the export of a
+ *     marketplace that ran. A blocked upload does not count — that is precisely
+ *     the day somebody still has to deal with — and neither does one without its
+ *     eBay file, which is how 09/11 read as done while its eBay sales were not.
  *   - it falls inside the look-back window. Older than that is history rather
  *     than a prompt, and a banner that never clears stops being read.
  */
-export async function missingReportDays(lookBackDays = LOOK_BACK_DAYS): Promise<DateISO[]> {
+export async function missingReports(lookBackDays = LOOK_BACK_DAYS): Promise<MissingReport[]> {
   const settings = await getSettings();
   const today = todayISO(settings.timezone);
   const from = addDays(today, -lookBackDays);
@@ -182,29 +202,58 @@ export async function missingReportDays(lookBackDays = LOOK_BACK_DAYS): Promise<
   if (to < from) return [];
 
   const [shows, loaded] = await Promise.all([
-    prisma.show.groupBy({
-      by: ["date"],
+    // Individual shows rather than a count per day, because what a day is waiting
+    // for depends on which marketplaces ran. Cancelled ones are left for
+    // `expectedFilesFor` to discount.
+    prisma.show.findMany({
       where: {
         date: { gte: toDbDate(from), lte: toDbDate(to) },
-        status: "SCHEDULED",
         release: { scheduleStatus: "PUBLISHED" },
       },
-      _count: { _all: true },
+      select: { date: true, platform: true, slot: true, status: true },
     }),
-    // A refused upload is not a report — that is precisely the day somebody
-    // still has to deal with — so only OK batches count as loaded.
     prisma.importBatch.findMany({
       where: { showDate: { gte: toDbDate(from), lte: toDbDate(to) }, status: "OK" },
-      select: { showDate: true },
-      distinct: ["showDate"],
+      orderBy: { uploadedAt: "desc" },
+      select: { showDate: true, files: true },
     }),
   ]);
 
-  const done = new Set(loaded.map((b) => fromDbDate(b.showDate)));
-  return shows
-    .map((s) => fromDbDate(s.date))
-    .filter((d) => !done.has(d))
-    .sort();
+  const showsByDate = new Map<DateISO, DayShow[]>();
+  for (const row of shows) {
+    const key = fromDbDate(row.date);
+    const list = showsByDate.get(key) ?? [];
+    list.push({ platform: row.platform, slot: row.slot, cancelled: row.status === "CANCELLED" });
+    showsByDate.set(key, list);
+  }
+
+  // The most recent successful upload is the day's report, as it is everywhere else.
+  const latest = new Map<DateISO, string[]>();
+  for (const batch of loaded) {
+    const key = fromDbDate(batch.showDate);
+    if (!latest.has(key)) latest.set(key, platformsOf(batch.files));
+  }
+
+  const out: MissingReport[] = [];
+  for (const [dateISO, dayShows] of showsByDate) {
+    const expected = expectedFilesFor(dayShows);
+    if (expected.tiktok === 0 && expected.ebay === 0) continue;
+
+    const platforms = latest.get(dateISO);
+    if (!platforms) {
+      out.push({ dateISO, missing: "no report" });
+      continue;
+    }
+    const missing = missingExports(expected, platforms);
+    if (missing) out.push({ dateISO, missing });
+  }
+
+  return out.sort((a, b) => a.dateISO.localeCompare(b.dateISO));
+}
+
+/** Just the dates, for anything that only needs to know which days. */
+export async function missingReportDays(lookBackDays = LOOK_BACK_DAYS): Promise<DateISO[]> {
+  return (await missingReports(lookBackDays)).map((m) => m.dateISO);
 }
 
 /**
@@ -215,9 +264,9 @@ export async function missingReportDays(lookBackDays = LOOK_BACK_DAYS): Promise<
  * connection for a moment should cost the warning, not the whole screen. If the
  * database is genuinely unreachable the page's real queries will say so.
  */
-export async function missingReportDaysSafe(lookBackDays = LOOK_BACK_DAYS): Promise<DateISO[]> {
+export async function missingReportsSafe(lookBackDays = LOOK_BACK_DAYS): Promise<MissingReport[]> {
   try {
-    return await missingReportDays(lookBackDays);
+    return await missingReports(lookBackDays);
   } catch (error) {
     console.error("Could not read the missing-report days for the banner:", error);
     return [];

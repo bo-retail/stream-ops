@@ -103,11 +103,15 @@ describe("integrity checks", () => {
     expect(checkIntegrity(sales, buildBoxes(sales))).toEqual([]);
   });
 
-  it("blocks when a paid watch has no tracking number", () => {
-    const sales = [sale({ tracking: "" })];
+  it("imports a paid watch with no label yet, warning and naming the order", () => {
+    // eBay 30537 on 09/14: paid, but its label was not bought when the report
+    // was downloaded at 4:35 AM. It used to refuse the whole day.
+    const sales = [sale({ orderRef: "30537", stockNumber: "50983", tracking: "" })];
     const flags = checkIntegrity(sales, buildBoxes(sales));
-    expect(flags[0].severity).toBe("blocking");
-    expect(flags[0].message).toContain("no tracking number");
+    expect(flags.some((f) => f.severity === "blocking")).toBe(false);
+    expect(flags[0].severity).toBe("warning");
+    expect(flags[0].message).toContain("no shipping label yet");
+    expect(flags[0].message).toContain("order 30537 (50983)");
   });
 
   it("blocks when a paid watch has no stock number, since it cannot be scanned", () => {
@@ -140,12 +144,29 @@ describe("integrity checks", () => {
     expect(flags.some((f) => f.message.includes("end with another tracking number"))).toBe(true);
   });
 
+  it("accepts GOFO tracking numbers alongside USPS ones without a warning", () => {
+    // TikTok began sending small parcels with GOFO on 09/14.
+    const sales = [
+      sale({ orderRef: "a", tracking: "9234690390470910236904" }),
+      sale({ orderRef: "b", buyer: "someone.else", tracking: "GFUS01073044073024" }),
+    ];
+    expect(checkIntegrity(sales, buildBoxes(sales))).toEqual([]);
+  });
+
+  it("warns about a tracking number in a shape no carrier has used", () => {
+    const sales = [sale({ tracking: "1Z999AA10123456784" })];
+    const flags = checkIntegrity(sales, buildBoxes(sales));
+    expect(
+      flags.some((f) => f.severity === "warning" && f.message.includes("format not seen before")),
+    ).toBe(true);
+  });
+
   it("checks the arithmetic per order, so a multi-item order still balances", () => {
     // An eBay multi-item order carries its shipping, tax and total on the first
     // watch only. Checked row by row, every continuation line would fail.
     const sales = [
-      sale({ platform: "EBAY", orderRef: "29462", netItemPrice: 12, shipping: 12.98, taxAndFees: 1.56, orderTotal: 40.54, tracking: "t1" }),
-      sale({ platform: "EBAY", orderRef: "29462", netItemPrice: 14, shipping: 0, taxAndFees: 0, orderTotal: 0, tracking: "t1", stockNumber: "x" }),
+      sale({ platform: "EBAY", orderRef: "29462", netItemPrice: 12, shipping: 12.98, taxAndFees: 1.56, orderTotal: 40.54, tracking: "9434608106245552015332" }),
+      sale({ platform: "EBAY", orderRef: "29462", netItemPrice: 14, shipping: 0, taxAndFees: 0, orderTotal: 0, tracking: "9434608106245552015332", stockNumber: "x" }),
     ];
     expect(checkIntegrity(sales, buildBoxes(sales))).toEqual([]);
   });
@@ -154,6 +175,18 @@ describe("integrity checks", () => {
     const sales = [sale({ netItemPrice: 41, shipping: 8.99, taxAndFees: 3.06, orderTotal: 99 })];
     const flags = checkIntegrity(sales, buildBoxes(sales));
     expect(flags.some((f) => f.severity === "warning" && f.message.includes("do not add up"))).toBe(true);
+  });
+
+  it("notes a gap of 50 cents or less as information, not a warning", () => {
+    // eBay 30574 on 09/14: $20 + $8.99 + $2.17 against a $31.47 total, shipped
+    // to Colorado — a delivery fee eBay includes with no column of its own.
+    const sales = [
+      sale({ platform: "EBAY", orderRef: "30574", netItemPrice: 20, shipping: 8.99, taxAndFees: 2.17, orderTotal: 31.47, tracking: "9434608106245578021140" }),
+    ];
+    const flags = checkIntegrity(sales, buildBoxes(sales));
+    expect(flags).toHaveLength(1);
+    expect(flags[0].severity).toBe("info");
+    expect(flags[0].message).toContain("30574");
   });
 });
 

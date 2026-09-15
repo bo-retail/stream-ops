@@ -50,3 +50,56 @@ export function expectedFilesFor(shows: readonly DayShow[]): ExpectedFiles {
     describe: parts.length === 0 ? "nothing — no shows ran" : parts.join(" and "),
   };
 }
+
+/** The marketplace each stored file was recognised as, read defensively from its JSON. */
+export function platformsOf(files: unknown): string[] {
+  if (!Array.isArray(files)) return [];
+  return (files as { platform?: unknown }[]).map((f) =>
+    typeof f?.platform === "string" ? f.platform : "UNKNOWN",
+  );
+}
+
+/**
+ * What a loaded report is still missing, or null when it has everything.
+ *
+ * A day can be loaded and still have no eBay sales. 09/11 went in with its two
+ * TikTok exports and no eBay one, read as done everywhere, and its eBay parcels
+ * never reached the packing screen — the one eBay label somebody scanned came up
+ * as "not in any report". So a day is only done when every marketplace that ran
+ * is in its upload.
+ */
+export function missingExports(
+  expected: ExpectedFiles,
+  loadedPlatforms: readonly string[],
+): string | null {
+  const tiktok = loadedPlatforms.filter((p) => p === "TIKTOK").length;
+  const ebay = loadedPlatforms.filter((p) => p === "EBAY").length;
+
+  const parts: string[] = [];
+  if (tiktok < expected.tiktok) {
+    parts.push(
+      tiktok === 0
+        ? `the TikTok export${expected.tiktok === 1 ? "" : "s"}`
+        : `${expected.tiktok - tiktok} of ${expected.tiktok} TikTok exports`,
+    );
+  }
+  if (expected.ebay > 0 && ebay === 0) parts.push("the eBay export");
+
+  return parts.length === 0 ? null : parts.join(" and ");
+}
+
+/**
+ * Marketplaces the day's current report has that a new upload would drop.
+ *
+ * A new upload replaces the day's report: its sales are the ones counted, and
+ * open boxes it does not mention are removed. So uploading only the missing
+ * eBay file for a day that already has its TikTok exports would quietly take
+ * away the TikTok sales and every unpacked TikTok box. That is refused instead.
+ */
+export function platformsDropped(
+  previous: readonly string[],
+  next: readonly string[],
+): string[] {
+  const now = new Set(next);
+  return [...new Set(previous)].filter((p) => (p === "TIKTOK" || p === "EBAY") && !now.has(p));
+}
