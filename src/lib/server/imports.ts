@@ -1,6 +1,8 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db";
+import { BUSINESS_SHORT } from "@/lib/domain/business";
+import type { Business } from "@/lib/domain/business";
 import { toDbDate } from "@/lib/domain/dates";
 import { buildBoxes, checkIntegrity, summariseDay } from "@/lib/domain/imports/boxes";
 import type { Box } from "@/lib/domain/imports/boxes";
@@ -44,6 +46,7 @@ const cents = (value: number) => Math.round(value * 100);
 function toSalesRow(sale: WatchSale, batchId: string) {
   return {
     batchId,
+    business: sale.business,
     platform: sale.platform,
     show: sale.show,
     showDate: toDbDate(sale.showDate),
@@ -99,6 +102,8 @@ export function readFiles(files: UploadedFile[]): {
   flags: ImportFlag[];
   boxes: Box[];
   showDate: DateISO | null;
+  /** Which kind of show these files are. Null when nothing readable was found. */
+  business: Business | null;
   fileInfo: { name: string; platform: string; sha256: string; bytes: number }[];
 } {
   const flags: ImportFlag[] = [];
@@ -149,6 +154,26 @@ export function readFiles(files: UploadedFile[]): {
     });
   }
 
+  /*
+    One upload is one kind of show.
+
+    The two sell through separate seller accounts and are scheduled, staffed and
+    paid separately, so a single upload holding both would have to be split
+    before any of it could be written — and every downstream row, the batch
+    included, carries exactly one business. Refusing is honest; guessing a
+    business for the batch would put one side's sales under the other's name.
+  */
+  const businesses = new Set(sales.map((s) => s.business));
+  if (businesses.size > 1) {
+    const names = [...businesses].map((b) => BUSINESS_SHORT[b]).join(" and ");
+    flags.push({
+      severity: "blocking",
+      message:
+        `These files mix ${names} shows. Upload each on its own — they are separate reports, ` +
+        `and mixing them would put one show's sales under the other's name.`,
+    });
+  }
+
   const boxes = buildBoxes(sales);
   flags.push(...checkIntegrity(sales, boxes));
 
@@ -172,7 +197,10 @@ export function readFiles(files: UploadedFile[]): {
     flags.push({ severity: "blocking", message: "No show date could be determined." });
   }
 
-  return { sales, dropped, flags, boxes, showDate, fileInfo };
+  // Exactly one by the time this returns — anything else is blocking above.
+  const business = businesses.size === 1 ? [...businesses][0] : null;
+
+  return { sales, dropped, flags, boxes, showDate, business, fileInfo };
 }
 
 /**
@@ -194,7 +222,7 @@ export async function runImport(
   files: UploadedFile[],
   uploadedById: string,
 ): Promise<ImportOutcome> {
-  const { sales, dropped, flags, boxes, showDate, fileInfo } = readFiles(files);
+  const { sales, dropped, flags, boxes, showDate, business, fileInfo } = readFiles(files);
 
   /*
     An upload that would take a marketplace away from a day.
@@ -205,9 +233,19 @@ export async function runImport(
     dropped every TikTok sale and every unpacked TikTok box for the day. So an
     upload has to carry every marketplace the day already has.
   */
-  if (showDate !== null) {
+  if (showDate !== null && business !== null) {
+    /*
+      Scoped to this upload's own kind of show.
+
+      A watch report and a diamond report for one day are two separate reports
+      and neither replaces the other, so a diamond upload must not be measured
+      against what the watch side has loaded. Unscoped, this is what refused
+      Flora's diamond file on 09/16: the watch day was already in, the diamond
+      file did not contain it, and the guard read that as taking a marketplace
+      away.
+    */
     const current = await prisma.importBatch.findFirst({
-      where: { showDate: toDbDate(showDate), status: "OK" },
+      where: { business, showDate: toDbDate(showDate), status: "OK" },
       orderBy: { uploadedAt: "desc" },
       select: { files: true },
     });
@@ -217,12 +255,13 @@ export async function runImport(
     );
     if (lost.length > 0) {
       const names = lost.map((p) => (p === "TIKTOK" ? "TikTok" : "eBay")).join(" and ");
+      const whose = business === "WATCH" ? "" : `${BUSINESS_SHORT[business]} `;
       flags.push({
         severity: "blocking",
         message:
-          `${showDate} already has its ${names} report loaded, and these files do not include it. ` +
-          `A new upload replaces the day's report, so this would remove those sales and their unpacked ` +
-          `boxes. Upload all of the day's files together.`,
+          `${showDate} already has its ${whose}${names} report loaded, and these files do not ` +
+          `include it. A new upload replaces that report, so this would remove those sales and ` +
+          `their unpacked boxes. Upload all of this show's files together.`,
       });
     }
   }
@@ -234,6 +273,7 @@ export async function runImport(
     // to be able to look at afterwards.
     const batch = await prisma.importBatch.create({
       data: {
+        business: business ?? "WATCH",
         showDate: toDbDate(showDate ?? "1970-01-01"),
         status: "BLOCKED",
         uploadedById,
@@ -264,6 +304,7 @@ export async function runImport(
     async (tx) => {
       const batch = await tx.importBatch.create({
         data: {
+          business: business ?? "WATCH",
           showDate: toDbDate(showDate),
           status: "OK",
           uploadedById,
@@ -301,6 +342,7 @@ export async function runImport(
         await tx.package.createMany({
           data: fresh.map((b) => ({
             trackingNumber: b.tracking,
+            business: business ?? "WATCH",
             platform: b.platform,
             showDate: toDbDate(b.showDate),
             buyer: b.buyer,
@@ -379,10 +421,18 @@ export async function runImport(
         }
       }
 
-      // Boxes that were on this day and are no longer in the file. Only ones
-      // nobody has touched; the foreign key refuses the rest anyway.
+      /*
+        Boxes that were on this day and are no longer in the file. Only ones
+        nobody has touched; the foreign key refuses the rest anyway.
+
+        Scoped to this upload's own kind of show, and that scope is doing real
+        work: a day holds a watch report and a diamond report side by side, and
+        without it a diamond upload would sweep away every unpacked watch box on
+        the same date for the crime of not appearing in a diamond file.
+      */
       await tx.package.deleteMany({
         where: {
+          business: business ?? "WATCH",
           showDate: toDbDate(showDate),
           status: "OPEN",
           trackingNumber: { notIn: trackings.length > 0 ? trackings : ["-"] },

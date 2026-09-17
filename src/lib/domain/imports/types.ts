@@ -6,6 +6,7 @@
  * against real exports without a running app.
  */
 
+import type { Business } from "../business";
 import type { DateISO } from "../types";
 
 export type ImportPlatform = "TIKTOK" | "EBAY";
@@ -25,6 +26,16 @@ export type ShowKey = "TikTok AM" | "TikTok PM" | "eBay AM" | "eBay PM";
  * later to recover a column we chose not to keep would be the mistake.
  */
 export interface WatchSale {
+  /**
+   * Which kind of show sold it — watches or diamonds.
+   *
+   * Read from the file itself: a TikTok export names its own shop in `Creator
+   * Handle`, and that is the only thing that can tell two same-day TikTok files
+   * apart, since both shows run the same hours. eBay names no seller anywhere
+   * in its 82 columns, so while only watches sell there an eBay file is a watch
+   * file.
+   */
+  business: Business;
   platform: ImportPlatform;
   show: ShowKey;
   showDate: DateISO;

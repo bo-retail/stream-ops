@@ -192,6 +192,14 @@ export function parseEbayFile(file: EbayFile): ParseResult {
       const first = index === 0;
 
       sales.push({
+        /*
+          eBay names no seller account anywhere in its 82 columns, so a file
+          cannot say whose it is. Only watches sell on eBay, so that is what an
+          eBay file is — and the day diamonds start selling there, this is the
+          line that has to change first, because nothing else could tell two
+          eBay exports apart.
+        */
+        business: "WATCH",
         platform: "EBAY",
         show,
         showDate: date,

@@ -12,6 +12,7 @@
 
 import { TZDate } from "@date-fns/tz";
 import type { DateISO } from "../types";
+import { businessOfHandle } from "../business";
 import { checkHeaders, parseCsv, toRecords } from "./csv";
 import {
   TIKTOK_HEADERS,
@@ -160,6 +161,71 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
   const show: ShowKey = half === "AM" ? "TikTok AM" : "TikTok PM";
   const showDate = dateOf(earliest);
 
+  /* ------------------------------------------- which shop exported it (R16) */
+
+  /*
+    The file names its own shop, and that is the only thing that can place it.
+
+    Watches and diamonds sell through separate seller accounts at the same
+    hours — on 09/15 diamonds ran 10:32-16:01 Pacific against the watch day
+    show's 10:06-16:05 — so the clock tells day from night and never one
+    business from the other.
+
+    An unknown shop stops the file dead rather than being guessed at. A report
+    placed on the wrong show pays that show's pair commission out of takings
+    that were never theirs, and nothing downstream would ever notice. Adding a
+    shop is one line in `domain/business`.
+  */
+  const handles = new Set(
+    records.map((r) => (r["Creator Handle"] ?? "").trim()).filter((h) => h !== ""),
+  );
+
+  if (handles.size === 0) {
+    return {
+      sales: [],
+      dropped: [],
+      flags: [
+        {
+          severity: "blocking",
+          message:
+            `${file.name}: no Creator Handle on any row, so there is no way to tell which shop ` +
+            `this is. Nothing was loaded.`,
+        },
+      ],
+    };
+  }
+  if (handles.size > 1) {
+    return {
+      sales: [],
+      dropped: [],
+      flags: [
+        {
+          severity: "blocking",
+          message:
+            `${file.name}: rows come from ${handles.size} different shops (${[...handles].join(", ")}). ` +
+            `One export is one shop. Nothing was loaded.`,
+        },
+      ],
+    };
+  }
+
+  const handle = [...handles][0];
+  const business = businessOfHandle(handle);
+  if (!business) {
+    return {
+      sales: [],
+      dropped: [],
+      flags: [
+        {
+          severity: "blocking",
+          message:
+            `${file.name} is from the shop "${handle}", which this system does not know. It has ` +
+            `not been loaded, and nothing else on the day was affected.`,
+        },
+      ],
+    };
+  }
+
   /* ------------------------------------------------------------ every row */
 
   const sales: WatchSale[] = [];
@@ -216,6 +282,7 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
     const paid = parseTikTokDateTime(record["Paid Time"]);
 
     sales.push({
+      business,
       platform: "TIKTOK",
       show,
       showDate,

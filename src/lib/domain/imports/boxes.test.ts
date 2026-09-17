@@ -4,6 +4,7 @@ import type { WatchSale } from "./types";
 
 function sale(overrides: Partial<WatchSale> = {}): WatchSale {
   return {
+    business: "WATCH",
     platform: "TIKTOK",
     show: "TikTok AM",
     showDate: "2026-09-08",

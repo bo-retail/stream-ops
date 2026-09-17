@@ -56,6 +56,9 @@ function paidRow(overrides: Record<string, string> = {}): Record<string, string>
     "Product Category": "Quartz Watches",
     "Package ID": "1153412345678901234\t",
     "Order Channel": "LIVE",
+    // The shop that exported it, which is what places the file. Every real
+    // export carries one on every row.
+    "Creator Handle": "vaultshowlive",
     ...overrides,
   };
 }
@@ -258,5 +261,63 @@ describe("the header contract", () => {
     const result = parseTikTokFile({ name: "x.csv", text });
     expect(result.sales).toHaveLength(1);
     expect(result.flags.some((f) => f.message.includes("Something New"))).toBe(true);
+  });
+});
+
+describe("which shop exported it", () => {
+  /*
+    The only thing that can place a TikTok file.
+
+    Watches and diamonds sell through separate seller accounts at the same
+    hours, so the clock tells day from night and never one business from the
+    other. Get this wrong and a show's pair are paid commission out of takings
+    that were never theirs, with nothing downstream to notice.
+  */
+
+  it("reads the watch shop", () => {
+    const result = parseTikTokFile({ name: "x.csv", text: tiktokCsv([paidRow()]) });
+    expect(result.sales[0].business).toBe("WATCH");
+  });
+
+  it("reads the diamond shop", () => {
+    const text = tiktokCsv([paidRow({ "Creator Handle": "caratclublive" })]);
+    const result = parseTikTokFile({ name: "x.csv", text });
+    expect(result.sales).toHaveLength(1);
+    expect(result.sales[0].business).toBe("DIAMOND");
+  });
+
+  it("refuses a shop it does not know, and loads nothing", () => {
+    const text = tiktokCsv([paidRow({ "Creator Handle": "someoneelselive" })]);
+    const result = parseTikTokFile({ name: "x.csv", text });
+    expect(result.sales).toHaveLength(0);
+    expect(result.flags[0].severity).toBe("blocking");
+    expect(result.flags[0].message).toContain("someoneelselive");
+  });
+
+  it("refuses a file with no shop on it at all", () => {
+    const text = tiktokCsv([paidRow({ "Creator Handle": "" })]);
+    const result = parseTikTokFile({ name: "x.csv", text });
+    expect(result.sales).toHaveLength(0);
+    expect(result.flags[0].severity).toBe("blocking");
+    expect(result.flags[0].message).toContain("no Creator Handle");
+  });
+
+  it("refuses a file that mixes two shops", () => {
+    // One export is one shop. A file holding both could not be placed on either
+    // without splitting it, and splitting a report is not something to guess at.
+    const text = tiktokCsv([
+      paidRow(),
+      paidRow({ "Order ID": "576461234567890124\t", "Creator Handle": "caratclublive" }),
+    ]);
+    const result = parseTikTokFile({ name: "x.csv", text });
+    expect(result.sales).toHaveLength(0);
+    expect(result.flags[0].severity).toBe("blocking");
+    expect(result.flags[0].message).toContain("2 different shops");
+  });
+
+  it("is not fooled by the trailing tabs TikTok writes", () => {
+    const text = tiktokCsv([paidRow({ "Creator Handle": "caratclublive\t" })]);
+    const result = parseTikTokFile({ name: "x.csv", text });
+    expect(result.sales[0]?.business).toBe("DIAMOND");
   });
 });
