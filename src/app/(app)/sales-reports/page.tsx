@@ -155,6 +155,17 @@ export default async function SalesReportsPage() {
                               : "Loaded"}
                           </Badge>
                         )}
+                        {/* A later attempt that did not take. Said underneath
+                            the day's real state rather than replacing it — the
+                            floor is packing against the report above. */}
+                        {day.refusedAfter ? (
+                          <p className="mt-1 text-xs text-danger-700">
+                            a later upload was refused
+                            {day.refusedAfter.uploadedByName
+                              ? ` (${day.refusedAfter.uploadedByName.split(" ")[0]})`
+                              : ""}
+                          </p>
+                        ) : null}
                       </Td>
                       <Td className="tabular">{loaded ? day.report!.watchCount : "—"}</Td>
                       <Td className="tabular">{day.boxesTotal || "—"}</Td>

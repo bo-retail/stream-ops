@@ -21,6 +21,33 @@
  * count, so the audit can always show both what happened and what was paid.
  */
 
+/**
+ * Whether the show an entry is attached to also bounds what it pays.
+ *
+ * Deliberately separate from "does this entry have a show", which is answered
+ * by whether there is one. Those two were once the same expression, and the
+ * result was that every schedule-printed row on the Payroll screen read "No
+ * scheduled show" — the one case where the show is certain. The hours were
+ * always right; only the label lied. Keeping the pay rule in its own named
+ * function is what stops them being merged again by somebody tidying up.
+ *
+ * Only a self-clocked entry is clamped. Clamping answers "they turned up
+ * twenty minutes early, do we pay it", which is a question that only arises
+ * when somebody pressed a button. A SCHEDULE entry's times *are* the shift, so
+ * clamping it is a no-op until the boss corrects one — at which point it would
+ * quietly undo the correction. An ADMIN entry was typed deliberately, with a
+ * reason.
+ *
+ * A cancelled show is not a shift anybody was meant to work, so it stops
+ * bounding the hours: whatever they actually clocked stands.
+ */
+export function showClampsPay(
+  source: "SELF" | "ADMIN" | "SCHEDULE",
+  showStatus: "SCHEDULED" | "CANCELLED" | null,
+): boolean {
+  return source === "SELF" && showStatus === "SCHEDULED";
+}
+
 export interface ClockWindow {
   clockInAt: Date;
   /** Null while the person is still clocked in. */

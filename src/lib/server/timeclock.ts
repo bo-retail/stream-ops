@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { fromDbDate, toDbDate } from "@/lib/domain/dates";
-import { paidWindow } from "@/lib/domain/hours";
+import { paidWindow, showClampsPay } from "@/lib/domain/hours";
 import { periodFor } from "@/lib/domain/periods";
 import type { Period } from "@/lib/domain/periods";
 import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
@@ -120,29 +120,32 @@ function toView(row: Row, timezone: string): TimeEntryView {
   const { clock, day } = formatters(timezone);
 
   /*
-    Only a self-clocked entry is measured against a shift.
+    Two separate questions, which used to share one answer and must not.
 
-    Clamping exists to answer "they turned up twenty minutes early, do we pay
-    it" — a question that only arises when somebody pressed a button. It must
-    not touch the other two sources:
+    WHICH SHOW WAS THIS? — `row.show`, whenever there is one. It is what the
+    timesheet prints against the entry, and a streamer's printed hours always
+    have a show, because the schedule is where they came from.
+
+    WHAT BOUNDS THE PAY? — only a self-clocked entry. Clamping exists to answer
+    "they turned up twenty minutes early, do we pay it", which only arises when
+    somebody pressed a button. It must not touch the other two sources:
 
       SCHEDULE  the times *are* the shift, so clamping is a no-op until the
                 boss corrects one — at which point clamping would quietly undo
                 the correction and pay the original hours anyway.
       ADMIN     somebody typed those hours deliberately, with a reason.
 
-    Historical clocked entries keep their behaviour exactly, which is why this
-    turns on the source rather than on the presence of a show.
+    Conflating them is what made every schedule-printed row on the Payroll
+    screen read "No scheduled show" — the one case where the show is certain.
+    The hours were always right; only the label lied. The pay rule now lives in
+    `showClampsPay`, where it is tested and cannot quietly absorb the other
+    question again.
   */
-  const clampable = row.source === "SELF";
-
-  // A cancelled show is not a shift anybody was meant to work, so it stops
-  // bounding the hours — whatever they actually clocked stands.
-  const shift = clampable && row.show && row.show.status === "SCHEDULED" ? row.show : null;
+  const clampTo = showClampsPay(row.source, row.show?.status ?? null) ? row.show : null;
 
   const paid = paidWindow(
     { clockInAt: row.clockInAt, clockOutAt: row.clockOutAt },
-    shift ? { startsAt: shift.startsAt, endsAt: shift.endsAt } : null,
+    clampTo ? { startsAt: clampTo.startsAt, endsAt: clampTo.endsAt } : null,
   );
 
   return {
@@ -161,11 +164,17 @@ function toView(row: Row, timezone: string): TimeEntryView {
     paidToHM: paid.to ? clock.format(paid.to) : null,
     paidMinutes: paid.minutes,
 
-    shift: shift
+    // Named whenever the entry has a show, whatever put the hours there. A
+    // cancelled one still says so rather than going blank, because "they were
+    // on a show that got called off" is a different thing from "they were on
+    // nothing", and payroll has to be able to tell them apart.
+    shift: row.show
       ? {
-          label: `${PLATFORM_SHORT[shift.platform]} ${SLOT_SHORT[shift.slot]}`,
-          startHM: clock.format(shift.startsAt),
-          endHM: clock.format(shift.endsAt),
+          label:
+            `${PLATFORM_SHORT[row.show.platform]} ${SLOT_SHORT[row.show.slot]}` +
+            (row.show.status === "CANCELLED" ? " (cancelled)" : ""),
+          startHM: clock.format(row.show.startsAt),
+          endHM: clock.format(row.show.endsAt),
         }
       : null,
     lateMinutes: paid.lateMinutes,

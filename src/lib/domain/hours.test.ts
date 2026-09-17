@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { paidWindow, showForClockIn } from "./hours";
+import { paidWindow, showClampsPay, showForClockIn } from "./hours";
 import type { ShiftWindow } from "./hours";
 
 /** A 13:00–19:00 show on 2026-09-03, in UTC for readability. */
@@ -208,5 +208,44 @@ describe("which show a clock-in belongs to", () => {
       endsAt: new Date("2026-09-02T19:00:00Z"),
     };
     expect(showForClockIn(at("13:00"), [yesterday])).toBeNull();
+  });
+});
+
+describe("what bounds an entry's pay", () => {
+  /*
+    Separate from "which show was this entry against", which is answered by
+    whether there is one at all. The two were once the same expression, and the
+    result was that every schedule-printed row on the Payroll screen read "No
+    scheduled show" — the one case where the show is certain. These tests exist
+    so the pay rule keeps its own answer when somebody next tidies the label.
+  */
+
+  it("clamps a self-clocked entry to its show", () => {
+    // The only case that asks "they turned up twenty minutes early, do we pay
+    // it" — because it is the only one where somebody pressed a button.
+    expect(showClampsPay("SELF", "SCHEDULED")).toBe(true);
+  });
+
+  it("does not clamp hours printed from the schedule", () => {
+    // Those times *are* the shift, so clamping is a no-op until the boss
+    // corrects one, at which point it would quietly undo the correction.
+    expect(showClampsPay("SCHEDULE", "SCHEDULED")).toBe(false);
+  });
+
+  it("does not clamp an admin's entry", () => {
+    // Somebody typed those hours deliberately, with a reason.
+    expect(showClampsPay("ADMIN", "SCHEDULED")).toBe(false);
+  });
+
+  it("stops clamping once the show is cancelled", () => {
+    // A cancelled show is not a shift anybody was meant to work, so whatever
+    // they actually clocked stands.
+    expect(showClampsPay("SELF", "CANCELLED")).toBe(false);
+  });
+
+  it("does not clamp an entry with no show at all", () => {
+    // Shipping, and any streamer who clocked in when they were on nothing.
+    expect(showClampsPay("SELF", null)).toBe(false);
+    expect(showClampsPay("SCHEDULE", null)).toBe(false);
   });
 });

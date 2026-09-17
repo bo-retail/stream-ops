@@ -228,11 +228,42 @@ check("and shows the latest upload, not the refused one", row?.report?.status, "
 check("with nothing missing from it", row?.missing, null);
 check("the cancelled day reports no live shows", days.find((d) => d.dateISO === ALL_CANCELLED)?.liveShows, 0);
 check("the list is newest first", days[0]?.dateISO, today);
+check("with nothing refused after it", row?.refusedAfter, null);
+
+/* ------------------------- a refusal after a good report does not erase it */
+
+/*
+  09/16 on the live system: the watch files loaded and made 315 boxes, then a
+  diamond file was uploaded and correctly refused. The day then read "Refused"
+  with an empty watches column while 315 real boxes were being packed against
+  the good report — because the newest upload won whatever became of it.
+
+  A refused upload creates nothing, so it cannot be what the day says. It is
+  reported alongside instead.
+*/
+const refusedLater = await prisma.importBatch.create({
+  data: {
+    showDate: toDbDate(HAS_SHOWS_NO_REPORT),
+    status: "BLOCKED",
+    uploadedAt: new Date(Date.now() + 3_000),
+    files: [{ name: "check-someone-elses.csv", platform: "TIKTOK" }],
+    flags: [{ severity: "blocking", message: "check fixture" }],
+  },
+  select: { id: true },
+});
+
+const afterRefusal = (await listShowDays()).find((d) => d.dateISO === HAS_SHOWS_NO_REPORT);
+check("the day still shows its good report", afterRefusal?.report?.status, "OK");
+check("and still its figures, not the refusal's", afterRefusal?.report?.batchId, ok.id);
+check("the refusal is reported separately", afterRefusal?.refusedAfter?.batchId, refusedLater.id);
+check("and the day is not chased again", (await missingReportDays()).includes(HAS_SHOWS_NO_REPORT), false);
 
 /* ------------------------------------------------------------------ cleanup */
 
 console.log("\nCleaning up.");
-await prisma.importBatch.deleteMany({ where: { id: { in: [blocked.id, partial.id, ok.id] } } });
+await prisma.importBatch.deleteMany({
+  where: { id: { in: [blocked.id, partial.id, ok.id, refusedLater.id] } },
+});
 await clearFixtures();
 
 const left = await prisma.release.count({ where: { id: { in: created } } });

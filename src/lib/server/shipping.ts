@@ -43,6 +43,16 @@ export interface ShowDay {
     boxCount: number;
     droppedCount: number;
   } | null;
+  /**
+   * A later upload that was turned away, when the day already had a good one.
+   *
+   * These are two different facts and the day has to be able to state both. The
+   * report above is what the floor is packing against; this is somebody's
+   * attempt to add to it that did not take. Reporting only the newer attempt —
+   * which is what this used to do — made 09/16 read "Refused" with no watches
+   * while 315 real boxes from the good upload sat there being packed.
+   */
+  refusedAfter: { batchId: string; uploadedAt: Date; uploadedByName: string | null } | null;
   boxesTotal: number;
   boxesSent: number;
 }
@@ -105,12 +115,25 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
   }
   for (const row of batches) dates.add(fromDbDate(row.showDate));
 
-  // The most recent upload wins; the earlier ones stay on record but are not
-  // what the day currently says.
-  const latest = new Map<DateISO, (typeof batches)[number]>();
+  /*
+    What the day says, and separately what was turned away afterwards.
+
+    The most recent *successful* upload is the day's report: it is what made the
+    boxes the floor is packing and the sales payroll will read. A refused upload
+    made nothing, so it cannot replace that — it can only be reported alongside.
+
+    This used to take the newest upload whatever became of it, which is how
+    09/16 came to read "Refused" with an empty watches column while 315 real
+    boxes from the good upload were being scanned. The box count came from the
+    boxes themselves and the watch count from the batch, so the two disagreed on
+    screen with nothing wrong in the data.
+  */
+  const latestOk = new Map<DateISO, (typeof batches)[number]>();
+  const latestAny = new Map<DateISO, (typeof batches)[number]>();
   for (const batch of batches) {
     const key = fromDbDate(batch.showDate);
-    if (!latest.has(key)) latest.set(key, batch);
+    if (!latestAny.has(key)) latestAny.set(key, batch);
+    if (batch.status === "OK" && !latestOk.has(key)) latestOk.set(key, batch);
   }
 
   const boxTotals = new Map<DateISO, { total: number; sent: number }>();
@@ -125,7 +148,13 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
   return [...dates]
     .sort((a, b) => b.localeCompare(a))
     .map((dateISO) => {
-      const batch = latest.get(dateISO);
+      // A day with no successful upload still has to show its refused one —
+      // otherwise a blocked morning looks identical to one nobody has touched.
+      const newest = latestAny.get(dateISO);
+      const batch = latestOk.get(dateISO) ?? newest;
+      const refused =
+        newest && newest.status === "BLOCKED" && batch && newest.id !== batch.id ? newest : null;
+
       const counts = boxTotals.get(dateISO) ?? { total: 0, sent: 0 };
       const dayShows = showsByDate.get(dateISO) ?? [];
 
@@ -159,6 +188,13 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
               watchCount: batch.watchCount,
               boxCount: batch.boxCount,
               droppedCount: batch.droppedCount,
+            }
+          : null,
+        refusedAfter: refused
+          ? {
+              batchId: refused.id,
+              uploadedAt: refused.uploadedAt,
+              uploadedByName: refused.uploadedBy?.name ?? null,
             }
           : null,
         boxesTotal: counts.total,
