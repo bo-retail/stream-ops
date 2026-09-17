@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth/guards";
+import { BUSINESS_SHORT } from "@/lib/domain/business";
 import { formatDate, isDateISO, minutesToHours } from "@/lib/domain/dates";
 import { formatPeriod, periodFor } from "@/lib/domain/periods";
 import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
@@ -78,7 +79,10 @@ export async function GET(request: NextRequest) {
 
     const row = sheet.addRow({
       date: formatDate(show.dateISO, "long"),
-      show: `${PLATFORM_SHORT[show.platform]} ${SLOT_SHORT[show.slot]}`,
+      // Named for both kinds, not just diamonds. A printed sheet is read away
+      // from the app by somebody who cannot hover anything to find out which
+      // shop a shift was for.
+      show: `${BUSINESS_SHORT[show.business]} ${PLATFORM_SHORT[show.platform]} ${SLOT_SHORT[show.slot]}`,
       start: show.startHM,
       end: show.endHM,
       // A cancelled shift is shown so nobody wonders where it went, but it

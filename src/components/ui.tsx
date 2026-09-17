@@ -150,7 +150,16 @@ export function Field({
   );
 }
 
-type Tone = "neutral" | "brand" | "ok" | "warn" | "danger" | "tiktok" | "ebay";
+type Tone =
+  | "neutral"
+  | "brand"
+  | "ok"
+  | "warn"
+  | "danger"
+  | "tiktok"
+  | "ebay"
+  | "watch"
+  | "diamond";
 
 const BADGE_TONES: Record<Tone, string> = {
   neutral: "bg-canvas text-ink-muted ring-line-strong",
@@ -160,6 +169,11 @@ const BADGE_TONES: Record<Tone, string> = {
   danger: "bg-danger-50 text-danger-700 ring-danger-200",
   tiktok: "bg-slate-900 text-white ring-slate-900",
   ebay: "bg-blue-50 text-blue-700 ring-blue-200",
+  // Which kind of show. Kept clear of every other colour a show row uses —
+  // near-black TikTok, blue eBay, amber Day, indigo Night, red Live — so the
+  // two are told apart at a glance and neither is mistaken for a slot.
+  watch: "bg-slate-100 text-slate-700 ring-slate-300",
+  diamond: "bg-violet-50 text-violet-700 ring-violet-300",
 };
 
 export function Badge({

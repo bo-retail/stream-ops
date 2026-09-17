@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth/guards";
+import { BUSINESS_LABEL } from "@/lib/domain/business";
 import { formatDate, minutesToHours } from "@/lib/domain/dates";
 import { DAILY_SHOWS, PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
 import { getReleaseView } from "@/lib/server/schedule";
@@ -50,7 +51,10 @@ export async function GET(request: NextRequest) {
 
   grid.mergeCells("A1:E1");
   const title = grid.getCell("A1");
-  title.value = `Schedule — ${view.release.label}`;
+  // The kind of show first, because a release covers exactly one and the name
+  // is whatever somebody typed. A printed rota headed only "late September"
+  // does not say whose shows are on it.
+  title.value = `${BUSINESS_LABEL[view.release.business]} schedule — ${view.release.label}`;
   title.font = { bold: true, size: 14 };
   grid.getRow(1).height = 26;
 

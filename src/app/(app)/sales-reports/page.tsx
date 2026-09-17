@@ -15,6 +15,7 @@ import {
 } from "@/components/ui";
 import { MissingReports } from "@/components/missing-reports";
 import { requireShippingDirector } from "@/lib/auth/guards";
+import { BUSINESS_SHORT } from "@/lib/domain/business";
 import { formatDate } from "@/lib/domain/dates";
 import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
 import { listShowDays, missingReports } from "@/lib/server/shipping";
@@ -25,16 +26,22 @@ import { UploadForm } from "./upload-form";
 
 export const metadata: Metadata = { title: "Sales report entry" };
 
-/** "TikTok Night · eBay Night", cancelled ones struck through. */
+/**
+ * "Watch TikTok Night · Diamond TikTok Night", cancelled ones struck through.
+ *
+ * Both kinds are named. On a day that ran both, "TikTok Night" twice would be
+ * the same words against two different shows — and on a day that ran one, a
+ * bare line asks the reader to know which kind it was.
+ */
 function shows(list: DayShow[]) {
   if (list.length === 0) return <span className="text-ink-subtle">—</span>;
   return (
     <span className="text-sm">
       {list.map((s, i) => (
-        <span key={`${s.platform}-${s.slot}`}>
+        <span key={`${s.business}-${s.platform}-${s.slot}`}>
           {i > 0 ? <span className="text-ink-subtle"> · </span> : null}
           <span className={s.cancelled ? "text-ink-subtle line-through" : "text-ink"}>
-            {PLATFORM_SHORT[s.platform]} {SLOT_SHORT[s.slot]}
+            {BUSINESS_SHORT[s.business]} {PLATFORM_SHORT[s.platform]} {SLOT_SHORT[s.slot]}
           </span>
         </span>
       ))}

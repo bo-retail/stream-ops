@@ -30,14 +30,13 @@ export const LOOK_BACK_DAYS = 14;
 /**
  * What one line of the checklist is called.
  *
- * Diamonds are named and watches are not, for the same reason as everywhere
- * else: watches are the great majority of every list, and labelling all of them
- * would carry no information. eBay takes no slot — its one export covers the
- * whole day however many eBay shows ran.
+ * Both kinds are named, so the person uploading is told which file a line wants
+ * rather than having to know that an unmarked line means watches. eBay takes no
+ * slot — its one export covers the whole day however many eBay shows ran.
  */
 function labelLine(business: Business, platform: Platform, slot: Slot | null): string {
   const what = `${PLATFORM_SHORT[platform]}${slot ? ` ${SLOT_SHORT[slot]}` : ""}`;
-  return business === "WATCH" ? what : `${BUSINESS_SHORT[business]} ${what}`;
+  return `${BUSINESS_SHORT[business]} ${what}`;
 }
 
 export interface ShowDay {
