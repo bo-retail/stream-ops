@@ -13,6 +13,7 @@ import {
   resolveSlotInstants,
   toDbDate,
 } from "@/lib/domain/dates";
+import { BUSINESS_LABEL } from "@/lib/domain/business";
 import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
 import { getSettings } from "@/lib/server/settings";
@@ -38,6 +39,10 @@ const MAX_DAYS = 92;
 
 const CreateSchema = z
   .object({
+    // Chosen once, here, and never again: every show in the release inherits
+    // it, and changing it afterwards would move shows between two kinds of
+    // show that are scheduled, staffed and paid separately.
+    business: z.enum(["WATCH", "DIAMOND"]),
     name: z.string().trim().max(120).optional(),
     startDate: z.string().refine(isDateISO, "Pick a start date."),
     endDate: z.string().refine(isDateISO, "Pick an end date."),
@@ -66,13 +71,14 @@ export async function createRelease(
   }
 
   const parsed = CreateSchema.safeParse({
+    business: formData.get("business") ?? "WATCH",
     name: formData.get("name") ?? undefined,
     startDate: formData.get("startDate"),
     endDate: formData.get("endDate"),
   });
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
-  const { name, startDate, endDate } = parsed.data;
+  const { business, name, startDate, endDate } = parsed.data;
   const days = datesBetween(startDate, endDate).length;
   if (days > MAX_DAYS) {
     return { error: `That is ${days} days. A release covers at most ${MAX_DAYS}.` };
@@ -80,6 +86,7 @@ export async function createRelease(
 
   const release = await prisma.release.create({
     data: {
+      business,
       name: name?.trim() || null,
       startDate: toDbDate(startDate),
       endDate: toDbDate(endDate),
@@ -94,7 +101,7 @@ export async function createRelease(
       entityId: release.id,
       action: "CREATE",
       actorId: boss.id,
-      summary: `Started a release for ${formatDateRange(startDate, endDate)}`,
+      summary: `Started a ${BUSINESS_LABEL[business].toLowerCase()} release for ${formatDateRange(startDate, endDate)}`,
     },
   });
 
@@ -346,6 +353,94 @@ export async function setReleaseRules(releaseId: string, input: unknown): Promis
   return { ok: "Rules saved for this release." };
 }
 
+/* ------------------------------------------------------------- who it is for */
+
+/**
+ * Sets who a release is for.
+ *
+ * Two things at once, deliberately: these are the people asked for their
+ * availability, and the only people who may be seated on its shows. One list
+ * means "why is she not in the picker" always answers "she is not on the
+ * release", rather than two settings that can quietly disagree.
+ *
+ * Replaces the whole list rather than adding and removing, because the screen
+ * sends what it shows — a tick box that is off has to be able to mean off.
+ *
+ * Only streamers can be on it. An admin or a packer put on a release would
+ * appear in the seat picker, and neither is ever on a show.
+ */
+export async function setReleaseMembers(
+  releaseId: string,
+  userIds: string[],
+): Promise<ReleaseState> {
+  let boss;
+  try {
+    boss = await requireBossOrThrow();
+  } catch {
+    return { error: "Only an admin can do that." };
+  }
+
+  const release = await prisma.release.findUnique({
+    where: { id: releaseId },
+    select: { id: true, scheduleStatus: true },
+  });
+  if (!release) return { error: "That release no longer exists." };
+
+  const wanted = [...new Set(userIds)];
+  const eligible = await prisma.user.findMany({
+    where: { id: { in: wanted }, isActive: true, role: "EMPLOYEE", team: "STREAMING" },
+    select: { id: true },
+  });
+  const allowed = new Set(eligible.map((u) => u.id));
+  const refused = wanted.filter((id) => !allowed.has(id));
+  if (refused.length > 0) {
+    return { error: "Only active streamers can be put on a release." };
+  }
+
+  /*
+    Somebody already seated who is being taken off the list.
+
+    Their assignments are left alone rather than deleted — removing them would
+    silently empty seats on a schedule that may already be published — so the
+    boss is told and decides.
+  */
+  const stranded = await prisma.assignment.count({
+    where: { show: { releaseId }, userId: { notIn: [...allowed] } },
+  });
+
+  const before = await prisma.releaseMember.count({ where: { releaseId } });
+
+  await prisma.$transaction([
+    prisma.releaseMember.deleteMany({ where: { releaseId, userId: { notIn: [...allowed] } } }),
+    ...[...allowed].map((userId) =>
+      prisma.releaseMember.upsert({
+        where: { releaseId_userId: { releaseId, userId } },
+        create: { releaseId, userId },
+        update: {},
+      }),
+    ),
+    prisma.auditLog.create({
+      data: {
+        entityType: "Release",
+        entityId: releaseId,
+        action: "SET_MEMBERS",
+        actorId: boss.id,
+        summary: `Release is for ${allowed.size} person(s)${before === 0 ? " (was everybody)" : ""}`,
+      },
+    }),
+  ]);
+
+  refresh(releaseId);
+  if (stranded > 0) {
+    return {
+      ok:
+        `Saved. ${stranded} seat(s) on this release are filled by somebody no longer on it — ` +
+        `they have been left in place, so take them off the schedule if that is wrong.`,
+    };
+  }
+  return { ok: `Saved. This release is for ${allowed.size} person(s).` };
+}
+
 const SendSchema = z.object({
   releaseId: z.string().min(1),
   dueAt: z.string().optional(),
@@ -374,13 +469,24 @@ export async function sendRelease(
       status: true,
       startDate: true,
       endDate: true,
-      _count: { select: { shows: true } },
+      _count: { select: { shows: true, members: true } },
     },
   });
   if (!release) return { error: "That release no longer exists." };
   if (release.status === "OPEN") return { error: "That release is already out." };
   if (release._count.shows === 0) {
     return { error: "There are no shows in it yet. Add some before sending it out." };
+  }
+  /*
+    An empty member list reads as everybody, which is what every release made
+    before there was a list did — and is the right reading for those.
+
+    It must not become a way to create one by accident, though. A new release
+    starts with nobody on it, so sending it without choosing would quietly go to
+    the whole team, including everyone who never works this kind of show.
+  */
+  if (release._count.members === 0) {
+    return { error: "Nobody is on this release yet. Choose who it goes to before sending it." };
   }
 
   const raw = parsed.data.dueAt?.trim();

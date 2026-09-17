@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Badge, Card, CardHeader, EmptyState, PageHeader, Stat } from "@/components/ui";
 import { requireBoss } from "@/lib/auth/guards";
+import { BUSINESS_SHORT } from "@/lib/domain/business";
 import { addDays } from "@/lib/domain/dates";
 import { listReleases } from "@/lib/server/releases";
 import { getWeekContext } from "@/lib/server/settings";
@@ -53,6 +54,12 @@ export default async function ReleasesPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate text-sm font-medium text-ink">{release.label}</span>
+                      {/* Two releases can cover the same fortnight, one of
+                          each kind, so this is what tells them apart in a list
+                          where the dates are identical. */}
+                      <Badge tone={release.business === "DIAMOND" ? "brand" : "neutral"}>
+                        {BUSINESS_SHORT[release.business]}
+                      </Badge>
                       <StatusBadge status={release.status} />
                       {release.scheduleStatus === "PUBLISHED" ? (
                         <Badge tone="brand">Schedule published v{release.version}</Badge>

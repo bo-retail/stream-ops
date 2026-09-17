@@ -2,7 +2,10 @@ import "server-only";
 import { cache } from "react";
 import { prisma } from "@/lib/db";
 import { datesBetween, formatDateRange, fromDbDate, toDbDate } from "@/lib/domain/dates";
+import type { Business } from "@/lib/domain/business";
 import type { DateISO } from "@/lib/domain/types";
+import { listStreamers } from "./team";
+import type { TeamMember } from "./team";
 
 /**
  * Releases: the unit the whole app turns on.
@@ -21,6 +24,8 @@ export type ReleaseStatus = "DRAFT" | "OPEN" | "CLOSED";
 
 export interface ReleaseSummary {
   id: string;
+  /** Watches or diamonds. Chosen at creation; every show in it inherits it. */
+  business: Business;
   name: string | null;
   /** "16–30 September 2026", or the name if he gave it one. */
   label: string;
@@ -57,6 +62,7 @@ export function releaseLabel(release: {
 
 const SUMMARY_SELECT = {
   id: true,
+  business: true,
   name: true,
   startDate: true,
   endDate: true,
@@ -73,6 +79,7 @@ const SUMMARY_SELECT = {
 
 type SummaryRow = {
   id: string;
+  business: Business;
   name: string | null;
   startDate: Date;
   endDate: Date;
@@ -135,6 +142,7 @@ async function toSummaries(rows: SummaryRow[], askedCount: number): Promise<Rele
     const showCount = showCounts.get(row.id) ?? 0;
     return {
       id: row.id,
+      business: row.business,
       name: row.name,
       label: releaseLabel({ name: row.name, startDate, endDate }),
       dateRange: formatDateRange(startDate, endDate),
@@ -200,6 +208,40 @@ export async function listOpenReleases(): Promise<ReleaseSummary[]> {
     countAsked(),
   ]);
   return toSummaries(rows, asked);
+}
+
+/**
+ * Who a release is for, as a set of user ids.
+ *
+ * Empty means everybody. That is not a placeholder: every release created
+ * before there was a list genuinely did go to the whole team, and reading it
+ * that way is what lets those releases keep working untouched. A release made
+ * from now on cannot be sent until somebody is chosen, so an empty set only
+ * ever means "made before we chose".
+ */
+export async function getReleaseMemberIds(releaseId: string): Promise<string[]> {
+  const rows = await prisma.releaseMember.findMany({
+    where: { releaseId },
+    select: { userId: true },
+  });
+  return rows.map((r) => r.userId);
+}
+
+/**
+ * The people who may be seated on a release's shows.
+ *
+ * The same list, resolved to names, and with the everybody-means-everybody rule
+ * applied once here rather than at each call site — the seat picker and the
+ * availability chase must never disagree about who is on a release.
+ */
+export async function listReleaseCast(releaseId: string): Promise<TeamMember[]> {
+  const [members, streamers] = await Promise.all([
+    getReleaseMemberIds(releaseId),
+    listStreamers(),
+  ]);
+  if (members.length === 0) return streamers;
+  const on = new Set(members);
+  return streamers.filter((s) => on.has(s.id));
 }
 
 /** Who the boss named as priority on one release, best first. */

@@ -4,11 +4,13 @@ import { Alert, Card, CardHeader, LinkButton, PageHeader, Stat } from "@/compone
 import { requireBoss } from "@/lib/auth/guards";
 import { datesBetween, fromDbDate } from "@/lib/domain/dates";
 import { prisma } from "@/lib/db";
-import { getPriorities, getReleaseSummary } from "@/lib/server/releases";
+import { getPriorities, getReleaseMemberIds, getReleaseSummary } from "@/lib/server/releases";
 import { getSettings } from "@/lib/server/settings";
 import { listStreamers } from "@/lib/server/team";
+import { BUSINESS_LABEL } from "@/lib/domain/business";
 import { Composer, ReleaseControls, RenameRelease, StatusBadge } from "../composer";
 import type { ExistingShow } from "../composer";
+import { ReleaseMembers } from "../members";
 
 export const metadata: Metadata = { title: "Release" };
 
@@ -27,7 +29,7 @@ export default async function ReleasePage({ params }: { params: Promise<{ id: st
     hour12: false,
   });
 
-  const [showRows, streamers, priorities] = await Promise.all([
+  const [showRows, streamers, priorities, memberIds] = await Promise.all([
     prisma.show.findMany({
       where: { releaseId: id },
       select: {
@@ -42,6 +44,7 @@ export default async function ReleasePage({ params }: { params: Promise<{ id: st
     }),
     listStreamers(),
     getPriorities(id),
+    getReleaseMemberIds(id),
   ]);
 
   const existing: ExistingShow[] = showRows.map((s) => ({
@@ -64,7 +67,13 @@ export default async function ReleasePage({ params }: { params: Promise<{ id: st
     <>
       <PageHeader
         title={release.label}
-        description={`${release.dateRange} · ${release.days} day${release.days === 1 ? "" : "s"}`}
+        description={
+          // Which kind of show this schedules comes first: two releases can
+          // cover the same fortnight, and only this separates them.
+          `${BUSINESS_LABEL[release.business]} · ${release.dateRange} · ${release.days} day${
+            release.days === 1 ? "" : "s"
+          }`
+        }
         action={
           <div className="flex gap-2">
             <LinkButton href="/admin/releases" size="sm" variant="ghost">
@@ -124,6 +133,14 @@ export default async function ReleasePage({ params }: { params: Promise<{ id: st
           />
         </div>
       </Card>
+
+      <ReleaseMembers
+        releaseId={release.id}
+        streamers={streamers.map((s) => ({ id: s.id, name: s.name }))}
+        selected={memberIds}
+        sent={release.status !== "DRAFT"}
+        editable={editable}
+      />
 
       <Card className="mb-5">
         <CardHeader

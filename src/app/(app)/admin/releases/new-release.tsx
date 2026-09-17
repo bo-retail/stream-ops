@@ -4,7 +4,8 @@ import { useActionState, useEffect } from "react";
 import { useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
-import { Alert, Button, Card, CardHeader, Field, Input } from "@/components/ui";
+import { Alert, Button, Card, CardHeader, Field, Input, Select } from "@/components/ui";
+import { BUSINESSES, BUSINESS_LABEL } from "@/lib/domain/business";
 import { createRelease } from "./actions";
 import type { ReleaseState } from "./actions";
 
@@ -39,7 +40,21 @@ export function NewReleaseForm({ defaultStart, defaultEnd }: { defaultStart: str
         title="New release"
         description="Pick the dates. You choose the shows, the hours and the rules on the next screen."
       />
-      <form action={action} className="grid gap-3 p-4 sm:grid-cols-[1fr_11rem_11rem_auto] sm:items-end">
+      <form
+        action={action}
+        className="grid gap-3 p-4 sm:grid-cols-[10rem_1fr_10rem_10rem_auto] sm:items-end"
+      >
+        {/* First, because it decides what the rest of the screen means. Chosen
+            once and never changed: every show in the release inherits it. */}
+        <Field label="Which show" htmlFor="business">
+          <Select id="business" name="business" defaultValue="WATCH">
+            {BUSINESSES.map((b) => (
+              <option key={b} value={b}>
+                {BUSINESS_LABEL[b]}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <Field label="Name it (optional)" htmlFor="name">
           <Input id="name" name="name" placeholder="Second half of September" autoComplete="off" />
         </Field>
@@ -51,7 +66,7 @@ export function NewReleaseForm({ defaultStart, defaultEnd }: { defaultStart: str
         </Field>
         <Submit />
         {state.error ? (
-          <p className="text-sm font-medium text-danger-600 sm:col-span-4">{state.error}</p>
+          <p className="text-sm font-medium text-danger-600 sm:col-span-5">{state.error}</p>
         ) : null}
       </form>
       <div className="border-t border-line px-4 py-2.5">

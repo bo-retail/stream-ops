@@ -12,10 +12,9 @@ import type {
 } from "@/lib/domain/schedule";
 import type { BusinessSettings, DateISO, Platform, ShowStatus, Slot } from "@/lib/domain/types";
 import { getSettings } from "./settings";
-import { getPriorities, getReleaseSummary } from "./releases";
+import { getPriorities, getReleaseSummary, listReleaseCast } from "./releases";
 import type { ReleaseSummary } from "./releases";
 import { getTimeOffByUser } from "./timeOff";
-import { listStreamers } from "./team";
 import type { TeamMember } from "./team";
 
 export interface AssignmentView {
@@ -115,7 +114,18 @@ export async function getReleaseView(releaseId: string): Promise<ReleaseView | n
       where: { releaseId },
       select: { userId: true, date: true, slot: true, user: { select: { name: true } } },
     }),
-    listStreamers(),
+    /*
+      The people on this release, not every streamer.
+
+      A diamond release that goes to two people offers those two in the seat
+      picker. Nineteen names, most of whom never work this kind of show, is how
+      somebody gets dropped onto the wrong one by a mis-click — and the mistake
+      pays their commission out of the wrong show's sales.
+
+      Releases made before there was a list read as everybody, so nothing that
+      already exists changes. See `listReleaseCast`.
+    */
+    listReleaseCast(releaseId),
     prisma.availabilitySubmission.findMany({
       where: { releaseId },
       select: { userId: true, submittedAt: true },
