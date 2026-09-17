@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { formatDateRange, fromDbDate, isDateISO, toDbDate } from "@/lib/domain/dates";
 import type { Slot } from "@/lib/domain/types";
 import { businessOfRelease } from "@/lib/server/business";
+import { isAskedAbout } from "@/lib/server/releases";
 
 export interface AvailabilityState {
   error?: string;
@@ -22,7 +23,7 @@ function refresh() {
 const SLOT = z.enum(["DAY", "NIGHT"]);
 
 /**
- * Confirms the release is one this person is actually being asked about.
+ * Confirms the release is taking answers at all.
  *
  * Availability closes when the boss publishes, so a stale tab must not be able
  * to write to a period whose schedule is already out.
@@ -41,7 +42,14 @@ async function assertOpen(releaseId: string): Promise<string | null> {
 }
 
 /**
- * Confirms the release is open *and* this person has not already sent it in.
+ * Confirms the release is open, is one this person was asked about, *and* that
+ * they have not already sent it in.
+ *
+ * The membership check is here as well as on the page, because a page that does
+ * not offer something is not the same as a server that will not accept it. The
+ * boss's list of who a release went to decides who may answer it, and an answer
+ * from somebody who was never asked is not a smaller problem than showing them
+ * the request.
  *
  * A submission row exists only once somebody has pressed Submit, so its
  * presence is the lock. Everything they tap before that is a draft: saved, so a
@@ -50,6 +58,10 @@ async function assertOpen(releaseId: string): Promise<string | null> {
 async function assertEditable(userId: string, releaseId: string): Promise<string | null> {
   const closed = await assertOpen(releaseId);
   if (closed) return closed;
+
+  if (!(await isAskedAbout(userId, releaseId))) {
+    return "That request was not sent to you.";
+  }
 
   const submitted = await prisma.availabilitySubmission.findUnique({
     where: { userId_releaseId: { userId, releaseId } },

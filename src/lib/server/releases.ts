@@ -3,6 +3,7 @@ import { cache } from "react";
 import { prisma } from "@/lib/db";
 import { datesBetween, formatDateRange, fromDbDate, toDbDate } from "@/lib/domain/dates";
 import type { Business } from "@/lib/domain/business";
+import { askedCount, isOnRelease } from "@/lib/domain/release-members";
 import type { DateISO } from "@/lib/domain/types";
 import { listStreamers } from "./team";
 import type { TeamMember } from "./team";
@@ -94,7 +95,7 @@ type SummaryRow = {
   maxShowsPerPerson: number | null;
 };
 
-async function toSummaries(rows: SummaryRow[], askedCount: number): Promise<ReleaseSummary[]> {
+async function toSummaries(rows: SummaryRow[], teamSize: number): Promise<ReleaseSummary[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
 
@@ -136,6 +137,25 @@ async function toSummaries(rows: SummaryRow[], askedCount: number): Promise<Rele
   const showCounts = new Map(showRows.map((r) => [r.releaseId, r._count._all]));
   const submitted = new Map(submissionCounts.map((r) => [r.releaseId, r._count._all]));
 
+  /*
+    How many people each release was sent to.
+
+    Per release, not one number for the whole team. A diamond release sent to
+    two people used to read "0 of 17 answered" and stay there however many of
+    the two replied, because fifteen of those seventeen were never asked.
+  */
+  const memberRows = await prisma.releaseMember.findMany({
+    where: { releaseId: { in: ids } },
+    select: { releaseId: true, userId: true },
+  });
+  const membersByRelease = new Map<string, string[]>();
+  for (const row of memberRows) {
+    membersByRelease.set(row.releaseId, [
+      ...(membersByRelease.get(row.releaseId) ?? []),
+      row.userId,
+    ]);
+  }
+
   return rows.map((row) => {
     const startDate = fromDbDate(row.startDate);
     const endDate = fromDbDate(row.endDate);
@@ -162,13 +182,18 @@ async function toSummaries(rows: SummaryRow[], askedCount: number): Promise<Rele
       totalSeats: showCount * 2,
       filledSeats: filledByRelease.get(row.id) ?? 0,
       submittedCount: submitted.get(row.id) ?? 0,
-      askedCount,
+      askedCount: askedCount(membersByRelease.get(row.id) ?? [], teamSize),
     };
   });
 }
 
-/** Everyone who gets asked: every active streamer. */
-export const countAsked = cache(async (): Promise<number> => {
+/**
+ * How many streamers there are.
+ *
+ * Only the fallback for a release built before there was a list of people. What
+ * a release was actually sent to is its own member rows; see `askedCount`.
+ */
+export const countStreamers = cache(async (): Promise<number> => {
   return prisma.user.count({
     where: { isActive: true, role: "EMPLOYEE", team: "STREAMING" },
   });
@@ -182,7 +207,7 @@ export async function listReleases(limit = 50): Promise<ReleaseSummary[]> {
       take: limit,
       select: SUMMARY_SELECT,
     }),
-    countAsked(),
+    countStreamers(),
   ]);
   return toSummaries(rows, asked);
 }
@@ -191,13 +216,18 @@ export async function listReleases(limit = 50): Promise<ReleaseSummary[]> {
 export async function getReleaseSummary(releaseId: string): Promise<ReleaseSummary | null> {
   const [row, asked] = await Promise.all([
     prisma.release.findUnique({ where: { id: releaseId }, select: SUMMARY_SELECT }),
-    countAsked(),
+    countStreamers(),
   ]);
   if (!row) return null;
   return (await toSummaries([row], asked))[0];
 }
 
-/** The releases a streamer may answer right now. */
+/**
+ * The releases taking answers right now — all of them, whoever they went to.
+ *
+ * For the admin screens. What one person has been asked about is
+ * `listOpenReleasesFor`, and that is what the availability page must use.
+ */
 export async function listOpenReleases(): Promise<ReleaseSummary[]> {
   const [rows, asked] = await Promise.all([
     prisma.release.findMany({
@@ -205,9 +235,39 @@ export async function listOpenReleases(): Promise<ReleaseSummary[]> {
       orderBy: [{ startDate: "asc" }],
       select: SUMMARY_SELECT,
     }),
-    countAsked(),
+    countStreamers(),
   ]);
   return toSummaries(rows, asked);
+}
+
+/**
+ * The open releases one person has actually been asked about.
+ *
+ * The list the boss picks when building a release is the point of picking it: a
+ * diamond release goes to the people who work diamonds and lands on nobody
+ * else's page. It used to be read by the seat picker and by nothing else, so
+ * sending a diamond release to two people put it in front of all seventeen
+ * streamers, asking them to fill in a show they do not work.
+ */
+export async function listOpenReleasesFor(userId: string): Promise<ReleaseSummary[]> {
+  const open = await listOpenReleases();
+  if (open.length === 0) return [];
+
+  const members = await prisma.releaseMember.findMany({
+    where: { releaseId: { in: open.map((r) => r.id) } },
+    select: { releaseId: true, userId: true },
+  });
+  const byRelease = new Map<string, string[]>();
+  for (const row of members) {
+    byRelease.set(row.releaseId, [...(byRelease.get(row.releaseId) ?? []), row.userId]);
+  }
+
+  return open.filter((release) => isOnRelease(byRelease.get(release.id) ?? [], userId));
+}
+
+/** Whether one person was asked about one release. */
+export async function isAskedAbout(userId: string, releaseId: string): Promise<boolean> {
+  return isOnRelease(await getReleaseMemberIds(releaseId), userId);
 }
 
 /**

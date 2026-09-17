@@ -4,7 +4,7 @@ import { datesBetween, fromDbDate } from "@/lib/domain/dates";
 import type { DateISO, Slot } from "@/lib/domain/types";
 import { getSettings } from "./settings";
 import type { ReleaseSummary } from "./releases";
-import { getReleaseSummary, listOpenReleases } from "./releases";
+import { getReleaseSummary, listOpenReleasesFor } from "./releases";
 
 export interface AvailabilityPick {
   dateISO: DateISO;
@@ -171,7 +171,10 @@ export async function getOpenReleasesForUser(userId: string): Promise<OpenReleas
   });
   if (!person || (person.role !== "BOSS" && person.team !== "STREAMING")) return [];
 
-  const releases = await listOpenReleases();
+  // Only the releases this person was actually sent. The list the boss picks
+  // when building a release decides who is asked — it is not a hint the seat
+  // picker alone pays attention to.
+  const releases = await listOpenReleasesFor(userId);
   if (releases.length === 0) return [];
 
   const ids = releases.map((r) => r.id);
