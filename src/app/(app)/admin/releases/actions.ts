@@ -135,7 +135,7 @@ export async function setReleaseShows(
 
   const release = await prisma.release.findUnique({
     where: { id: releaseId },
-    select: { id: true, startDate: true, endDate: true, scheduleStatus: true },
+    select: { id: true, business: true, startDate: true, endDate: true, scheduleStatus: true },
   });
   if (!release) return { error: "That release no longer exists." };
   if (release.scheduleStatus === "PUBLISHED") {
@@ -186,9 +186,15 @@ export async function setReleaseShows(
   // A show belongs to one release and one only, so a date already claimed by a
   // neighbouring release has to be reported rather than crashing on the unique
   // index at write time.
+  //
+  // Scoped to this release's business, because the unique index is. A diamond
+  // TikTok Day and a watch TikTok Day on the same date are two different shows
+  // and neither claims the other — without this, scheduling diamonds would be
+  // refused for clashing with a watch show that has nothing to do with it.
   const clash = await prisma.show.findFirst({
     where: {
       releaseId: { not: releaseId },
+      business: release.business,
       OR: parsed.data.map((p) => ({
         date: toDbDate(p.dateISO),
         platform: p.platform,
@@ -225,6 +231,7 @@ export async function setReleaseShows(
               );
               return {
                 releaseId,
+                business: release.business,
                 date: toDbDate(p.dateISO),
                 platform: p.platform,
                 slot: p.slot,

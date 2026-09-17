@@ -17,6 +17,7 @@ import type { Candidate } from "@/lib/domain/assign";
 import { planCopyForward } from "@/lib/domain/schedule";
 import { PLATFORM_SHORT, SEATS, SEATS_PER_SHOW, SLOT_SHORT } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
+import { businessOfRelease } from "@/lib/server/business";
 import { getReleaseView } from "@/lib/server/schedule";
 import { getSettings } from "@/lib/server/settings";
 import { scheduledHoursPrinted } from "@/lib/server/timeclock";
@@ -365,9 +366,19 @@ export async function addShow(_prev: ActionState, formData: FormData): Promise<A
   const releaseId = d.releaseId;
   const { startsAt, endsAt } = resolveSlotInstants(d.dateISO, d.start, d.end, settings.timezone);
 
+  // From the release, never from the caller: a show belongs to whichever kind
+  // of show is being scheduled, and since both sell on TikTok at the same hours
+  // it is the only thing that tells two identical-looking shows apart.
+  const business = await businessOfRelease(releaseId);
+
   const existing = await prisma.show.findUnique({
     where: {
-      date_platform_slot: { date: toDbDate(d.dateISO), platform: d.platform, slot: d.slot },
+      business_date_platform_slot: {
+        business,
+        date: toDbDate(d.dateISO),
+        platform: d.platform,
+        slot: d.slot,
+      },
     },
     select: { id: true, status: true, releaseId: true },
   });

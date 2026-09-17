@@ -42,6 +42,24 @@ enum Team {
   SHIPPING
 }
 
+/// Which of the two things being sold: watches, or diamonds.
+///
+/// Not two apps and not two databases. A diamond show is simply another show on
+/// the schedule, run by the same company, packed on the same table by the same
+/// people, and paid in the same payroll run. What it needs a column for is that
+/// both sell on TikTok at the same hours, under separate seller accounts — so
+/// "TikTok Day on the 16th" is two different shows, and nothing else on the row
+/// can tell them apart.
+///
+/// A release chooses one when it is created, and every show in it inherits it.
+///
+/// The default of WATCH is a migration device: every row that existed before
+/// diamonds is a watch row. It comes off once every write states its business.
+enum Business {
+  WATCH
+  DIAMOND
+}
+
 enum Platform {
   TIKTOK
   EBAY
@@ -96,6 +114,7 @@ model User {
   commissionBps   Int?
 
   availability      Availability[]
+  releaseMemberships ReleaseMember[]
   submissions       AvailabilitySubmission[]
   assignments       Assignment[]
   assignmentsMade   Assignment[]            @relation("AssignedBy")
@@ -136,6 +155,10 @@ model User {
 model Release {
   id String @id @default(cuid())
 
+  /// Watches or diamonds. Chosen when the release is created; every show in it
+  /// inherits it, and it is what separates two TikTok Day shows on one date.
+  business Business @default(WATCH)
+
   /// What he calls it. Optional — the dates are the real identity.
   name      String?
   startDate DateTime @db.Date
@@ -173,6 +196,7 @@ model Release {
   createdBy   User?               @relation("ReleaseCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   publishedBy User?               @relation("ReleasePublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
   shows       Show[]
+  members     ReleaseMember[]
   priorities  ReleasePriority[]
   availability Availability[]
   submissions AvailabilitySubmission[]
@@ -180,6 +204,37 @@ model Release {
 
   @@index([status, startDate])
   @@index([scheduleStatus, startDate])
+}
+
+/// Who a release is for.
+///
+/// Two things at once, deliberately: these are the people asked for their
+/// availability, and the only people who may be seated on its shows. Keeping
+/// them as one list means the answer to "why is she not in the picker" is
+/// always "she was not on the release", rather than two settings that can
+/// disagree.
+///
+/// It is what replaces a permanent job title. A streamer is not a *watch*
+/// streamer or a *diamond* streamer — she is on this release or she is not, and
+/// that can differ from one fortnight to the next.
+///
+/// **An empty list means everybody.** Every release created before this existed
+/// genuinely did go to every streamer, and reading it that way is what lets
+/// those releases keep working untouched. Going forward the composer always
+/// writes rows and refuses to send a release to nobody, so an empty list only
+/// ever means "made before we chose".
+model ReleaseMember {
+  id        String   @id @default(cuid())
+  releaseId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  release Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([releaseId, userId])
+  @@index([releaseId])
+  @@index([userId])
 }
 
 /// Who gets first refusal on one release.
@@ -209,6 +264,9 @@ model ReleasePriority {
 model Show {
   id        String     @id @default(cuid())
   releaseId String
+  /// Denormalised from the release, so a show can be found and keyed by
+  /// business without a join. See the unique key below.
+  business  Business   @default(WATCH)
   date      DateTime   @db.Date
   platform  Platform
   slot      Slot
@@ -223,11 +281,18 @@ model Show {
   assignments Assignment[]
   timeEntries TimeEntry[]
 
-  /// One show per platform and slot on a given date. This is also what stops
+  /// One show per business, platform and slot on a given date. Also what stops
   /// two overlapping releases both claiming the same show.
-  @@unique([date, platform, slot])
+  ///
+  /// The business is in the key because both sell on TikTok at the same hours —
+  /// the diamond show on 09/15 ran 10:32–16:01 Pacific against the watch day
+  /// show's 10:06–16:05. Without it there could be exactly one TikTok Day show
+  /// in the world on a given date, and the second one saved would be refused by
+  /// the database with nothing in the app able to explain why.
+  @@unique([business, date, platform, slot])
   @@index([releaseId, date])
   @@index([status, date])
+  @@index([business, date])
 }
 
 /// One of the two people on a show.
@@ -264,6 +329,8 @@ model Availability {
   id        String   @id @default(cuid())
   userId    String
   releaseId String
+  /// Denormalised from the release, for the unique key below.
+  business  Business @default(WATCH)
   date      DateTime @db.Date
   slot      Slot
   createdAt DateTime @default(now())
@@ -271,7 +338,12 @@ model Availability {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   release Release @relation(fields: [releaseId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, date, slot])
+  /// One answer per person, per business, per slot.
+  ///
+  /// The business belongs here for the same reason it belongs on a show: a
+  /// watch release and a diamond release covering the same fortnight would
+  /// otherwise collide the moment somebody was on both and answered both.
+  @@unique([userId, business, date, slot])
   @@index([userId, releaseId])
   @@index([releaseId, date])
 }
@@ -337,6 +409,44 @@ model ScheduleSnapshot {
 /// standing defaults. They moved onto the release: this business does not have
 /// a default fortnight, and a default that is wrong most weeks is worse than no
 /// default at all.
+/// What each business pays, and how many people run one of its shows.
+///
+/// Split out of `Settings` because these are the things that differ between
+/// watches and diamonds. Sharing them would mean a rate change on one side
+/// quietly moving what the other pays. The timezone stays on `Settings`: it is
+/// one company in one place, and two timezones would be a bug.
+///
+/// Shipping's hourly rate is deliberately *not* here. Packers handle both piles
+/// off the same table and never clock in against a show, so there is nothing to
+/// attribute their hours to — they are paid one blended rate from `Settings`.
+///
+/// Keyed by the business itself, so there is no id to get wrong and no way to
+/// end up with two rows for one side.
+model BusinessSettings {
+  business Business @id
+
+  /// What a streamer on this business's shows is paid an hour, in whole cents.
+  streamerHourlyCents Int @default(0)
+
+  /// Their share of the show's sales, in basis points — 100 = 1.00%. Each
+  /// person on the show earns it separately.
+  ///
+  /// Worth setting apart from watches: the 09/15 diamond show averaged $257 a
+  /// piece against roughly $100 for a watch, so the same percentage is a very
+  /// different amount of money.
+  streamerCommissionBps Int @default(100)
+
+  /// How many people run one show here.
+  ///
+  /// Two on the watch side, where the pair split camera and computer and swap
+  /// halfway. A diamond show may run with one. A number rather than a constant
+  /// because commission is paid per person, so this is what decides whether a
+  /// show pays out 1% of its sales or 2%.
+  seatsPerShow Int @default(2)
+
+  updatedAt DateTime @updatedAt
+}
+
 model Settings {
   id       String @id @default("singleton")
   timezone String @default("America/New_York")
@@ -481,6 +591,14 @@ enum ImportStatus {
 /// The most recent OK batch is the day's data.
 model ImportBatch {
   id       String       @id @default(cuid())
+  /// Whose report this is, read from the file itself rather than asked for.
+  ///
+  /// A TikTok export names its own shop in `Creator Handle` — `vaultshowlive`
+  /// is watches, `caratclublive` is diamonds — which is the only thing that can
+  /// tell two same-day TikTok files apart, since both shows run the same hours.
+  /// An eBay export names no seller at all, so while only watches sell on eBay
+  /// an eBay file is a watch file.
+  business Business     @default(WATCH)
   showDate DateTime     @db.Date
   status   ImportStatus @default(OK)
 
@@ -503,6 +621,7 @@ model ImportBatch {
 
   @@index([showDate, uploadedAt])
   @@index([status, showDate])
+  @@index([business, showDate, uploadedAt])
 }
 
 /// One paid watch, exactly as `WatchSale` in src/lib/domain/imports.
@@ -513,6 +632,12 @@ model ImportBatch {
 model SalesRecord {
   id      String @id @default(cuid())
   batchId String
+
+  /// Denormalised from the batch. Sales are totalled, charted and paid on far
+  /// more often than they are written, and a diamond show's commission must
+  /// never be worked out from a watch show's sales — so the business is on the
+  /// row rather than a join away.
+  business Business @default(WATCH)
 
   platform Platform
   /// "TikTok AM", "TikTok PM", "eBay AM", "eBay PM" — where it sold.
@@ -562,6 +687,7 @@ model SalesRecord {
   @@index([batchId])
   @@index([tracking])
   @@index([shiftTag])
+  @@index([business, showDate])
 }
 
 /// A raw row that was not counted, and why. The Exceptions sheet.
@@ -604,6 +730,12 @@ model Package {
   /// The unique constraint is what makes a box closed for everyone: two
   /// packers scanning the same label cannot create two boxes to close.
   trackingNumber String   @unique
+  /// Which show's box this is, for the log and the day's counts.
+  ///
+  /// It does not gate scanning. The floor packs both piles off one table, and a
+  /// tracking number is unique across both, so a scanned label always resolves
+  /// to exactly one box whoever is holding it.
+  business       Business @default(WATCH)
   platform       Platform
   showDate       DateTime @db.Date
 
@@ -634,6 +766,7 @@ model Package {
   @@index([showDate, status])
   @@index([status])
   @@index([closedById, closedAt])
+  @@index([business, showDate, status])
 }
 
 /// What belongs in a box, as a count per stock number.

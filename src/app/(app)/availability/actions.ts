@@ -6,6 +6,7 @@ import { requireUserOrThrow } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { formatDateRange, fromDbDate, isDateISO, toDbDate } from "@/lib/domain/dates";
 import type { Slot } from "@/lib/domain/types";
+import { businessOfRelease } from "@/lib/server/business";
 
 export interface AvailabilityState {
   error?: string;
@@ -93,8 +94,15 @@ export async function toggleShow(
 
   const slot = d.slot as Slot;
 
+  // An answer belongs to the business whose release asked for it. Somebody on
+  // both a watch and a diamond release for the same fortnight is answering two
+  // separate questions about the same evening.
+  const business = await businessOfRelease(d.releaseId);
+
   const existing = await prisma.availability.findUnique({
-    where: { userId_date_slot: { userId: user.id, date: toDbDate(d.dateISO), slot } },
+    where: {
+      userId_business_date_slot: { userId: user.id, business, date: toDbDate(d.dateISO), slot },
+    },
     select: { id: true },
   });
 
@@ -108,6 +116,7 @@ export async function toggleShow(
     data: {
       userId: user.id,
       releaseId: d.releaseId,
+      business,
       date: toDbDate(d.dateISO),
       slot,
     },
@@ -193,13 +202,23 @@ export async function fillPeriod(
     };
   }
 
+  const business = await businessOfRelease(d.releaseId);
+
   await prisma.$transaction(
     rows.map((r) =>
       prisma.availability.upsert({
-        where: { userId_date_slot: { userId: user.id, date: toDbDate(r.dateISO), slot: r.slot } },
+        where: {
+          userId_business_date_slot: {
+            userId: user.id,
+            business,
+            date: toDbDate(r.dateISO),
+            slot: r.slot,
+          },
+        },
         create: {
           userId: user.id,
           releaseId: d.releaseId,
+          business,
           date: toDbDate(r.dateISO),
           slot: r.slot,
         },
@@ -312,13 +331,23 @@ export async function copyLastPeriodAvailability(
     return { error: "Nothing you offered last time lines up with this request." };
   }
 
+  const business = await businessOfRelease(releaseId);
+
   await prisma.$transaction(
     rows.map((r) =>
       prisma.availability.upsert({
-        where: { userId_date_slot: { userId: user.id, date: toDbDate(r.dateISO), slot: r.slot } },
+        where: {
+          userId_business_date_slot: {
+            userId: user.id,
+            business,
+            date: toDbDate(r.dateISO),
+            slot: r.slot,
+          },
+        },
         create: {
           userId: user.id,
           releaseId,
+          business,
           date: toDbDate(r.dateISO),
           slot: r.slot,
         },

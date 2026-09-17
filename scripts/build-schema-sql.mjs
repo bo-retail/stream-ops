@@ -81,6 +81,25 @@ ALTER TABLE "User"
     CHECK ("hourlyRateCents" IS NULL OR "hourlyRateCents" >= 0),
   ADD CONSTRAINT "User_commissionBps_not_negative"
     CHECK ("commissionBps" IS NULL OR "commissionBps" >= 0);
+
+-- The same guarantees for each kind of show's own rates, plus a sensible number
+-- of people on one: commission is paid per person, so seatsPerShow is what
+-- decides whether a show pays out 1% of its sales or 2%.
+ALTER TABLE "BusinessSettings"
+  ADD CONSTRAINT "BusinessSettings_streamerHourlyCents_not_negative" CHECK ("streamerHourlyCents" >= 0),
+  ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
+  ADD CONSTRAINT "BusinessSettings_seatsPerShow_sensible" CHECK ("seatsPerShow" BETWEEN 1 AND 4);
+
+-- A database standing up from nothing still needs both rows to exist. The
+-- migration seeds watches by copying the singleton; from empty there is nothing
+-- to copy, so they start on what the two actually pay.
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
+VALUES ('WATCH', 100, 2, CURRENT_TIMESTAMP)
+ON CONFLICT ("business") DO NOTHING;
+
+INSERT INTO "BusinessSettings" ("business", "streamerHourlyCents", "streamerCommissionBps", "seatsPerShow", "updatedAt")
+VALUES ('DIAMOND', 3000, 100, 2, CURRENT_TIMESTAMP)
+ON CONFLICT ("business") DO NOTHING;
 `;
 
 writeFileSync(process.argv[3], header + generated + handWritten, "utf8");

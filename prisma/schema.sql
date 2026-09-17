@@ -23,6 +23,9 @@ CREATE TYPE "Role" AS ENUM ('EMPLOYEE', 'MANAGER', 'BOSS');
 CREATE TYPE "Team" AS ENUM ('STREAMING', 'SHIPPING');
 
 -- CreateEnum
+CREATE TYPE "Business" AS ENUM ('WATCH', 'DIAMOND');
+
+-- CreateEnum
 CREATE TYPE "Platform" AS ENUM ('TIKTOK', 'EBAY');
 
 -- CreateEnum
@@ -70,6 +73,7 @@ CREATE TABLE "User" (
 -- CreateTable
 CREATE TABLE "Release" (
     "id" TEXT NOT NULL,
+    "business" "Business" NOT NULL DEFAULT 'WATCH',
     "name" TEXT,
     "startDate" DATE NOT NULL,
     "endDate" DATE NOT NULL,
@@ -93,6 +97,16 @@ CREATE TABLE "Release" (
 );
 
 -- CreateTable
+CREATE TABLE "ReleaseMember" (
+    "id" TEXT NOT NULL,
+    "releaseId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ReleaseMember_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "ReleasePriority" (
     "id" TEXT NOT NULL,
     "releaseId" TEXT NOT NULL,
@@ -106,6 +120,7 @@ CREATE TABLE "ReleasePriority" (
 CREATE TABLE "Show" (
     "id" TEXT NOT NULL,
     "releaseId" TEXT NOT NULL,
+    "business" "Business" NOT NULL DEFAULT 'WATCH',
     "date" DATE NOT NULL,
     "platform" "Platform" NOT NULL,
     "slot" "Slot" NOT NULL,
@@ -136,6 +151,7 @@ CREATE TABLE "Availability" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "releaseId" TEXT NOT NULL,
+    "business" "Business" NOT NULL DEFAULT 'WATCH',
     "date" DATE NOT NULL,
     "slot" "Slot" NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -177,6 +193,17 @@ CREATE TABLE "ScheduleSnapshot" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "ScheduleSnapshot_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "BusinessSettings" (
+    "business" "Business" NOT NULL,
+    "streamerHourlyCents" INTEGER NOT NULL DEFAULT 0,
+    "streamerCommissionBps" INTEGER NOT NULL DEFAULT 100,
+    "seatsPerShow" INTEGER NOT NULL DEFAULT 2,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "BusinessSettings_pkey" PRIMARY KEY ("business")
 );
 
 -- CreateTable
@@ -240,6 +267,7 @@ CREATE TABLE "TimeEntryRevision" (
 -- CreateTable
 CREATE TABLE "ImportBatch" (
     "id" TEXT NOT NULL,
+    "business" "Business" NOT NULL DEFAULT 'WATCH',
     "showDate" DATE NOT NULL,
     "status" "ImportStatus" NOT NULL DEFAULT 'OK',
     "uploadedById" TEXT,
@@ -257,6 +285,7 @@ CREATE TABLE "ImportBatch" (
 CREATE TABLE "SalesRecord" (
     "id" TEXT NOT NULL,
     "batchId" TEXT NOT NULL,
+    "business" "Business" NOT NULL DEFAULT 'WATCH',
     "platform" "Platform" NOT NULL,
     "show" TEXT NOT NULL,
     "showDate" DATE NOT NULL,
@@ -307,6 +336,7 @@ CREATE TABLE "ImportDrop" (
 CREATE TABLE "Package" (
     "id" TEXT NOT NULL,
     "trackingNumber" TEXT NOT NULL,
+    "business" "Business" NOT NULL DEFAULT 'WATCH',
     "platform" "Platform" NOT NULL,
     "showDate" DATE NOT NULL,
     "buyer" TEXT NOT NULL DEFAULT '',
@@ -361,6 +391,15 @@ CREATE INDEX "Release_status_startDate_idx" ON "Release"("status", "startDate");
 CREATE INDEX "Release_scheduleStatus_startDate_idx" ON "Release"("scheduleStatus", "startDate");
 
 -- CreateIndex
+CREATE INDEX "ReleaseMember_releaseId_idx" ON "ReleaseMember"("releaseId");
+
+-- CreateIndex
+CREATE INDEX "ReleaseMember_userId_idx" ON "ReleaseMember"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "ReleaseMember_releaseId_userId_key" ON "ReleaseMember"("releaseId", "userId");
+
+-- CreateIndex
 CREATE INDEX "ReleasePriority_releaseId_idx" ON "ReleasePriority"("releaseId");
 
 -- CreateIndex
@@ -373,7 +412,10 @@ CREATE INDEX "Show_releaseId_date_idx" ON "Show"("releaseId", "date");
 CREATE INDEX "Show_status_date_idx" ON "Show"("status", "date");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Show_date_platform_slot_key" ON "Show"("date", "platform", "slot");
+CREATE INDEX "Show_business_date_idx" ON "Show"("business", "date");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Show_business_date_platform_slot_key" ON "Show"("business", "date", "platform", "slot");
 
 -- CreateIndex
 CREATE INDEX "Assignment_userId_idx" ON "Assignment"("userId");
@@ -391,7 +433,7 @@ CREATE INDEX "Availability_userId_releaseId_idx" ON "Availability"("userId", "re
 CREATE INDEX "Availability_releaseId_date_idx" ON "Availability"("releaseId", "date");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Availability_userId_date_slot_key" ON "Availability"("userId", "date", "slot");
+CREATE UNIQUE INDEX "Availability_userId_business_date_slot_key" ON "Availability"("userId", "business", "date", "slot");
 
 -- CreateIndex
 CREATE INDEX "AvailabilitySubmission_releaseId_idx" ON "AvailabilitySubmission"("releaseId");
@@ -439,6 +481,9 @@ CREATE INDEX "ImportBatch_showDate_uploadedAt_idx" ON "ImportBatch"("showDate", 
 CREATE INDEX "ImportBatch_status_showDate_idx" ON "ImportBatch"("status", "showDate");
 
 -- CreateIndex
+CREATE INDEX "ImportBatch_business_showDate_uploadedAt_idx" ON "ImportBatch"("business", "showDate", "uploadedAt");
+
+-- CreateIndex
 CREATE INDEX "SalesRecord_showDate_show_idx" ON "SalesRecord"("showDate", "show");
 
 -- CreateIndex
@@ -449,6 +494,9 @@ CREATE INDEX "SalesRecord_tracking_idx" ON "SalesRecord"("tracking");
 
 -- CreateIndex
 CREATE INDEX "SalesRecord_shiftTag_idx" ON "SalesRecord"("shiftTag");
+
+-- CreateIndex
+CREATE INDEX "SalesRecord_business_showDate_idx" ON "SalesRecord"("business", "showDate");
 
 -- CreateIndex
 CREATE INDEX "ImportDrop_batchId_idx" ON "ImportDrop"("batchId");
@@ -464,6 +512,9 @@ CREATE INDEX "Package_status_idx" ON "Package"("status");
 
 -- CreateIndex
 CREATE INDEX "Package_closedById_closedAt_idx" ON "Package"("closedById", "closedAt");
+
+-- CreateIndex
+CREATE INDEX "Package_business_showDate_status_idx" ON "Package"("business", "showDate", "status");
 
 -- CreateIndex
 CREATE INDEX "PackageItem_stockNumber_idx" ON "PackageItem"("stockNumber");
@@ -485,6 +536,12 @@ ALTER TABLE "Release" ADD CONSTRAINT "Release_createdById_fkey" FOREIGN KEY ("cr
 
 -- AddForeignKey
 ALTER TABLE "Release" ADD CONSTRAINT "Release_publishedById_fkey" FOREIGN KEY ("publishedById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReleaseMember" ADD CONSTRAINT "ReleaseMember_releaseId_fkey" FOREIGN KEY ("releaseId") REFERENCES "Release"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "ReleaseMember" ADD CONSTRAINT "ReleaseMember_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "ReleasePriority" ADD CONSTRAINT "ReleasePriority_releaseId_fkey" FOREIGN KEY ("releaseId") REFERENCES "Release"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -620,3 +677,22 @@ ALTER TABLE "User"
     CHECK ("hourlyRateCents" IS NULL OR "hourlyRateCents" >= 0),
   ADD CONSTRAINT "User_commissionBps_not_negative"
     CHECK ("commissionBps" IS NULL OR "commissionBps" >= 0);
+
+-- The same guarantees for each kind of show's own rates, plus a sensible number
+-- of people on one: commission is paid per person, so seatsPerShow is what
+-- decides whether a show pays out 1% of its sales or 2%.
+ALTER TABLE "BusinessSettings"
+  ADD CONSTRAINT "BusinessSettings_streamerHourlyCents_not_negative" CHECK ("streamerHourlyCents" >= 0),
+  ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
+  ADD CONSTRAINT "BusinessSettings_seatsPerShow_sensible" CHECK ("seatsPerShow" BETWEEN 1 AND 4);
+
+-- A database standing up from nothing still needs both rows to exist. The
+-- migration seeds watches by copying the singleton; from empty there is nothing
+-- to copy, so they start on what the two actually pay.
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
+VALUES ('WATCH', 100, 2, CURRENT_TIMESTAMP)
+ON CONFLICT ("business") DO NOTHING;
+
+INSERT INTO "BusinessSettings" ("business", "streamerHourlyCents", "streamerCommissionBps", "seatsPerShow", "updatedAt")
+VALUES ('DIAMOND', 3000, 100, 2, CURRENT_TIMESTAMP)
+ON CONFLICT ("business") DO NOTHING;
