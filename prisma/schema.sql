@@ -269,6 +269,8 @@ CREATE TABLE "ImportBatch" (
     "business" "Business" NOT NULL DEFAULT 'WATCH',
     "showDate" DATE NOT NULL,
     "status" "ImportStatus" NOT NULL DEFAULT 'OK',
+    "platform" "Platform",
+    "slot" "Slot",
     "uploadedById" TEXT,
     "uploadedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "files" JSONB NOT NULL,
@@ -481,6 +483,9 @@ CREATE INDEX "ImportBatch_status_showDate_idx" ON "ImportBatch"("status", "showD
 
 -- CreateIndex
 CREATE INDEX "ImportBatch_business_showDate_uploadedAt_idx" ON "ImportBatch"("business", "showDate", "uploadedAt");
+
+-- CreateIndex
+CREATE INDEX "ImportBatch_showDate_business_platform_slot_uploadedAt_idx" ON "ImportBatch"("showDate", "business", "platform", "slot", "uploadedAt");
 
 -- CreateIndex
 CREATE INDEX "SalesRecord_showDate_show_idx" ON "SalesRecord"("showDate", "show");

@@ -185,20 +185,24 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
     screen with nothing wrong in the data.
   */
   /*
-    A day can hold one report of each kind, so the good ones are kept per
-    business and then added together. Keeping one per date would show only
-    whichever went in second — and, worse, would compare that single report's
-    files against what the whole day expected and call the day short.
+    The latest good upload for every LINE of every day, added together.
+
+    A day holds one file per TikTok show and one per seller account on eBay, and
+    all of them are current at once. Keeping one per day — or even one per
+    business — shows only whichever went in last, and then compares that single
+    file against everything the day expected and calls the day short. It read
+    "missing 1 of 2 TikTok exports" with both plainly loaded.
   */
-  const latestOkPerBusiness = new Map<DateISO, Map<string, (typeof batches)[number]>>();
+  const latestOkPerLine = new Map<DateISO, Map<string, (typeof batches)[number]>>();
   const latestAny = new Map<DateISO, (typeof batches)[number]>();
   for (const batch of batches) {
     const key = fromDbDate(batch.showDate);
     if (!latestAny.has(key)) latestAny.set(key, batch);
     if (batch.status === "OK") {
-      const perBusiness = latestOkPerBusiness.get(key) ?? new Map();
-      if (!perBusiness.has(batch.business)) perBusiness.set(batch.business, batch);
-      latestOkPerBusiness.set(key, perBusiness);
+      const perLine = latestOkPerLine.get(key) ?? new Map();
+      const line = `${batch.business}|${batch.platform ?? ""}|${batch.slot ?? ""}`;
+      if (!perLine.has(line)) perLine.set(line, batch);
+      latestOkPerLine.set(key, perLine);
     }
   }
 
@@ -222,7 +226,7 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
         touched.
       */
       const newest = latestAny.get(dateISO);
-      const good = [...(latestOkPerBusiness.get(dateISO)?.values() ?? [])].sort(
+      const good = [...(latestOkPerLine.get(dateISO)?.values() ?? [])].sort(
         (a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime(),
       );
       const shown = good[0] ?? newest;
@@ -385,7 +389,7 @@ export async function missingReports(lookBackDays = LOOK_BACK_DAYS): Promise<Mis
     prisma.importBatch.findMany({
       where: { showDate: { gte: toDbDate(from), lte: toDbDate(to) }, status: "OK" },
       orderBy: { uploadedAt: "desc" },
-      select: { showDate: true, business: true, files: true },
+      select: { showDate: true, business: true, platform: true, slot: true, files: true },
     }),
   ]);
 
@@ -403,20 +407,21 @@ export async function missingReports(lookBackDays = LOOK_BACK_DAYS): Promise<Mis
   }
 
   /*
-    Every kind of show's latest good upload, added together.
+    Every line's latest good upload, added together.
 
-    A day can hold a watch report and a diamond report, and it is waiting for
-    both. Keeping one per date would compare a single report's files against
-    everything the day expected and chase a day that is actually complete —
-    or, worse, call one complete because the other's files filled the count.
+    A day is waiting for one file per TikTok show and one per seller account on
+    eBay, and all of them are current at once. Keeping one per date — or one per
+    business — compares a single file against everything the day expected and
+    chases a day that is complete; or, worse, calls a short day done because
+    another line's files happened to fill the count.
   */
   const latest = new Map<DateISO, string[]>();
   const seen = new Set<string>();
   for (const batch of loaded) {
     const key = fromDbDate(batch.showDate);
-    const perBusiness = `${key}|${batch.business}`;
-    if (seen.has(perBusiness)) continue;
-    seen.add(perBusiness);
+    const line = `${key}|${batch.business}|${batch.platform ?? ""}|${batch.slot ?? ""}`;
+    if (seen.has(line)) continue;
+    seen.add(line);
     latest.set(key, [...(latest.get(key) ?? []), ...platformsOf(batch.files)]);
   }
 

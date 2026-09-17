@@ -206,6 +206,32 @@ export function readFiles(
   return { sales, dropped, flags, boxes, showDate, business, fileInfo };
 }
 
+/** Which line of a day's checklist a sale fills. */
+function lineKey(sale: WatchSale): string {
+  return sale.platform === "EBAY"
+    ? "EBAY|"
+    : `TIKTOK|${sale.show.endsWith("AM") ? "DAY" : "NIGHT"}`;
+}
+
+/**
+ * The single line a set of sales belongs to, or null when it is not one line.
+ *
+ * Null covers both nothing readable and a mix of several, because neither can
+ * be recorded against one row of the checklist without being wrong about it.
+ */
+function linesIn(sales: readonly WatchSale[]): {
+  platform: "TIKTOK" | "EBAY";
+  slot: "DAY" | "NIGHT" | null;
+} | null {
+  const keys = new Set(sales.map(lineKey));
+  if (keys.size !== 1) return null;
+  const [platform, slot] = [...keys][0].split("|");
+  return {
+    platform: platform as "TIKTOK" | "EBAY",
+    slot: (slot || null) as "DAY" | "NIGHT" | null,
+  };
+}
+
 /**
  * Whose eBay report a day's export is, read off the published schedule.
  *
@@ -305,9 +331,23 @@ export async function runImport(
   if (blocked || showDate === null) {
     // Recorded rather than discarded: a refused upload is the most useful thing
     // to be able to look at afterwards.
+    /*
+      A refusal is recorded against the line it was aimed at, when that much
+      could be read.
+
+      So a turned-away TikTok night file shows as refused on the TikTok night
+      row of the checklist and nowhere else — the other three lines are somebody
+      else's business and carry on saying what they actually are. A file too
+      broken to place at all, or one mixing two lines, has no line to record and
+      shows on the day instead.
+    */
+    const refusedLine = linesIn(sales);
+
     const batch = await prisma.importBatch.create({
       data: {
         business: business ?? "WATCH",
+        platform: refusedLine?.platform ?? null,
+        slot: refusedLine?.slot ?? null,
         showDate: toDbDate(showDate ?? "1970-01-01"),
         status: "BLOCKED",
         uploadedById,
@@ -331,8 +371,9 @@ export async function runImport(
     };
   }
 
+  // The whole upload's figures, for what this call reports back. Each line's
+  // own counts are worked out per line below.
   const summary = summariseDay(sales, boxes);
-  const trackings = boxes.map((b) => b.tracking);
 
   /*
     Which line of the day's checklist this upload fills.
@@ -345,11 +386,7 @@ export async function runImport(
     One upload is one line. Anything that would fill two at once was refused
     above, so there is exactly one here.
   */
-  const lines = new Set(
-    sales.map((s) =>
-      s.platform === "EBAY" ? "EBAY|" : `TIKTOK|${s.show.endsWith("AM") ? "DAY" : "NIGHT"}`,
-    ),
-  );
+  const lines = new Set(sales.map(lineKey));
 
   /*
     An upload may still carry several files at once — three most mornings — and
@@ -360,8 +397,7 @@ export async function runImport(
     has no sales and so no line of its own; its drops join the first, which is
     the exceptions list rather than anything anybody is paid from.
   */
-  const lineOf = (s: WatchSale) =>
-    s.platform === "EBAY" ? "EBAY|" : `TIKTOK|${s.show.endsWith("AM") ? "DAY" : "NIGHT"}`;
+  const lineOf = lineKey;
   const fileLine = new Map<string, string>();
   for (const s of sales) fileLine.set(s.sourceFile, lineOf(s));
 
@@ -603,7 +639,18 @@ export async function runImport(
           where: {
             batchId: { in: supersededIds },
             status: "OPEN",
-            trackingNumber: { notIn: trackings.length > 0 ? trackings : ["-"] },
+            /*
+              Measured against the whole day, not against the file just
+              uploaded.
+
+              A box can hold watches from two shows, and it carries the id of
+              whichever upload last touched it. If a buyer's night order is
+              cancelled and the night file re-uploaded, that box leaves the
+              night file — but their morning watch is still in it, and against
+              this upload alone the box would be deleted out from under the
+              packer holding it.
+            */
+            trackingNumber: { notIn: dayTrackings.length > 0 ? dayTrackings : ["-"] },
             scans: { none: {} },
           },
         });
