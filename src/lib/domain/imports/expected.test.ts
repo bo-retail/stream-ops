@@ -6,7 +6,62 @@ const show = (
   platform: "TIKTOK" | "EBAY",
   slot: "DAY" | "NIGHT",
   cancelled = false,
-): DayShow => ({ platform, slot, cancelled });
+): DayShow => ({ business: "WATCH", platform, slot, cancelled });
+
+/** The same show, sold through the diamond seller account. */
+const diamond = (platform: "TIKTOK" | "EBAY", slot: "DAY" | "NIGHT"): DayShow => ({
+  business: "DIAMOND",
+  platform,
+  slot,
+  cancelled: false,
+});
+
+describe("counting a day that sells both", () => {
+  /*
+    The failure these are here to stop.
+
+    Watches and diamonds sell through separate seller accounts, so each exports
+    its own file. Counted by slot alone, a watch TikTok Day and a diamond TikTok
+    Day are one file — and a day needing four would wait for three, read as
+    complete when three arrived, and never chase the diamond report. Its sales
+    would go unrecorded and its parcels would have nothing to pack against.
+  */
+  it("counts a watch and a diamond show on the same slot as two files", () => {
+    const day = [show("TIKTOK", "DAY"), diamond("TIKTOK", "DAY")];
+    expect(expectedFilesFor(day).tiktok).toBe(2);
+  });
+
+  it("counts the real shape of a day that runs both", () => {
+    // Watch day, watch night, watch eBay, and one diamond day show.
+    const day = [
+      show("TIKTOK", "DAY"),
+      show("TIKTOK", "NIGHT"),
+      show("EBAY", "NIGHT"),
+      diamond("TIKTOK", "DAY"),
+    ];
+    const expected = expectedFilesFor(day);
+    expect(expected.tiktok).toBe(3);
+    expect(expected.ebay).toBe(1);
+    expect(expected.describe).toBe("3 TikTok exports and 1 eBay export");
+  });
+
+  it("still folds one business's two eBay shows into a single file", () => {
+    // eBay exports one file per day per account however many shows ran, which
+    // is why it is counted by account and not by show.
+    const day = [show("EBAY", "DAY"), show("EBAY", "NIGHT")];
+    expect(expectedFilesFor(day).ebay).toBe(1);
+  });
+
+  it("but two accounts selling on eBay are two files", () => {
+    const day = [show("EBAY", "NIGHT"), diamond("EBAY", "NIGHT")];
+    expect(expectedFilesFor(day).ebay).toBe(2);
+  });
+
+  it("ignores a cancelled diamond show like any other", () => {
+    const day = [show("TIKTOK", "DAY"), { ...diamond("TIKTOK", "DAY"), cancelled: true }];
+    expect(expectedFilesFor(day).tiktok).toBe(1);
+  });
+});
 
 describe("what a day's upload should contain", () => {
   it("wants one TikTok file per TikTok show", () => {

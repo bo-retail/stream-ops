@@ -98,12 +98,38 @@ describe("keying a show", () => {
   // guess. Which show a sale belongs to is settled by the ingestion, not here —
   // see the note in payroll.ts.
   it("keys a show the same way from either side", () => {
-    expect(showKey({ dateISO: "2026-09-08", platform: "TIKTOK", slot: "NIGHT" })).toBe(
-      "2026-09-08|TIKTOK|NIGHT",
-    );
-    expect(showKey({ dateISO: "2026-09-08", platform: "EBAY", slot: "DAY" })).toBe(
-      "2026-09-08|EBAY|DAY",
-    );
+    expect(
+      showKey({ business: "WATCH", dateISO: "2026-09-08", platform: "TIKTOK", slot: "NIGHT" }),
+    ).toBe("WATCH|2026-09-08|TIKTOK|NIGHT");
+    expect(
+      showKey({ business: "WATCH", dateISO: "2026-09-08", platform: "EBAY", slot: "DAY" }),
+    ).toBe("WATCH|2026-09-08|EBAY|DAY");
+  });
+
+  it("keeps two shows apart when only the business differs", () => {
+    /*
+      The bug this is here to stop.
+
+      Watches and diamonds both sell on TikTok at the same hours, so a watch
+      TikTok Day and a diamond TikTok Day on one date are identical in every
+      other field. Keyed without the business they pool into one bucket: their
+      takings are added together, whichever rota row is read last overwrites who
+      was on it, and one pair earns commission on both shows while the other
+      earns nothing at all.
+    */
+    const watch = showKey({
+      business: "WATCH",
+      dateISO: "2026-09-18",
+      platform: "TIKTOK",
+      slot: "DAY",
+    });
+    const diamond = showKey({
+      business: "DIAMOND",
+      dateISO: "2026-09-18",
+      platform: "TIKTOK",
+      slot: "DAY",
+    });
+    expect(watch).not.toBe(diamond);
   });
 });
 
@@ -146,10 +172,16 @@ describe("reading a rate somebody typed", () => {
 });
 
 describe("one person's pay", () => {
-  const show = (label: string, cents: number) => ({
-    key: { dateISO: "2026-09-08" as const, platform: "TIKTOK" as const, slot: "NIGHT" as const },
+  const show = (label: string, cents: number, bps = RATES.streamerCommissionBps) => ({
+    key: {
+      business: "WATCH" as const,
+      dateISO: "2026-09-08" as const,
+      platform: "TIKTOK" as const,
+      slot: "NIGHT" as const,
+    },
     label,
     netRevenueCents: cents,
+    bps,
   });
 
   it("adds commission on top of the hours", () => {

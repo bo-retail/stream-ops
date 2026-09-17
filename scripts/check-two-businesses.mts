@@ -21,6 +21,7 @@ import { prisma } from "../src/lib/db";
 import { addDays, toDbDate, todayISO } from "../src/lib/domain/dates";
 import { getSettings } from "../src/lib/server/settings";
 import { listReleaseCast } from "../src/lib/server/releases";
+import { getPayrollPeriod } from "../src/lib/server/payroll";
 
 assertDevDatabase("check-two-businesses.mts");
 
@@ -43,6 +44,8 @@ const DATE = addDays(today, 400);
 const PREFIX = "check: two businesses ";
 
 async function clear() {
+  await prisma.salesRecord.deleteMany({ where: { orderRef: { startsWith: PREFIX } } });
+  await prisma.importBatch.deleteMany({ where: { showDate: toDbDate(DATE) } });
   const releases = await prisma.release.deleteMany({ where: { name: { startsWith: PREFIX } } });
   return releases.count;
 }
@@ -141,6 +144,114 @@ try {
     rates.every((r) => r.seatsPerShow >= 1 && r.streamerCommissionBps >= 0),
     true,
   );
+
+  /* ------------------------------------- the money, which is the whole point */
+
+  /*
+    Two shows on one date, identical but for the business, each with its own
+    pair and its own takings.
+
+    Keyed without the business these pooled into one bucket: the takings were
+    added together and whichever rota row was read last overwrote who was on it,
+    so one pair earned commission on both shows and the other earned nothing.
+    This is the check that says that cannot happen.
+  */
+  const streamers = await prisma.user.findMany({
+    where: { isActive: true, role: "EMPLOYEE", team: "STREAMING" },
+    orderBy: { name: "asc" },
+    take: 4,
+    select: { id: true, name: true },
+  });
+
+  if (streamers.length < 4) {
+    console.log("\nSKIP  payroll separation — needs four active streamers on this database.");
+  } else {
+    const [w1, w2, d1, d2] = streamers;
+
+    const watchShow = await prisma.show.findFirstOrThrow({
+      where: { releaseId: watchRelease },
+      select: { id: true },
+    });
+    const diamondShow = await prisma.show.findFirstOrThrow({
+      where: { releaseId: diamondRelease },
+      select: { id: true },
+    });
+
+    await prisma.assignment.createMany({
+      data: [
+        { showId: watchShow.id, userId: w1.id, seat: 1 },
+        { showId: watchShow.id, userId: w2.id, seat: 2 },
+        { showId: diamondShow.id, userId: d1.id, seat: 1 },
+        { showId: diamondShow.id, userId: d2.id, seat: 2 },
+      ],
+    });
+
+    // One upload per business, as the two seller accounts produce.
+    const sale = async (business: "WATCH" | "DIAMOND", cents: number) => {
+      const batch = await prisma.importBatch.create({
+        data: {
+          business,
+          showDate: toDbDate(DATE),
+          status: "OK",
+          files: [{ name: `${PREFIX}${business}.csv`, platform: "TIKTOK" }],
+          flags: [],
+        },
+        select: { id: true },
+      });
+      await prisma.salesRecord.create({
+        data: {
+          batchId: batch.id,
+          business,
+          platform: "TIKTOK",
+          show: "TikTok AM",
+          showDate: toDbDate(DATE),
+          shiftTag: "",
+          rawShiftTag: "",
+          orderRef: `${PREFIX}${business}`,
+          lineRef: "",
+          buyer: "",
+          stockNumber: "X1",
+          netItemPriceCents: cents,
+          sourceFile: `${PREFIX}${business}.csv`,
+        },
+      });
+      return batch.id;
+    };
+
+    await sale("WATCH", 100_000); // $1,000
+    await sale("DIAMOND", 50_000); // $500
+
+    const payroll = await getPayrollPeriod(DATE, DATE);
+    const earned = (userId: string) =>
+      payroll.people.find((p) => p.userId === userId)?.commissionCents ?? -1;
+
+    const watchRate = rates.find((r) => r.business === "WATCH")!.streamerCommissionBps;
+    const diamondRate = rates.find((r) => r.business === "DIAMOND")!.streamerCommissionBps;
+
+    check("the watch pair earn on their show only", earned(w1.id), Math.round((100_000 * watchRate) / 10_000));
+    check("both of them, separately", earned(w2.id), earned(w1.id));
+    check(
+      "the diamond pair earn on theirs only",
+      earned(d1.id),
+      Math.round((50_000 * diamondRate) / 10_000),
+    );
+    check("both of them too", earned(d2.id), earned(d1.id));
+    check("and the two shows are not the same show", earned(w1.id) === earned(d1.id), false);
+
+    check(
+      "both shows appear on the run, neither swallowed",
+      payroll.shows.filter((s) => s.key.dateISO === DATE).length,
+      2,
+    );
+    check(
+      "each with its own takings",
+      payroll.shows
+        .filter((s) => s.key.dateISO === DATE)
+        .map((s) => s.netRevenueCents)
+        .sort((a, b) => a - b),
+      [50_000, 100_000],
+    );
+  }
 } finally {
   console.log("\nCleaning up.");
   // Cascades take the shows and the members with the releases.

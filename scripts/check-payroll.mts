@@ -58,6 +58,11 @@ await clearFixtures();
 /* --------------------------------------------------------------- the rates */
 
 const settingsBefore = await prisma.settings.findUniqueOrThrow({ where: { id: "singleton" } });
+// Commission is paid from the show's own kind of business now, so the fixture
+// has to set it where the app reads it — Settings holds only the fallback.
+const watchRatesBefore = await prisma.businessSettings.findUniqueOrThrow({
+  where: { business: "WATCH" },
+});
 
 await prisma.settings.update({
   where: { id: "singleton" },
@@ -66,6 +71,10 @@ await prisma.settings.update({
     shippingHourlyCents: 1600, // $16.00
     streamerCommissionBps: 100, // 1%
   },
+});
+await prisma.businessSettings.update({
+  where: { business: "WATCH" },
+  data: { streamerCommissionBps: 100 }, // 1%
 });
 
 /* ------------------------------------------------------------- the people */
@@ -344,8 +353,11 @@ check("nor the total", after.totals.commissionCents, 1000 + 1000 + 2590);
 
 /* -------------------------------------------- changing the rate moves the pay */
 
-await prisma.settings.update({
-  where: { id: "singleton" },
+// Set where the app reads it. Changing Settings alone no longer moves what is
+// paid — that column is only the fallback for a business with no row — and this
+// check is what caught that when the readers moved.
+await prisma.businessSettings.update({
+  where: { business: "WATCH" },
   data: { streamerCommissionBps: 200 },
 });
 const doubled = await getPayrollPeriod(period.start, period.end);
@@ -366,6 +378,10 @@ await prisma.settings.update({
   where: { id: "singleton" },
   data: { streamerHourlyCents: 0, shippingHourlyCents: 0, streamerCommissionBps: 100 },
 });
+await prisma.businessSettings.update({
+  where: { business: "WATCH" },
+  data: { streamerCommissionBps: 100 },
+});
 const unpaid = await getPayrollPeriod(period.start, period.end);
 check("somebody who worked with no rate is flagged", unpaid.totals.unrated, 4);
 check(
@@ -384,6 +400,10 @@ await prisma.settings.update({
     shippingHourlyCents: settingsBefore.shippingHourlyCents,
     streamerCommissionBps: settingsBefore.streamerCommissionBps,
   },
+});
+await prisma.businessSettings.update({
+  where: { business: "WATCH" },
+  data: { streamerCommissionBps: watchRatesBefore.streamerCommissionBps },
 });
 await clearFixtures();
 console.log(

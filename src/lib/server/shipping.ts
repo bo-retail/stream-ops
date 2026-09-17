@@ -79,7 +79,7 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
         date: { gte: toDbDate(from), lte: toDbDate(today) },
         release: { scheduleStatus: "PUBLISHED" },
       },
-      select: { date: true, platform: true, slot: true, status: true },
+      select: { date: true, business: true, platform: true, slot: true, status: true },
       orderBy: [{ date: "asc" }, { platform: "asc" }, { slot: "asc" }],
     }),
     prisma.importBatch.findMany({
@@ -110,7 +110,12 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
     const key = fromDbDate(row.date);
     dates.add(key);
     const list = showsByDate.get(key) ?? [];
-    list.push({ platform: row.platform, slot: row.slot, cancelled: row.status === "CANCELLED" });
+    list.push({
+      business: row.business,
+      platform: row.platform,
+      slot: row.slot,
+      cancelled: row.status === "CANCELLED",
+    });
     showsByDate.set(key, list);
   }
   for (const row of batches) dates.add(fromDbDate(row.showDate));
@@ -246,7 +251,7 @@ export async function missingReports(lookBackDays = LOOK_BACK_DAYS): Promise<Mis
         date: { gte: toDbDate(from), lte: toDbDate(to) },
         release: { scheduleStatus: "PUBLISHED" },
       },
-      select: { date: true, platform: true, slot: true, status: true },
+      select: { date: true, business: true, platform: true, slot: true, status: true },
     }),
     prisma.importBatch.findMany({
       where: { showDate: { gte: toDbDate(from), lte: toDbDate(to) }, status: "OK" },
@@ -259,7 +264,12 @@ export async function missingReports(lookBackDays = LOOK_BACK_DAYS): Promise<Mis
   for (const row of shows) {
     const key = fromDbDate(row.date);
     const list = showsByDate.get(key) ?? [];
-    list.push({ platform: row.platform, slot: row.slot, cancelled: row.status === "CANCELLED" });
+    list.push({
+      business: row.business,
+      platform: row.platform,
+      slot: row.slot,
+      cancelled: row.status === "CANCELLED",
+    });
     showsByDate.set(key, list);
   }
 

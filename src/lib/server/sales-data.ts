@@ -19,12 +19,21 @@ export async function latestBatchIds(from: DateISO, to: DateISO): Promise<string
   const batches = await prisma.importBatch.findMany({
     where: { showDate: { gte: toDbDate(from), lte: toDbDate(to) }, status: "OK" },
     orderBy: { uploadedAt: "desc" },
-    select: { id: true, showDate: true },
+    select: { id: true, showDate: true, business: true },
   });
 
-  const latest = new Map<DateISO, string>();
+  /*
+    The latest upload per day AND per business, not per day.
+
+    Watches and diamonds are uploaded separately — different seller accounts,
+    different files — so a day can hold one report of each. Keyed by date alone,
+    whichever went in second would be the only one anybody could see: the other
+    business's sales would disappear from payroll, from insights and from every
+    export, with nothing on screen to say they had ever been loaded.
+  */
+  const latest = new Map<string, string>();
   for (const batch of batches) {
-    const key = fromDbDate(batch.showDate);
+    const key = `${batch.business}|${fromDbDate(batch.showDate)}`;
     if (!latest.has(key)) latest.set(key, batch.id);
   }
   return [...latest.values()];

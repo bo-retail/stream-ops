@@ -368,7 +368,21 @@ export async function closeOpenEntry(
 const RatesSchema = z.object({
   streamerHourly: z.string(),
   shippingHourly: z.string(),
+  /*
+    Commission is per kind of show; the hourly rates are not.
+
+    A show's commission is a share of what that show sold, and a diamond piece
+    averaged $257 against roughly $100 for a watch — so the same percentage is a
+    very different amount of money and the two are set apart.
+
+    Hours are not split the same way because they do not need to be. A streamer
+    works one kind of show, so a diamond streamer who is paid differently is
+    given her own rate on the row below, which has always been there. Splitting
+    the hourly rate by business as well would mean dividing one person's shift
+    across two rates, which nothing in the business actually does.
+  */
   commissionPercent: z.string(),
+  diamondCommissionPercent: z.string(),
 });
 
 export async function setRates(
@@ -388,31 +402,57 @@ export async function setRates(
   const streamerHourlyCents = parseMoneyToCents(parsed.data.streamerHourly);
   const shippingHourlyCents = parseMoneyToCents(parsed.data.shippingHourly);
   const streamerCommissionBps = parsePercentToBps(parsed.data.commissionPercent);
+  const diamondCommissionBps = parsePercentToBps(parsed.data.diamondCommissionPercent);
 
   if (streamerHourlyCents === null) return { error: "The streamer hourly rate is not an amount." };
   if (shippingHourlyCents === null) return { error: "The shipping hourly rate is not an amount." };
-  if (streamerCommissionBps === null) return { error: "The commission is not a percentage." };
+  if (streamerCommissionBps === null) return { error: "The watch commission is not a percentage." };
+  if (diamondCommissionBps === null) return { error: "The diamond commission is not a percentage." };
   // A rate this size is a decimal point in the wrong place, not a wage.
   if (streamerHourlyCents > 100_000 || shippingHourlyCents > 100_000) {
     return { error: "That is over $1,000 an hour. Check the decimal point." };
   }
-  if (streamerCommissionBps > 10_000) {
+  if (streamerCommissionBps > 10_000 || diamondCommissionBps > 10_000) {
     return { error: "That is over 100%. Check the figure." };
   }
 
   const before = await getSettings();
+  const beforeRates = await prisma.businessSettings.findMany({
+    select: { business: true, streamerCommissionBps: true },
+  });
+  const beforeBps = new Map(beforeRates.map((r) => [r.business, r.streamerCommissionBps]));
+
   if (
     before.streamerHourlyCents === streamerHourlyCents &&
     before.shippingHourlyCents === shippingHourlyCents &&
-    before.streamerCommissionBps === streamerCommissionBps
+    beforeBps.get("WATCH") === streamerCommissionBps &&
+    beforeBps.get("DIAMOND") === diamondCommissionBps
   ) {
     return { ok: "Nothing changed." };
   }
 
   await prisma.$transaction([
+    /*
+      Settings keeps the hourly rates, and keeps the watch commission in step.
+
+      The commission that is actually paid comes from BusinessSettings below —
+      but Settings.streamerCommissionBps is the fallback when a business has no
+      row, and a fallback that drifts from what the boss typed is worse than no
+      fallback at all.
+    */
     prisma.settings.update({
       where: { id: "singleton" },
       data: { streamerHourlyCents, shippingHourlyCents, streamerCommissionBps },
+    }),
+    prisma.businessSettings.upsert({
+      where: { business: "WATCH" },
+      create: { business: "WATCH", streamerCommissionBps },
+      update: { streamerCommissionBps },
+    }),
+    prisma.businessSettings.upsert({
+      where: { business: "DIAMOND" },
+      create: { business: "DIAMOND", streamerCommissionBps: diamondCommissionBps },
+      update: { streamerCommissionBps: diamondCommissionBps },
     }),
     prisma.auditLog.create({
       data: {
@@ -422,13 +462,21 @@ export async function setRates(
         actorId: boss.id,
         summary:
           `Pay rates set to streamers ${money(streamerHourlyCents)}/h, ` +
-          `shipping ${money(shippingHourlyCents)}/h, commission ${formatBps(streamerCommissionBps)} a show`,
+          `shipping ${money(shippingHourlyCents)}/h, commission ` +
+          `${formatBps(streamerCommissionBps)} a watch show and ` +
+          `${formatBps(diamondCommissionBps)} a diamond show`,
         before: {
           streamerHourlyCents: before.streamerHourlyCents,
           shippingHourlyCents: before.shippingHourlyCents,
-          streamerCommissionBps: before.streamerCommissionBps,
+          watchCommissionBps: beforeBps.get("WATCH") ?? before.streamerCommissionBps,
+          diamondCommissionBps: beforeBps.get("DIAMOND") ?? null,
         },
-        after: { streamerHourlyCents, shippingHourlyCents, streamerCommissionBps },
+        after: {
+          streamerHourlyCents,
+          shippingHourlyCents,
+          watchCommissionBps: streamerCommissionBps,
+          diamondCommissionBps,
+        },
       },
     }),
   ]);

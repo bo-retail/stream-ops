@@ -416,20 +416,20 @@ model ScheduleSnapshot {
 /// quietly moving what the other pays. The timezone stays on `Settings`: it is
 /// one company in one place, and two timezones would be a bug.
 ///
-/// Shipping's hourly rate is deliberately *not* here. Packers handle both piles
-/// off the same table and never clock in against a show, so there is nothing to
-/// attribute their hours to — they are paid one blended rate from `Settings`.
+/// No hourly rates here, deliberately. Packers handle both piles off the same
+/// table and never clock against a show, so there is nothing to attribute their
+/// hours to. And a streamer works one kind of show, so a diamond streamer paid
+/// differently is given her own rate on her row — splitting the hourly rate by
+/// business as well would mean dividing one person's shift across two rates,
+/// which nothing in the business actually does. Both stay in `Settings`.
 ///
 /// Keyed by the business itself, so there is no id to get wrong and no way to
 /// end up with two rows for one side.
 model BusinessSettings {
   business Business @id
 
-  /// What a streamer on this business's shows is paid an hour, in whole cents.
-  streamerHourlyCents Int @default(0)
-
-  /// Their share of the show's sales, in basis points — 100 = 1.00%. Each
-  /// person on the show earns it separately.
+  /// A streamer's share of the show's sales, in basis points — 100 = 1.00%.
+  /// Each person on the show earns it separately.
   ///
   /// Worth setting apart from watches: the 09/15 diamond show averaged $257 a
   /// piece against roughly $100 for a watch, so the same percentage is a very

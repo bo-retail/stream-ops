@@ -15,10 +15,14 @@
  * one eBay file.
  */
 
+import type { Business } from "../business";
 import type { Platform, Slot } from "../types";
 
 /** One show that ran, and therefore one thing the day's reports must account for. */
 export interface DayShow {
+  /** Watches or diamonds. Each sells through its own seller account, so each
+   *  exports its own file — see the count below. */
+  business: Business;
   platform: Platform;
   slot: Slot;
   cancelled: boolean;
@@ -35,14 +39,27 @@ export function expectedFilesFor(shows: readonly DayShow[]): ExpectedFiles {
   // A cancelled show sold nothing, so it is not waiting for anything.
   const live = shows.filter((s) => !s.cancelled);
 
-  // Counted by distinct slot rather than by show: TikTok runs one export per
-  // show, and both platforms' shows share the day's slots.
-  const tiktok = new Set(live.filter((s) => s.platform === "TIKTOK").map((s) => s.slot)).size;
-  const ebay = live.some((s) => s.platform === "EBAY") ? 1 : 0;
+  /*
+    Counted per business as well as per slot.
+
+    TikTok exports one file per show, and each business sells through its own
+    seller account — so a watch TikTok Day and a diamond TikTok Day on one date
+    are two separate files, not one. Counting distinct slots alone made them one:
+    a day running watch Day, watch Night, watch eBay and diamond Day would wait
+    for three files when it needs four, read as complete once three arrived, and
+    never chase the diamond report at all. Its sales would go unrecorded and its
+    parcels would have nothing to pack against.
+  */
+  const tiktok = new Set(
+    live.filter((s) => s.platform === "TIKTOK").map((s) => `${s.business}|${s.slot}`),
+  ).size;
+
+  // eBay exports one file per day per seller account, however many shows ran.
+  const ebay = new Set(live.filter((s) => s.platform === "EBAY").map((s) => s.business)).size;
 
   const parts: string[] = [];
   if (tiktok > 0) parts.push(`${tiktok} TikTok export${tiktok === 1 ? "" : "s"}`);
-  if (ebay > 0) parts.push("1 eBay export");
+  if (ebay > 0) parts.push(`${ebay} eBay export${ebay === 1 ? "" : "s"}`);
 
   return {
     tiktok,

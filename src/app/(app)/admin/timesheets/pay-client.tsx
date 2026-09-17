@@ -43,10 +43,14 @@ export function RatesPanel({
   streamerHourlyCents,
   shippingHourlyCents,
   commissionBps,
+  diamondCommissionBps,
 }: {
   streamerHourlyCents: number;
   shippingHourlyCents: number;
+  /** What a watch show pays each of its pair. */
   commissionBps: number;
+  /** What a diamond show pays. Set apart because a piece is worth far more. */
+  diamondCommissionBps: number;
 }) {
   const [state, action, pending] = useActionState(setRates, {});
 
@@ -57,7 +61,7 @@ export function RatesPanel({
         description="Everyone earns hourly. A streamer earns their share of each show they were on, on top."
       />
       <form action={action} className="space-y-3 p-4">
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <label className="block">
             <span className="mb-1.5 block text-sm font-medium text-ink">Streamer, per hour</span>
             <Input
@@ -77,21 +81,41 @@ export function RatesPanel({
             />
           </label>
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-ink">Commission, per show</span>
+            <span className="mb-1.5 block text-sm font-medium text-ink">
+              Commission, watch show
+            </span>
             <Input
               name="commissionPercent"
               defaultValue={String(commissionBps / 100)}
               inputMode="decimal"
-              aria-label="Streamer commission percentage"
+              aria-label="Watch show commission percentage"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-ink">
+              Commission, diamond show
+            </span>
+            <Input
+              name="diamondCommissionPercent"
+              defaultValue={String(diamondCommissionBps / 100)}
+              inputMode="decimal"
+              aria-label="Diamond show commission percentage"
             />
           </label>
         </div>
 
         <p className="text-xs text-ink-muted">
           Commission is a percentage of what that show sold, and <strong>both people on a show
-          earn it separately</strong> — at 1% a show pays out 2% of its sales in total. Changing a
-          rate does not rewrite anything already paid out; it applies to this period and every one
-          after it, and every change is on the log below.
+          earn it separately</strong> — at 1% a show pays out 2% of its sales in total. The two are
+          set apart because a diamond piece is worth several times a watch, so the same percentage
+          is a very different amount of money. Changing a rate does not rewrite anything already
+          paid out; it applies to this period and every one after it, and every change is on the
+          log below.
+        </p>
+
+        <p className="text-xs text-ink-muted">
+          The hourly rates are not split by show. A streamer works one kind of show, so anyone paid
+          differently is given their own rate in the table below.
         </p>
 
         {state.error ? <p className="text-sm font-medium text-danger-600">{state.error}</p> : null}

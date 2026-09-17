@@ -198,7 +198,6 @@ CREATE TABLE "ScheduleSnapshot" (
 -- CreateTable
 CREATE TABLE "BusinessSettings" (
     "business" "Business" NOT NULL,
-    "streamerHourlyCents" INTEGER NOT NULL DEFAULT 0,
     "streamerCommissionBps" INTEGER NOT NULL DEFAULT 100,
     "seatsPerShow" INTEGER NOT NULL DEFAULT 2,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -682,7 +681,6 @@ ALTER TABLE "User"
 -- of people on one: commission is paid per person, so seatsPerShow is what
 -- decides whether a show pays out 1% of its sales or 2%.
 ALTER TABLE "BusinessSettings"
-  ADD CONSTRAINT "BusinessSettings_streamerHourlyCents_not_negative" CHECK ("streamerHourlyCents" >= 0),
   ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
   ADD CONSTRAINT "BusinessSettings_seatsPerShow_sensible" CHECK ("seatsPerShow" BETWEEN 1 AND 4);
 
@@ -693,6 +691,6 @@ INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerSh
 VALUES ('WATCH', 100, 2, CURRENT_TIMESTAMP)
 ON CONFLICT ("business") DO NOTHING;
 
-INSERT INTO "BusinessSettings" ("business", "streamerHourlyCents", "streamerCommissionBps", "seatsPerShow", "updatedAt")
-VALUES ('DIAMOND', 3000, 100, 2, CURRENT_TIMESTAMP)
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
+VALUES ('DIAMOND', 100, 2, CURRENT_TIMESTAMP)
 ON CONFLICT ("business") DO NOTHING;

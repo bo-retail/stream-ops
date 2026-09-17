@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db";
 import { fromDbDate, toDbDate } from "@/lib/domain/dates";
 import { payFor, showKey } from "@/lib/domain/payroll";
 import type { PersonPay, Rates, ShowKey } from "@/lib/domain/payroll";
+import { BUSINESS_SHORT } from "@/lib/domain/business";
+import type { Business } from "@/lib/domain/business";
 import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
 import type { DateISO, Platform, Slot } from "@/lib/domain/types";
 import { fieldsToPosition, positionName } from "@/app/(app)/admin/team/position";
@@ -43,6 +45,16 @@ export interface PayrollPeriod {
   from: DateISO;
   to: DateISO;
   rates: Rates;
+  /**
+   * What each kind of show pays each of its pair, in basis points.
+   *
+   * Separate from `rates` because it is the one figure that genuinely differs
+   * between watches and diamonds — a piece is worth several times a watch, so
+   * the same percentage is a very different amount of money. The hourly rates
+   * are not split this way: a streamer works one kind of show, so anyone paid
+   * differently gets their own rate on their row.
+   */
+  commissionByBusiness: Record<Business, number>;
   people: PersonPay[];
   shows: ShowSales[];
   /** Sales tagged for a show that is not on any rota, so nobody is paid them. */
@@ -60,8 +72,17 @@ export interface PayrollPeriod {
   noSalesLoaded: boolean;
 }
 
-function labelFor(platform: Platform, slot: Slot): string {
-  return `${PLATFORM_SHORT[platform]} ${SLOT_SHORT[slot]}`;
+/**
+ * What a show is called on the payroll screen.
+ *
+ * Diamonds are named; watches are not. Two shows can now share a platform, a
+ * slot and a date, so a payroll line reading "TikTok Day · 2026-09-18" twice
+ * with different money against each would be unreadable. Naming only the
+ * exception keeps every other line exactly as it was.
+ */
+function labelFor(business: Business, platform: Platform, slot: Slot): string {
+  const show = `${PLATFORM_SHORT[platform]} ${SLOT_SHORT[slot]}`;
+  return business === "WATCH" ? show : `${BUSINESS_SHORT[business]} ${show}`;
 }
 
 /**
@@ -78,13 +99,17 @@ async function salesByShow(from: DateISO, to: DateISO): Promise<Map<string, Show
   if (batchIds.length === 0) return byShow;
 
   const rows = await prisma.salesRecord.groupBy({
-    by: ["show", "showDate", "platform"],
+    // Grouped by business as well, because a watch TikTok Day and a diamond
+    // TikTok Day on one date are otherwise the same row here — and their
+    // takings would be added together before anybody is paid out of them.
+    by: ["business", "show", "showDate", "platform"],
     where: { batchId: { in: batchIds } },
     _sum: { netItemPriceCents: true, qty: true },
   });
 
   for (const row of rows) {
     const key: ShowKey = {
+      business: row.business,
       dateISO: fromDbDate(row.showDate),
       platform: row.platform,
       // "TikTok AM" / "eBay PM" — the half is the last two characters.
@@ -94,7 +119,7 @@ async function salesByShow(from: DateISO, to: DateISO): Promise<Map<string, Show
     const id = showKey(key);
     const found = byShow.get(id) ?? {
       key,
-      label: `${labelFor(key.platform, key.slot)} · ${key.dateISO}`,
+      label: `${labelFor(key.business, key.platform, key.slot)} · ${key.dateISO}`,
       netRevenueCents: 0,
       units: 0,
       showId: null,
@@ -116,6 +141,22 @@ export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<Payr
     streamerCommissionBps: settings.streamerCommissionBps,
   };
 
+  /*
+    The commission each kind of show pays.
+
+    Read once for the whole run rather than per show. A business with no row —
+    which cannot happen, since the migration seeds both — falls back to the
+    shared rate rather than paying nothing, because a silent zero is the one
+    failure this file exists to avoid.
+  */
+  const businessRates = new Map(
+    (await prisma.businessSettings.findMany({ select: { business: true, streamerCommissionBps: true } })).map(
+      (r) => [r.business, r.streamerCommissionBps] as const,
+    ),
+  );
+  const bpsFor = (business: Business): number =>
+    businessRates.get(business) ?? settings.streamerCommissionBps;
+
   const [entries, sales, rota, staff] = await Promise.all([
     getEntriesInRange({ from, to }),
     salesByShow(from, to),
@@ -126,6 +167,7 @@ export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<Payr
       select: {
         id: true,
         date: true,
+        business: true,
         platform: true,
         slot: true,
         assignments: { select: { userId: true, user: { select: { name: true } } } },
@@ -148,6 +190,7 @@ export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<Payr
   // empty night is visible rather than absent.
   for (const show of rota) {
     const key: ShowKey = {
+      business: show.business,
       dateISO: fromDbDate(show.date),
       platform: show.platform,
       slot: show.slot,
@@ -155,7 +198,7 @@ export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<Payr
     const id = showKey(key);
     const found = sales.get(id) ?? {
       key,
-      label: `${labelFor(key.platform, key.slot)} · ${key.dateISO}`,
+      label: `${labelFor(key.business, key.platform, key.slot)} · ${key.dateISO}`,
       netRevenueCents: 0,
       units: 0,
       showId: null,
@@ -212,6 +255,8 @@ export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<Payr
           key: s.key,
           label: s.label,
           netRevenueCents: s.netRevenueCents,
+          // Each show pays its own kind of business's rate.
+          bps: bpsFor(s.key.business),
         })),
       }),
     );
@@ -223,6 +268,7 @@ export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<Payr
     from,
     to,
     rates,
+    commissionByBusiness: { WATCH: bpsFor("WATCH"), DIAMOND: bpsFor("DIAMOND") },
     people,
     shows: attributed,
     unattributed,

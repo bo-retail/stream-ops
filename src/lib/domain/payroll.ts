@@ -19,6 +19,7 @@
  *               1% split.
  */
 
+import type { Business } from "./business";
 import type { DateISO, Platform, Slot } from "./types";
 
 /** The business-wide rates. Whole cents, and basis points for the percentage. */
@@ -86,13 +87,23 @@ export function commissionCents(netRevenueCents: number, bps: number): number {
 
 /** A show, as a key that a sale and a rota row can both be reduced to. */
 export interface ShowKey {
+  /**
+   * Watches or diamonds.
+   *
+   * Without it this key is a money bug, not a detail. Both sell on TikTok at
+   * the same hours, so a watch TikTok Day and a diamond TikTok Day on one date
+   * reduce to the same string — their sales pool into one bucket and whichever
+   * rota row is read last overwrites who was on it. One pair then earns
+   * commission on both shows' takings and the other earns nothing.
+   */
+  business: Business;
   dateISO: DateISO;
   platform: Platform;
   slot: Slot;
 }
 
 export function showKey(k: ShowKey): string {
-  return `${k.dateISO}|${k.platform}|${k.slot}`;
+  return `${k.business}|${k.dateISO}|${k.platform}|${k.slot}`;
 }
 
 /**
@@ -193,22 +204,47 @@ export function payFor(input: {
   openShifts: number;
   override: PersonRateOverride | null;
   rates: Rates;
-  /** The shows this person was on, with what those shows sold. */
-  shows: { key: ShowKey; label: string; netRevenueCents: number }[];
+  /**
+   * The shows this person was on, what those shows sold, and the rate that
+   * show's kind of business pays.
+   *
+   * The rate arrives per show rather than per person because watches and
+   * diamonds can be set apart — a diamond piece averaged $257 against roughly
+   * $100 for a watch, so the same percentage is a very different amount. One
+   * person can be on both in a fortnight.
+   */
+  shows: { key: ShowKey; label: string; netRevenueCents: number; bps: number }[];
 }): PersonPay {
   const rate = hourlyRateFor(input.team, input.override, input.rates);
-  const bps = commissionBpsFor(input.team, input.override, input.rates);
 
   const hourly = hourlyPayCents(input.minutes, rate);
 
-  const shows: ShowEarning[] = input.shows.map((s) => ({
-    key: s.key,
-    label: s.label,
-    netRevenueCents: s.netRevenueCents,
-    bps,
-    commissionCents: commissionCents(s.netRevenueCents, bps),
-  }));
+  const shows: ShowEarning[] = input.shows.map((s) => {
+    // A rate set on the person beats the business's, exactly as it did before.
+    const bps = input.override?.commissionBps ?? s.bps;
+    return {
+      key: s.key,
+      label: s.label,
+      netRevenueCents: s.netRevenueCents,
+      bps,
+      commissionCents: commissionCents(s.netRevenueCents, bps),
+    };
+  });
   const commission = shows.reduce((n, s) => n + s.commissionCents, 0);
+
+  /*
+    The single rate to print beside the person's total.
+
+    True whenever every show they were on pays the same, which is the normal
+    case and is true of both businesses today. When they differ there is no
+    honest single number, so the fallback is their team's default and the
+    per-show breakdown above is where the real rates are.
+  */
+  const rates = new Set(shows.map((s) => s.bps));
+  const bps =
+    rates.size === 1
+      ? [...rates][0]
+      : commissionBpsFor(input.team, input.override, input.rates);
 
   return {
     userId: input.userId,

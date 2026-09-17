@@ -198,7 +198,8 @@ export default async function TimesheetsPage({
           <RatesPanel
             streamerHourlyCents={payroll.rates.streamerHourlyCents}
             shippingHourlyCents={payroll.rates.shippingHourlyCents}
-            commissionBps={payroll.rates.streamerCommissionBps}
+            commissionBps={payroll.commissionByBusiness.WATCH}
+            diamondCommissionBps={payroll.commissionByBusiness.DIAMOND}
           />
           <PersonRates
             people={ratePeople.map((p) => ({

@@ -38,9 +38,18 @@
 
 -- CreateEnum
 --
--- CREATE TYPE, not ALTER TYPE ... ADD VALUE, so the value may be used in the
--- same transaction that defines it.
-CREATE TYPE "Business" AS ENUM ('WATCH', 'DIAMOND');
+-- CREATE TYPE, not ALTER TYPE ... ADD VALUE, so the values may be used in the
+-- same transaction that defines them.
+--
+-- Wrapped because PostgreSQL has no CREATE TYPE IF NOT EXISTS, and every other
+-- statement in this file is written to survive a second run. A migration that
+-- stops halfway — a dropped connection, a lock timeout — has to be safe to run
+-- again, and this was the one statement that was not.
+DO $$ BEGIN
+  CREATE TYPE "Business" AS ENUM ('WATCH', 'DIAMOND');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 -- AlterTable — the business on everything that belongs to one kind of show.
 --
@@ -109,24 +118,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS "ReleaseMember_releaseId_userId_key"
 CREATE INDEX IF NOT EXISTS "ReleaseMember_releaseId_idx" ON "ReleaseMember" ("releaseId");
 CREATE INDEX IF NOT EXISTS "ReleaseMember_userId_idx" ON "ReleaseMember" ("userId");
 
-ALTER TABLE "ReleaseMember"
-  ADD CONSTRAINT "ReleaseMember_releaseId_fkey" FOREIGN KEY ("releaseId")
-  REFERENCES "Release"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "ReleaseMember"
-  ADD CONSTRAINT "ReleaseMember_userId_fkey" FOREIGN KEY ("userId")
-  REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+-- Guarded for the same reason as the enum: ADD CONSTRAINT has no IF NOT EXISTS,
+-- and a migration that stops halfway has to be safe to run again.
+DO $$ BEGIN
+  ALTER TABLE "ReleaseMember"
+    ADD CONSTRAINT "ReleaseMember_releaseId_fkey" FOREIGN KEY ("releaseId")
+    REFERENCES "Release"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$ BEGIN
+  ALTER TABLE "ReleaseMember"
+    ADD CONSTRAINT "ReleaseMember_userId_fkey" FOREIGN KEY ("userId")
+    REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 -- CreateTable — what each kind of show pays, and how many people run one.
 --
 -- Split out of Settings because these are exactly the things that differ. The
 -- timezone stays shared: one company, one place.
 --
--- Shipping's hourly rate is deliberately absent. Packers handle both piles in
--- one shift and never clock against a show, so there is nothing to attribute
--- their hours to — they stay on the one blended rate in Settings.
+-- No hourly rates here, deliberately. Packers handle both piles in one shift
+-- and never clock against a show, so there is nothing to attribute their hours
+-- to. And a streamer works one kind of show, so a diamond streamer paid
+-- differently is given her own rate on her row — splitting the hourly rate by
+-- business as well would mean dividing one person's shift across two rates,
+-- which nothing in the business actually does. Both stay in Settings.
 CREATE TABLE IF NOT EXISTS "BusinessSettings" (
     "business" "Business" NOT NULL,
-    "streamerHourlyCents" INTEGER NOT NULL DEFAULT 0,
     "streamerCommissionBps" INTEGER NOT NULL DEFAULT 100,
     -- Two on the watch side, where the pair split camera and computer and swap
     -- halfway; a diamond show may run with one. A number rather than a constant
@@ -140,16 +162,19 @@ CREATE TABLE IF NOT EXISTS "BusinessSettings" (
 
 -- A rate below zero is not a rate, and a show run by nobody is not a show.
 -- Cheaper to refuse here than to find a negative wage in a payroll export.
-ALTER TABLE "BusinessSettings"
-  ADD CONSTRAINT "BusinessSettings_streamerHourlyCents_not_negative" CHECK ("streamerHourlyCents" >= 0),
-  ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
-  ADD CONSTRAINT "BusinessSettings_seatsPerShow_sensible" CHECK ("seatsPerShow" BETWEEN 1 AND 4);
+DO $$ BEGIN
+  ALTER TABLE "BusinessSettings"
+    ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
+    ADD CONSTRAINT "BusinessSettings_seatsPerShow_sensible" CHECK ("seatsPerShow" BETWEEN 1 AND 4);
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
 -- Watches start on exactly what is being paid today, copied from the singleton
 -- rather than typed again here, so nobody's pay moves by a cent when the
 -- readers switch over.
-INSERT INTO "BusinessSettings" ("business", "streamerHourlyCents", "streamerCommissionBps", "seatsPerShow", "updatedAt")
-SELECT 'WATCH', "streamerHourlyCents", "streamerCommissionBps", 2, CURRENT_TIMESTAMP
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
+SELECT 'WATCH', "streamerCommissionBps", 2, CURRENT_TIMESTAMP
   FROM "Settings" WHERE "id" = 'singleton'
 ON CONFLICT ("business") DO NOTHING;
 
@@ -158,9 +183,11 @@ INSERT INTO "BusinessSettings" ("business", "seatsPerShow", "updatedAt")
 VALUES ('WATCH', 2, CURRENT_TIMESTAMP)
 ON CONFLICT ("business") DO NOTHING;
 
--- Diamonds open on $30 an hour and 1% a person, which is what they pay. Seats
--- stay at two, the safe assumption: a one-person show pays half the commission,
--- so guessing that way round would underpay somebody quietly.
-INSERT INTO "BusinessSettings" ("business", "streamerHourlyCents", "streamerCommissionBps", "seatsPerShow", "updatedAt")
-VALUES ('DIAMOND', 3000, 100, 2, CURRENT_TIMESTAMP)
+-- Diamonds open on 1% a person, the same as watches, and the boss can move one
+-- Diamonds open on 1% a person, the same as watches, and either can be moved
+-- without the other on the Payroll screen. Seats stay at two, the safe
+-- assumption: a one-person show pays half the commission, so guessing that way
+-- round would underpay somebody quietly.
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
+VALUES ('DIAMOND', 100, 2, CURRENT_TIMESTAMP)
 ON CONFLICT ("business") DO NOTHING;
