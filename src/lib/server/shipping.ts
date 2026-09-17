@@ -87,6 +87,7 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
       orderBy: { uploadedAt: "desc" },
       select: {
         id: true,
+        business: true,
         showDate: true,
         status: true,
         uploadedAt: true,
@@ -133,12 +134,22 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
     boxes themselves and the watch count from the batch, so the two disagreed on
     screen with nothing wrong in the data.
   */
-  const latestOk = new Map<DateISO, (typeof batches)[number]>();
+  /*
+    A day can hold one report of each kind, so the good ones are kept per
+    business and then added together. Keeping one per date would show only
+    whichever went in second — and, worse, would compare that single report's
+    files against what the whole day expected and call the day short.
+  */
+  const latestOkPerBusiness = new Map<DateISO, Map<string, (typeof batches)[number]>>();
   const latestAny = new Map<DateISO, (typeof batches)[number]>();
   for (const batch of batches) {
     const key = fromDbDate(batch.showDate);
     if (!latestAny.has(key)) latestAny.set(key, batch);
-    if (batch.status === "OK" && !latestOk.has(key)) latestOk.set(key, batch);
+    if (batch.status === "OK") {
+      const perBusiness = latestOkPerBusiness.get(key) ?? new Map();
+      if (!perBusiness.has(batch.business)) perBusiness.set(batch.business, batch);
+      latestOkPerBusiness.set(key, perBusiness);
+    }
   }
 
   const boxTotals = new Map<DateISO, { total: number; sent: number }>();
@@ -153,24 +164,36 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
   return [...dates]
     .sort((a, b) => b.localeCompare(a))
     .map((dateISO) => {
-      // A day with no successful upload still has to show its refused one —
-      // otherwise a blocked morning looks identical to one nobody has touched.
+      /*
+        The day's report is every kind of show's latest good upload, added up.
+
+        A day with no successful upload at all still has to show its refused
+        one — otherwise a blocked morning looks identical to one nobody has
+        touched.
+      */
       const newest = latestAny.get(dateISO);
-      const batch = latestOk.get(dateISO) ?? newest;
+      const good = [...(latestOkPerBusiness.get(dateISO)?.values() ?? [])].sort(
+        (a, b) => b.uploadedAt.getTime() - a.uploadedAt.getTime(),
+      );
+      const shown = good[0] ?? newest;
       const refused =
-        newest && newest.status === "BLOCKED" && batch && newest.id !== batch.id ? newest : null;
+        newest && newest.status === "BLOCKED" && shown && newest.id !== shown.id ? newest : null;
 
       const counts = boxTotals.get(dateISO) ?? { total: 0, sent: 0 };
       const dayShows = showsByDate.get(dateISO) ?? [];
 
       // `files` is written as JSON by the import, so it is read back defensively
-      // rather than trusted to be the shape this version writes.
-      const loadedFiles = Array.isArray(batch?.files)
-        ? (batch.files as { name?: unknown; platform?: unknown }[]).map((f) => ({
-            name: typeof f?.name === "string" ? f.name : "(unnamed)",
-            platform: typeof f?.platform === "string" ? f.platform : "UNKNOWN",
-          }))
-        : [];
+      // rather than trusted to be the shape this version writes. Every good
+      // upload's files together, because the day is waiting for all of them.
+      const sourceFiles = good.length > 0 ? good : shown ? [shown] : [];
+      const loadedFiles = sourceFiles.flatMap((b) =>
+        Array.isArray(b.files)
+          ? (b.files as { name?: unknown; platform?: unknown }[]).map((f) => ({
+              name: typeof f?.name === "string" ? f.name : "(unnamed)",
+              platform: typeof f?.platform === "string" ? f.platform : "UNKNOWN",
+            }))
+          : [],
+      );
 
       const expected = expectedFilesFor(dayShows);
 
@@ -181,20 +204,33 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
         expected,
         loadedFiles,
         missing:
-          batch?.status === "OK"
+          good.length > 0
             ? missingExports(expected, loadedFiles.map((f) => f.platform))
             : null,
-        report: batch
-          ? {
-              batchId: batch.id,
-              status: batch.status,
-              uploadedAt: batch.uploadedAt,
-              uploadedByName: batch.uploadedBy?.name ?? null,
-              watchCount: batch.watchCount,
-              boxCount: batch.boxCount,
-              droppedCount: batch.droppedCount,
-            }
-          : null,
+        report:
+          good.length > 0
+            ? {
+                // The newest good upload identifies the row, but the counts are
+                // the day's, so a day holding both reports shows both.
+                batchId: good[0].id,
+                status: "OK" as const,
+                uploadedAt: good[0].uploadedAt,
+                uploadedByName: good[0].uploadedBy?.name ?? null,
+                watchCount: good.reduce((n, b) => n + b.watchCount, 0),
+                boxCount: good.reduce((n, b) => n + b.boxCount, 0),
+                droppedCount: good.reduce((n, b) => n + b.droppedCount, 0),
+              }
+            : shown
+              ? {
+                  batchId: shown.id,
+                  status: shown.status,
+                  uploadedAt: shown.uploadedAt,
+                  uploadedByName: shown.uploadedBy?.name ?? null,
+                  watchCount: shown.watchCount,
+                  boxCount: shown.boxCount,
+                  droppedCount: shown.droppedCount,
+                }
+              : null,
         refusedAfter: refused
           ? {
               batchId: refused.id,
@@ -256,7 +292,7 @@ export async function missingReports(lookBackDays = LOOK_BACK_DAYS): Promise<Mis
     prisma.importBatch.findMany({
       where: { showDate: { gte: toDbDate(from), lte: toDbDate(to) }, status: "OK" },
       orderBy: { uploadedAt: "desc" },
-      select: { showDate: true, files: true },
+      select: { showDate: true, business: true, files: true },
     }),
   ]);
 
@@ -273,11 +309,22 @@ export async function missingReports(lookBackDays = LOOK_BACK_DAYS): Promise<Mis
     showsByDate.set(key, list);
   }
 
-  // The most recent successful upload is the day's report, as it is everywhere else.
+  /*
+    Every kind of show's latest good upload, added together.
+
+    A day can hold a watch report and a diamond report, and it is waiting for
+    both. Keeping one per date would compare a single report's files against
+    everything the day expected and chase a day that is actually complete —
+    or, worse, call one complete because the other's files filled the count.
+  */
   const latest = new Map<DateISO, string[]>();
+  const seen = new Set<string>();
   for (const batch of loaded) {
     const key = fromDbDate(batch.showDate);
-    if (!latest.has(key)) latest.set(key, platformsOf(batch.files));
+    const perBusiness = `${key}|${batch.business}`;
+    if (seen.has(perBusiness)) continue;
+    seen.add(perBusiness);
+    latest.set(key, [...(latest.get(key) ?? []), ...platformsOf(batch.files)]);
   }
 
   const out: MissingReport[] = [];

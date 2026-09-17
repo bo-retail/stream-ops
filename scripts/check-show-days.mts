@@ -258,12 +258,81 @@ check("and still its figures, not the refusal's", afterRefusal?.report?.batchId,
 check("the refusal is reported separately", afterRefusal?.refusedAfter?.batchId, refusedLater.id);
 check("and the day is not chased again", (await missingReportDays()).includes(HAS_SHOWS_NO_REPORT), false);
 
+/* ------------------------- a day holding one report of each kind of show */
+
+/*
+  Watches and diamonds upload separately, so a day can hold one report of each
+  and is waiting for both.
+
+  Keyed by date alone the day kept whichever went in second: the other vanished
+  from the list, and the survivor's files were compared against everything the
+  day expected — chasing a day that was complete, or calling one complete
+  because the other's files happened to fill the count.
+*/
+const diamondRelease = await prisma.release.create({
+  data: {
+    name: "check: diamonds that day",
+    business: "DIAMOND",
+    startDate: toDbDate(HAS_SHOWS_NO_REPORT),
+    endDate: toDbDate(HAS_SHOWS_NO_REPORT),
+    status: "CLOSED",
+    scheduleStatus: "PUBLISHED",
+    shows: {
+      create: [
+        {
+          business: "DIAMOND",
+          date: toDbDate(HAS_SHOWS_NO_REPORT),
+          platform: "TIKTOK",
+          slot: "DAY",
+          startsAt: new Date(`${HAS_SHOWS_NO_REPORT}T17:00:00.000Z`),
+          endsAt: new Date(`${HAS_SHOWS_NO_REPORT}T23:00:00.000Z`),
+        },
+      ],
+    },
+  },
+  select: { id: true },
+});
+
+const withDiamond = (await listShowDays()).find((d) => d.dateISO === HAS_SHOWS_NO_REPORT);
+check(
+  "adding a diamond show makes the day expect one more file",
+  withDiamond?.expected.tiktok,
+  2, // the watch day's one TikTok export, plus the diamond show's own
+);
+check("and the day is short until it arrives", withDiamond?.missing !== null, true);
+
+const diamondBatch = await prisma.importBatch.create({
+  data: {
+    business: "DIAMOND",
+    showDate: toDbDate(HAS_SHOWS_NO_REPORT),
+    status: "OK",
+    uploadedAt: new Date(Date.now() + 4_000),
+    files: [{ name: "check-diamond.csv", platform: "TIKTOK" }],
+    flags: [],
+  },
+  select: { id: true },
+});
+
+const both = (await listShowDays()).find((d) => d.dateISO === HAS_SHOWS_NO_REPORT);
+check("with both reports in, the day is complete", both?.missing, null);
+check(
+  "and it shows the files from both, not just the newer one",
+  both?.loadedFiles.length,
+  3, // the watch report's two, plus the diamond report's one
+);
+check(
+  "neither report is chased any more",
+  (await missingReportDays()).includes(HAS_SHOWS_NO_REPORT),
+  false,
+);
+
 /* ------------------------------------------------------------------ cleanup */
 
 console.log("\nCleaning up.");
 await prisma.importBatch.deleteMany({
-  where: { id: { in: [blocked.id, partial.id, ok.id, refusedLater.id] } },
+  where: { id: { in: [blocked.id, partial.id, ok.id, refusedLater.id, diamondBatch.id] } },
 });
+await prisma.release.deleteMany({ where: { id: diamondRelease.id } });
 await clearFixtures();
 
 const left = await prisma.release.count({ where: { id: { in: created } } });
