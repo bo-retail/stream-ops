@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
+import { BUSINESS_SHORT } from "@/lib/domain/business";
 import { addDays, datesBetween, fromDbDate, toDbDate, todayISO } from "@/lib/domain/dates";
 import { change, hotThreshold, previousRange } from "@/lib/domain/insights";
 import type { Change } from "@/lib/domain/insights";
@@ -184,12 +185,12 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
       orderBy: { showDate: "asc" },
     }),
     prisma.salesRecord.groupBy({
-      by: ["show"],
+      by: ["business", "show"],
       where,
       _sum: { netItemPriceCents: true, qty: true },
     }),
     prisma.salesRecord.groupBy({
-      by: ["platform"],
+      by: ["business", "platform"],
       where,
       _sum: { netItemPriceCents: true, qty: true },
     }),
@@ -220,9 +221,19 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
     (dateISO) => salesByDate.get(dateISO) ?? { dateISO, revenueCents: 0, units: 0 },
   );
 
+  /*
+    Diamonds are never folded into a watch show's line.
+
+    "TikTok AM" is a show name on both sides, so grouping by it alone would put
+    a diamond day show and a watch day show on one row — and the boss would be
+    reading a number that is two businesses added together without being told.
+    Naming the diamond rows keeps them apart whatever else starts running: a
+    diamond night show, or a diamond eBay show, appears as its own line the day
+    its sales arrive, with nothing here to change.
+  */
   const byShow = breakdown(
     byShowRows.map((r) => ({
-      key: r.show,
+      key: r.business === "WATCH" ? r.show : `${BUSINESS_SHORT[r.business]} ${r.show}`,
       revenueCents: r._sum.netItemPriceCents ?? 0,
       units: r._sum.qty ?? 0,
     })),
@@ -230,11 +241,14 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
   );
 
   const byPlatform = breakdown(
-    byPlatformRows.map((r) => ({
-      key: r.platform === "TIKTOK" ? "TikTok" : "eBay",
-      revenueCents: r._sum.netItemPriceCents ?? 0,
-      units: r._sum.qty ?? 0,
-    })),
+    byPlatformRows.map((r) => {
+      const platform = r.platform === "TIKTOK" ? "TikTok" : "eBay";
+      return {
+        key: r.business === "WATCH" ? platform : `${BUSINESS_SHORT[r.business]} ${platform}`,
+        revenueCents: r._sum.netItemPriceCents ?? 0,
+        units: r._sum.qty ?? 0,
+      };
+    }),
     totals.revenueCents,
   );
 

@@ -3,12 +3,13 @@ import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { BUSINESS_SHORT } from "@/lib/domain/business";
 import type { Business } from "@/lib/domain/business";
-import { toDbDate } from "@/lib/domain/dates";
+import { fromDbDate, toDbDate } from "@/lib/domain/dates";
 import { buildBoxes, checkIntegrity, summariseDay } from "@/lib/domain/imports/boxes";
 import type { Box } from "@/lib/domain/imports/boxes";
 import { parseCsv } from "@/lib/domain/imports/csv";
 import { parseEbayFile } from "@/lib/domain/imports/ebay";
-import { platformsDropped, platformsOf } from "@/lib/domain/imports/expected";
+import { placeEbayFile } from "@/lib/domain/imports/ebay-business";
+import type { EbayPlacement } from "@/lib/domain/imports/ebay-business";
 import { parseTikTokFile } from "@/lib/domain/imports/tiktok";
 import { detectPlatform } from "@/lib/domain/imports/types";
 import type { DroppedRow, ImportFlag, WatchSale } from "@/lib/domain/imports/types";
@@ -96,7 +97,17 @@ function toDropRow(drop: DroppedRow, batchId: string) {
  * Separated from the write so the upload screen can show what an import would
  * do — and so a blocked one never gets as far as a transaction.
  */
-export function readFiles(files: UploadedFile[]): {
+export function readFiles(
+  files: UploadedFile[],
+  /**
+   * Whose eBay report this is, resolved from the day's schedule by the caller.
+   *
+   * The file cannot say: eBay names no seller in any of its 82 columns. So a
+   * diamond eBay show starts working the day somebody publishes it — nothing
+   * here needs editing and no shop needs registering. See `placeEbayFile`.
+   */
+  ebayBusiness: Business = "WATCH",
+): {
   sales: WatchSale[];
   dropped: DroppedRow[];
   flags: ImportFlag[];
@@ -110,9 +121,6 @@ export function readFiles(files: UploadedFile[]): {
   const sales: WatchSale[] = [];
   const dropped: DroppedRow[] = [];
   const fileInfo: { name: string; platform: string; sha256: string; bytes: number }[] = [];
-
-  let tiktokCount = 0;
-  let ebayCount = 0;
 
   for (const file of files) {
     const platform = detectPlatform(parseCsv(file.text));
@@ -131,28 +139,23 @@ export function readFiles(files: UploadedFile[]): {
       continue;
     }
 
-    const result = platform === "TIKTOK" ? parseTikTokFile(file) : parseEbayFile(file);
-    if (platform === "TIKTOK") tiktokCount++;
-    else ebayCount++;
+    const result =
+      platform === "TIKTOK" ? parseTikTokFile(file) : parseEbayFile(file, ebayBusiness);
 
     sales.push(...result.sales);
     dropped.push(...result.dropped);
     flags.push(...result.flags);
   }
 
-  // Process what is there and say so, rather than blocking the morning (F1).
-  if (tiktokCount !== 2) {
-    flags.push({
-      severity: "warning",
-      message: `Expected two TikTok files, got ${tiktokCount}.`,
-    });
-  }
-  if (ebayCount !== 1) {
-    flags.push({
-      severity: "warning",
-      message: `Expected one eBay file, got ${ebayCount}.`,
-    });
-  }
+  /*
+    There is no "expected two TikTok files" warning any more.
+
+    It made sense when an upload was the whole day. Files now go up one at a
+    time, so one TikTok file is the normal case and warning about it would put
+    a complaint on every single upload — which is how people learn to ignore
+    warnings. What the day is still waiting for is on the checklist, where it
+    belongs, and it is worked out from the schedule rather than from a count.
+  */
 
   /*
     One upload is one kind of show.
@@ -204,6 +207,26 @@ export function readFiles(files: UploadedFile[]): {
 }
 
 /**
+ * Whose eBay report a day's export is, read off the published schedule.
+ *
+ * The one piece of this that needs the database, kept apart from the rule
+ * itself so the rule can be tested on its own — see `placeEbayFile`.
+ */
+async function resolveEbayBusiness(showDate: DateISO): Promise<EbayPlacement> {
+  const shows = await prisma.show.findMany({
+    where: { date: toDbDate(showDate), release: { scheduleStatus: "PUBLISHED" } },
+    select: { business: true, platform: true, status: true },
+  });
+  return placeEbayFile(
+    shows.map((s) => ({
+      business: s.business,
+      platform: s.platform,
+      cancelled: s.status === "CANCELLED",
+    })),
+  );
+}
+
+/**
  * Reads the files and writes the day.
  *
  * A second upload of the same day is expected — a corrected export, a file that
@@ -222,50 +245,61 @@ export async function runImport(
   files: UploadedFile[],
   uploadedById: string,
 ): Promise<ImportOutcome> {
-  const { sales, dropped, flags, boxes, showDate, business, fileInfo } = readFiles(files);
+  /*
+    Read once to learn the day, then resolve whose eBay report it is and read
+    again.
+
+    Two passes because the answer depends on the date and the date comes out of
+    the files. Parsing 200KB twice costs nothing next to getting it wrong, and
+    the alternative — asking the uploader which show their eBay file is for,
+    every single morning — is a question the schedule can already answer.
+
+    This is what makes a diamond eBay show work the day it is published: no code
+    change, no shop to register, no deploy. The schedule says diamonds ran eBay
+    that day, so the eBay file is theirs.
+  */
+  const firstPass = readFiles(files);
+  const ebayBusiness = firstPass.showDate
+    ? await resolveEbayBusiness(firstPass.showDate)
+    : { kind: "noShow" as const, business: "WATCH" as const };
+
+  const { sales, dropped, flags, boxes, showDate, business, fileInfo } = readFiles(
+    files,
+    ebayBusiness.kind === "ambiguous" ? "WATCH" : ebayBusiness.business,
+  );
 
   /*
-    An upload that would take a marketplace away from a day.
+    Both sold on eBay that day and nothing can say which report this is.
 
-    A new upload replaces the day's report: its sales are the ones counted, and
-    open boxes it does not mention are removed. 09/11 went in without its eBay
-    file, and the natural fix is to upload just that file — which would have
-    dropped every TikTok sale and every unpacked TikTok box for the day. So an
-    upload has to carry every marketplace the day already has.
+    Cannot happen until diamonds actually start selling there, and when it does
+    the honest answer is to stop rather than put one show's sales under the
+    other's name and pay the wrong pair.
   */
-  if (showDate !== null && business !== null) {
-    /*
-      Scoped to this upload's own kind of show.
-
-      A watch report and a diamond report for one day are two separate reports
-      and neither replaces the other, so a diamond upload must not be measured
-      against what the watch side has loaded. Unscoped, this is what refused
-      Flora's diamond file on 09/16: the watch day was already in, the diamond
-      file did not contain it, and the guard read that as taking a marketplace
-      away.
-    */
-    const current = await prisma.importBatch.findFirst({
-      where: { business, showDate: toDbDate(showDate), status: "OK" },
-      orderBy: { uploadedAt: "desc" },
-      select: { files: true },
+  if (ebayBusiness.kind === "ambiguous" && fileInfo.some((f) => f.platform === "EBAY")) {
+    flags.push({
+      severity: "blocking",
+      message:
+        `${firstPass.showDate} ran an eBay show for both ${ebayBusiness.candidates
+          .map((b) => BUSINESS_SHORT[b])
+          .join(" and ")}, and an eBay export does not say which seller account it came from. ` +
+        `Upload the two days separately, or tell your admin which this one is.`,
     });
-    const lost = platformsDropped(
-      platformsOf(current?.files),
-      fileInfo.map((f) => f.platform),
-    );
-    if (lost.length > 0) {
-      const names = lost.map((p) => (p === "TIKTOK" ? "TikTok" : "eBay")).join(" and ");
-      const whose = business === "WATCH" ? "" : `${BUSINESS_SHORT[business]} `;
-      flags.push({
-        severity: "blocking",
-        message:
-          `${showDate} already has its ${whose}${names} report loaded, and these files do not ` +
-          `include it. A new upload replaces that report, so this would remove those sales and ` +
-          `their unpacked boxes. Upload all of this show's files together.`,
-      });
-    }
   }
 
+  /*
+    There is deliberately no "upload them all together" guard any more.
+
+    It existed because an upload used to BE the day: a second one replaced
+    everything the first had written, so sending up a single missing file would
+    have taken every other sale and every unpacked box with it. The guard stopped
+    that, and in doing so refused Flora's diamond file on 09/16 — the watch day
+    was already in, the diamond file did not contain it, and that read as taking
+    a marketplace away.
+
+    An upload is now one line of the day's checklist and supersedes only its own
+    line, so there is nothing left to protect against. Files go up one at a time,
+    in any order, whenever each is ready.
+  */
   const blocked = flags.some((f) => f.severity === "blocking");
 
   if (blocked || showDate === null) {
@@ -300,32 +334,162 @@ export async function runImport(
   const summary = summariseDay(sales, boxes);
   const trackings = boxes.map((b) => b.tracking);
 
+  /*
+    Which line of the day's checklist this upload fills.
+
+    A day is a list of separate exports — one per TikTok show, one per business
+    selling on eBay — each produced at a different moment. TikTok's slot comes
+    from the show the file was decided to be; eBay has none, because its single
+    export covers the whole day however many eBay shows ran.
+
+    One upload is one line. Anything that would fill two at once was refused
+    above, so there is exactly one here.
+  */
+  const lines = new Set(
+    sales.map((s) =>
+      s.platform === "EBAY" ? "EBAY|" : `TIKTOK|${s.show.endsWith("AM") ? "DAY" : "NIGHT"}`,
+    ),
+  );
+
+  /*
+    An upload may still carry several files at once — three most mornings — and
+    each one is its own line. They are written as separate batches so that
+    correcting any one of them later touches only that one.
+
+    A file's drops go with its own line. A file whose every row was cancelled
+    has no sales and so no line of its own; its drops join the first, which is
+    the exceptions list rather than anything anybody is paid from.
+  */
+  const lineOf = (s: WatchSale) =>
+    s.platform === "EBAY" ? "EBAY|" : `TIKTOK|${s.show.endsWith("AM") ? "DAY" : "NIGHT"}`;
+  const fileLine = new Map<string, string>();
+  for (const s of sales) fileLine.set(s.sourceFile, lineOf(s));
+
+  const keys = [...lines];
   const written = await prisma.$transaction(
     async (tx) => {
-      const batch = await tx.importBatch.create({
-        data: {
+      const supersededIds: string[] = [];
+      let firstBatchId = "";
+
+      for (const key of keys) {
+        const [platform, slot] = key.split("|");
+        const line = {
+          platform: (platform || null) as "TIKTOK" | "EBAY" | null,
+          slot: (slot || null) as "DAY" | "NIGHT" | null,
+        };
+
+        const mine = sales.filter((s) => lineOf(s) === key);
+        const myDrops = dropped.filter(
+          (d) => (fileLine.get(d.sourceFile) ?? keys[0]) === key,
+        );
+        const myFiles = fileInfo.filter(
+          (f) => (fileLine.get(f.name) ?? keys[0]) === key,
+        );
+        const myBoxes = buildBoxes(mine);
+
+        /*
+          What this line held before.
+
+          Only these boxes may be swept away at the end. A day holds several
+          reports side by side — two TikTok shows, an eBay export, and the same
+          again for diamonds — and a corrected TikTok night file must not touch
+          a single box that came from any of the others.
+        */
+        const previous = await tx.importBatch.findMany({
+          where: {
+            business: business ?? "WATCH",
+            showDate: toDbDate(showDate),
+            status: "OK",
+            platform: line.platform,
+            slot: line.slot,
+          },
+          select: { id: true },
+        });
+        supersededIds.push(...previous.map((b) => b.id));
+
+        const batch = await tx.importBatch.create({
+          data: {
+            business: business ?? "WATCH",
+            platform: line.platform,
+            slot: line.slot,
+            showDate: toDbDate(showDate),
+            status: "OK",
+            uploadedById,
+            files: myFiles,
+            flags: flags as unknown as object[],
+            watchCount: mine.length,
+            boxCount: myBoxes.length,
+            droppedCount: myDrops.length,
+          },
+          select: { id: true },
+        });
+        if (!firstBatchId) firstBatchId = batch.id;
+
+        if (mine.length > 0) {
+          await tx.salesRecord.createMany({ data: mine.map((s) => toSalesRow(s, batch.id)) });
+        }
+        if (myDrops.length > 0) {
+          await tx.importDrop.createMany({ data: myDrops.map((d) => toDropRow(d, batch.id)) });
+        }
+      }
+
+      const batch = { id: firstBatchId };
+
+      /*
+        What this business's day now holds, across every line of its checklist.
+
+        A box can legitimately span two shows — one buyer buying in the morning
+        and again at night gets one label — so what belongs in it cannot be
+        worked out from the file just uploaded. Re-reading the day's other
+        reports is what stops a corrected TikTok night file emptying a box of
+        the watches its day-show file put there.
+
+        Read back from what was just written, so the new line is included and
+        the superseded one is not.
+      */
+      const current = await tx.importBatch.findMany({
+        where: {
           business: business ?? "WATCH",
           showDate: toDbDate(showDate),
           status: "OK",
-          uploadedById,
-          files: fileInfo,
-          flags: flags as unknown as object[],
-          watchCount: summary.watches,
-          boxCount: summary.boxes,
-          droppedCount: dropped.length,
+          id: { notIn: supersededIds.length > 0 ? supersededIds : ["-"] },
         },
-        select: { id: true },
+        orderBy: { uploadedAt: "desc" },
+        select: { id: true, platform: true, slot: true },
       });
+      const liveByLine = new Map<string, string>();
+      for (const b of current) {
+        const key = `${b.platform ?? ""}|${b.slot ?? ""}`;
+        if (!liveByLine.has(key)) liveByLine.set(key, b.id);
+      }
+      const liveBatchIds = [...liveByLine.values()];
 
-      if (sales.length > 0) {
-        await tx.salesRecord.createMany({ data: sales.map((s) => toSalesRow(s, batch.id)) });
-      }
-      if (dropped.length > 0) {
-        await tx.importDrop.createMany({ data: dropped.map((d) => toDropRow(d, batch.id)) });
-      }
+      const dayRows = await tx.salesRecord.findMany({
+        where: { batchId: { in: liveBatchIds } },
+        select: {
+          tracking: true,
+          platform: true,
+          buyer: true,
+          shipToName: true,
+          state: true,
+          showDate: true,
+          show: true,
+          stockNumber: true,
+          qty: true,
+          orderRef: true,
+        },
+      });
+      const dayBoxes = buildBoxes(
+        dayRows.map((r) => ({
+          ...r,
+          showDate: fromDbDate(r.showDate),
+          show: r.show as WatchSale["show"],
+        })),
+      );
+      const dayTrackings = dayBoxes.map((b) => b.tracking);
 
       const existing = await tx.package.findMany({
-        where: { trackingNumber: { in: trackings } },
+        where: { trackingNumber: { in: dayTrackings } },
         select: {
           id: true,
           trackingNumber: true,
@@ -337,7 +501,7 @@ export async function runImport(
       const closed = existing.filter((p) => p.status !== "OPEN");
       const closedTracking = new Set(closed.map((p) => p.trackingNumber));
 
-      const fresh = boxes.filter((b) => !byTracking.has(b.tracking));
+      const fresh = dayBoxes.filter((b) => !byTracking.has(b.tracking));
       if (fresh.length > 0) {
         await tx.package.createMany({
           data: fresh.map((b) => ({
@@ -373,7 +537,7 @@ export async function runImport(
 
       // An open box that already existed: bring the expected counts in line,
       // but never discard what somebody has already scanned into it.
-      for (const box of boxes) {
+      for (const box of dayBoxes) {
         const row = byTracking.get(box.tracking);
         if (!row || row.status !== "OPEN") continue;
 
@@ -422,23 +586,28 @@ export async function runImport(
       }
 
       /*
-        Boxes that were on this day and are no longer in the file. Only ones
-        nobody has touched; the foreign key refuses the rest anyway.
+        Boxes this line put there before and that its new file no longer has.
+        Only ones nobody has touched; the foreign key refuses the rest anyway.
 
-        Scoped to this upload's own kind of show, and that scope is doing real
-        work: a day holds a watch report and a diamond report side by side, and
-        without it a diamond upload would sweep away every unpacked watch box on
-        the same date for the crime of not appearing in a diamond file.
+        Matched on the batches this upload supersedes rather than on the whole
+        day, which is the difference between replacing a file and replacing a
+        day. A corrected TikTok night file sweeps away the boxes the old TikTok
+        night file made and nothing else — not the day show's, not eBay's, not
+        the diamond report's from the same morning.
+
+        A day that has never had this line loaded supersedes nothing, so this is
+        a no-op on a first upload.
       */
-      await tx.package.deleteMany({
-        where: {
-          business: business ?? "WATCH",
-          showDate: toDbDate(showDate),
-          status: "OPEN",
-          trackingNumber: { notIn: trackings.length > 0 ? trackings : ["-"] },
-          scans: { none: {} },
-        },
-      });
+      if (supersededIds.length > 0) {
+        await tx.package.deleteMany({
+          where: {
+            batchId: { in: supersededIds },
+            status: "OPEN",
+            trackingNumber: { notIn: trackings.length > 0 ? trackings : ["-"] },
+            scans: { none: {} },
+          },
+        });
+      }
 
       return { batchId: batch.id, untouchedClosedBoxes: closedTracking.size };
     },

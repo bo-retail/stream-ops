@@ -35,6 +35,50 @@ export interface ExpectedFiles {
   describe: string;
 }
 
+/** One line of a day's upload checklist: one file, from one shop, for one show. */
+export interface ExpectedLine {
+  business: Business;
+  platform: Platform;
+  /** Null on eBay, whose one export covers the day however many shows ran. */
+  slot: Slot | null;
+  /** "TikTok Day", "Diamond TikTok Day", "eBay". */
+  label: string;
+}
+
+/**
+ * The files a day is waiting for, one line each.
+ *
+ * Read straight off the published schedule, which is what makes this answer
+ * itself: put a diamond night show on, and the day starts expecting a third
+ * TikTok export the moment it is published. Nothing here lists what exists.
+ */
+export function expectedLinesFor(
+  shows: readonly DayShow[],
+  label: (business: Business, platform: Platform, slot: Slot | null) => string,
+): ExpectedLine[] {
+  const live = shows.filter((s) => !s.cancelled);
+  const lines = new Map<string, ExpectedLine>();
+
+  for (const show of live) {
+    // TikTok exports once per show; eBay once per day per seller account.
+    const slot = show.platform === "TIKTOK" ? show.slot : null;
+    const key = `${show.business}|${show.platform}|${slot ?? ""}`;
+    if (lines.has(key)) continue;
+    lines.set(key, {
+      business: show.business,
+      platform: show.platform,
+      slot,
+      label: label(show.business, show.platform, slot),
+    });
+  }
+
+  // Watches before diamonds, TikTok before eBay, day before night — the order
+  // the morning actually happens in.
+  const rank = (l: ExpectedLine) =>
+    `${l.business === "WATCH" ? 0 : 1}${l.platform === "TIKTOK" ? 0 : 1}${l.slot === "NIGHT" ? 1 : 0}`;
+  return [...lines.values()].sort((a, b) => rank(a).localeCompare(rank(b)));
+}
+
 export function expectedFilesFor(shows: readonly DayShow[]): ExpectedFiles {
   // A cancelled show sold nothing, so it is not waiting for anything.
   const live = shows.filter((s) => !s.cancelled);

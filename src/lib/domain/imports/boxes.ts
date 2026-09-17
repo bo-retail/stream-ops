@@ -41,9 +41,31 @@ export interface Box {
   orderRefs: string[];
 }
 
+/**
+ * The parts of a sale a box is built from.
+ *
+ * Narrower than a whole `WatchSale` so boxes can also be rebuilt from what is
+ * already stored — which is what happens when one of a day's files is uploaded
+ * again. A box can hold watches from two shows, so working out what belongs in
+ * it means looking at the day's other reports too, not just the file in hand.
+ */
+export type BoxSource = Pick<
+  WatchSale,
+  | "tracking"
+  | "platform"
+  | "buyer"
+  | "shipToName"
+  | "state"
+  | "showDate"
+  | "show"
+  | "stockNumber"
+  | "qty"
+  | "orderRef"
+>;
+
 /** Groups paid watches into the boxes they will ship in. */
-export function buildBoxes(sales: readonly WatchSale[]): Box[] {
-  const byTracking = new Map<string, WatchSale[]>();
+export function buildBoxes(sales: readonly BoxSource[]): Box[] {
+  const byTracking = new Map<string, BoxSource[]>();
   for (const sale of sales) {
     if (sale.tracking === "") continue;
     const existing = byTracking.get(sale.tracking);
@@ -129,7 +151,7 @@ export function checkIntegrity(sales: readonly WatchSale[], boxes: readonly Box[
     });
   }
 
-  const byTracking = new Map<string, WatchSale[]>();
+  const byTracking = new Map<string, BoxSource[]>();
   for (const sale of sales) {
     if (sale.tracking === "") continue;
     const existing = byTracking.get(sale.tracking);

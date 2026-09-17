@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { expectedFilesFor, missingExports, platformsDropped, platformsOf } from "./expected";
+import {
+  expectedFilesFor,
+  expectedLinesFor,
+  missingExports,
+  platformsDropped,
+  platformsOf,
+} from "./expected";
 import type { DayShow } from "./expected";
 
 const show = (
@@ -175,5 +181,56 @@ describe("reading the stored file list", () => {
       "UNKNOWN",
     ]);
     expect(platformsOf(null)).toEqual([]);
+  });
+});
+
+describe("the day's upload checklist", () => {
+  const label = (b: "WATCH" | "DIAMOND", p: "TIKTOK" | "EBAY", s: "DAY" | "NIGHT" | null) =>
+    `${b === "WATCH" ? "" : "Diamond "}${p === "TIKTOK" ? "TikTok" : "eBay"}${
+      s ? ` ${s === "DAY" ? "Day" : "Night"}` : ""
+    }`;
+
+  it("lists one line per TikTok show and one per seller account on eBay", () => {
+    const day = [
+      show("TIKTOK", "DAY"),
+      show("TIKTOK", "NIGHT"),
+      show("EBAY", "DAY"),
+      show("EBAY", "NIGHT"),
+    ];
+    expect(expectedLinesFor(day, label).map((l) => l.label)).toEqual([
+      "TikTok Day",
+      "TikTok Night",
+      "eBay",
+    ]);
+  });
+
+  it("adds a diamond line the moment a diamond show is on the schedule", () => {
+    /*
+      The whole point. Nothing lists what exists — the schedule is read, so a
+      diamond night show, or a diamond eBay show, appears as its own line the
+      day somebody publishes it. No code change, no deploy.
+    */
+    const day = [show("TIKTOK", "DAY"), show("TIKTOK", "NIGHT"), diamond("TIKTOK", "NIGHT")];
+    expect(expectedLinesFor(day, label).map((l) => l.label)).toEqual([
+      "TikTok Day",
+      "TikTok Night",
+      "Diamond TikTok Night",
+    ]);
+  });
+
+  it("gives diamonds their own eBay line when they start selling there", () => {
+    const day = [show("EBAY", "NIGHT"), diamond("EBAY", "NIGHT")];
+    const lines = expectedLinesFor(day, label);
+    expect(lines.map((l) => l.label)).toEqual(["eBay", "Diamond eBay"]);
+    expect(lines.every((l) => l.slot === null)).toBe(true);
+  });
+
+  it("leaves a cancelled show off the list", () => {
+    const day = [show("TIKTOK", "DAY"), show("TIKTOK", "NIGHT", true)];
+    expect(expectedLinesFor(day, label).map((l) => l.label)).toEqual(["TikTok Day"]);
+  });
+
+  it("is empty on a day that ran nothing", () => {
+    expect(expectedLinesFor([], label)).toEqual([]);
   });
 });

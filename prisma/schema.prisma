@@ -596,11 +596,28 @@ model ImportBatch {
   /// A TikTok export names its own shop in `Creator Handle` — `vaultshowlive`
   /// is watches, `caratclublive` is diamonds — which is the only thing that can
   /// tell two same-day TikTok files apart, since both shows run the same hours.
-  /// An eBay export names no seller at all, so while only watches sell on eBay
-  /// an eBay file is a watch file.
+  /// An eBay export names no seller at all, so that one is resolved from the
+  /// day's published schedule instead — see `placeEbayFile`.
   business Business     @default(WATCH)
   showDate DateTime     @db.Date
   status   ImportStatus @default(OK)
+
+  /// Which line of the day's checklist this upload fills.
+  ///
+  /// A day is not one report. It is a list of files — one per TikTok show, one
+  /// per business selling on eBay — and each arrives on its own, whenever it is
+  /// ready. So an upload is one file, and these two say which.
+  ///
+  /// Null on both when the upload was refused before anything could be read,
+  /// and `slot` is null for eBay, whose single export covers the whole day
+  /// however many shows ran.
+  ///
+  /// What this buys is that re-uploading a corrected TikTok night file replaces
+  /// the TikTok night file and nothing else. Before, a second upload replaced
+  /// the day — which is why uploading one missing file would have taken every
+  /// other sale and every unpacked box with it.
+  platform Platform?
+  slot     Slot?
 
   uploadedById String?
   uploadedAt   DateTime @default(now())
@@ -622,6 +639,8 @@ model ImportBatch {
   @@index([showDate, uploadedAt])
   @@index([status, showDate])
   @@index([business, showDate, uploadedAt])
+  /// Finding the latest upload for one line of a day's checklist.
+  @@index([showDate, business, platform, slot, uploadedAt])
 }
 
 /// One paid watch, exactly as `WatchSale` in src/lib/domain/imports.

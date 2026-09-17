@@ -135,11 +135,50 @@ export default async function SalesReportsPage() {
                       <Td className="whitespace-nowrap font-medium">{formatDate(day.dateISO)}</Td>
                       <Td>
                         {shows(day.shows)}
-                        <p className="mt-0.5 text-xs text-ink-subtle">
-                          {loaded
-                            ? `${day.loadedFiles.length} file${day.loadedFiles.length === 1 ? "" : "s"} loaded`
-                            : `expects ${day.expected.describe}`}
-                        </p>
+                        {/*
+                          The checklist: one line per file the day is waiting
+                          for, ticked as each arrives. Built from the schedule,
+                          so a new kind of show appears here on its own.
+                        */}
+                        {day.checklist.length > 0 ? (
+                          <ul className="mt-1 space-y-0.5">
+                            {day.checklist.map((line) => (
+                              <li
+                                key={`${line.business}-${line.platform}-${line.slot ?? "day"}`}
+                                className="flex items-baseline gap-1.5 text-xs"
+                              >
+                                <span
+                                  aria-hidden
+                                  className={
+                                    line.loaded
+                                      ? "text-ok-700"
+                                      : line.refused
+                                        ? "text-danger-700"
+                                        : "text-ink-subtle"
+                                  }
+                                >
+                                  {line.loaded ? "✓" : line.refused ? "✗" : "○"}
+                                </span>
+                                <span className={line.loaded ? "text-ink" : "text-ink-muted"}>
+                                  {line.label}
+                                </span>
+                                <span className="text-ink-subtle">
+                                  {line.loaded
+                                    ? `· ${line.loaded.watchCount}`
+                                    : line.refused
+                                      ? "· refused"
+                                      : "· waiting"}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-0.5 text-xs text-ink-subtle">
+                            {loaded
+                              ? `${day.loadedFiles.length} file${day.loadedFiles.length === 1 ? "" : "s"} loaded`
+                              : `expects ${day.expected.describe}`}
+                          </p>
+                        )}
                       </Td>
                       <Td>
                         {day.report === null ? (

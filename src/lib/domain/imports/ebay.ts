@@ -17,6 +17,7 @@
  * `Custom Label` tag decides the show (R15) — the exact reverse of TikTok.
  */
 
+import type { Business } from "../business";
 import type { DateISO } from "../types";
 import { checkHeaders, isBlankRow, parseCsv, toRecords } from "./csv";
 import { EBAY_HEADERS, defaultShiftTag, parseMoney, parseShiftTag } from "./types";
@@ -67,7 +68,13 @@ function locateTable(rows: string[][]): { header: string[]; data: string[][]; fo
   return { header, data, footer: rows.slice(i) };
 }
 
-export function parseEbayFile(file: EbayFile): ParseResult {
+/**
+ * @param business Whose report this is. The file cannot say — eBay names no
+ *   seller in any of its 82 columns — so the caller resolves it from the
+ *   schedule. See `placeEbayFile`. Defaults to watches, the only business that
+ *   has ever sold on eBay, so every existing caller reads exactly as before.
+ */
+export function parseEbayFile(file: EbayFile, business: Business = "WATCH"): ParseResult {
   const flags: ImportFlag[] = [];
   const rows = parseCsv(file.text);
 
@@ -192,14 +199,9 @@ export function parseEbayFile(file: EbayFile): ParseResult {
       const first = index === 0;
 
       sales.push({
-        /*
-          eBay names no seller account anywhere in its 82 columns, so a file
-          cannot say whose it is. Only watches sell on eBay, so that is what an
-          eBay file is — and the day diamonds start selling there, this is the
-          line that has to change first, because nothing else could tell two
-          eBay exports apart.
-        */
-        business: "WATCH",
+        // Decided by the caller from that day's schedule, because the file has
+        // nothing in it that could say. See `placeEbayFile`.
+        business,
         platform: "EBAY",
         show,
         showDate: date,

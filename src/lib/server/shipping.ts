@@ -1,9 +1,17 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { addDays, fromDbDate, toDbDate, todayISO } from "@/lib/domain/dates";
-import { expectedFilesFor, missingExports, platformsOf } from "@/lib/domain/imports/expected";
+import {
+  expectedFilesFor,
+  expectedLinesFor,
+  missingExports,
+  platformsOf,
+} from "@/lib/domain/imports/expected";
 import type { DayShow, ExpectedFiles } from "@/lib/domain/imports/expected";
-import type { DateISO } from "@/lib/domain/types";
+import { BUSINESS_SHORT } from "@/lib/domain/business";
+import type { Business } from "@/lib/domain/business";
+import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import type { DateISO, Platform, Slot } from "@/lib/domain/types";
 import { getSettings } from "./settings";
 
 export type { DayShow, ExpectedFiles };
@@ -18,6 +26,19 @@ export type { DayShow, ExpectedFiles };
 
 /** How far back the day list and the missing-report banner look. */
 export const LOOK_BACK_DAYS = 14;
+
+/**
+ * What one line of the checklist is called.
+ *
+ * Diamonds are named and watches are not, for the same reason as everywhere
+ * else: watches are the great majority of every list, and labelling all of them
+ * would carry no information. eBay takes no slot — its one export covers the
+ * whole day however many eBay shows ran.
+ */
+function labelLine(business: Business, platform: Platform, slot: Slot | null): string {
+  const what = `${PLATFORM_SHORT[platform]}${slot ? ` ${SLOT_SHORT[slot]}` : ""}`;
+  return business === "WATCH" ? what : `${BUSINESS_SHORT[business]} ${what}`;
+}
 
 export interface ShowDay {
   dateISO: DateISO;
@@ -53,8 +74,35 @@ export interface ShowDay {
    * while 315 real boxes from the good upload sat there being packed.
    */
   refusedAfter: { batchId: string; uploadedAt: Date; uploadedByName: string | null } | null;
+  /**
+   * The day's upload checklist: one line per file it is waiting for, and what
+   * has arrived against each.
+   *
+   * Built from the published schedule rather than from a list of what exists,
+   * which is what makes a new kind of show work on its own. Put a diamond night
+   * show on the schedule and a third TikTok line appears the moment it is
+   * published — no code change, nothing to register.
+   */
+  checklist: ChecklistLine[];
   boxesTotal: number;
   boxesSent: number;
+}
+
+/** One line of a day's checklist, and whether its file has arrived. */
+export interface ChecklistLine {
+  label: string;
+  business: Business;
+  platform: Platform;
+  slot: Slot | null;
+  loaded: {
+    batchId: string;
+    fileName: string;
+    uploadedAt: Date;
+    uploadedByName: string | null;
+    watchCount: number;
+  } | null;
+  /** An upload aimed at this line that was turned away. */
+  refused: { batchId: string; uploadedAt: Date } | null;
 }
 
 /**
@@ -88,6 +136,8 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
       select: {
         id: true,
         business: true,
+        platform: true,
+        slot: true,
         showDate: true,
         status: true,
         uploadedAt: true,
@@ -197,8 +247,51 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
 
       const expected = expectedFilesFor(dayShows);
 
+      /*
+        The checklist: what the day is waiting for, and what has come in.
+
+        Matched on the line each upload filled — business, platform and slot —
+        so a file shows against its own row and nothing else. Uploads made
+        before a batch knew which line it was have all three null and cannot be
+        matched; those days fall back to the summary above, which is what they
+        have always shown.
+      */
+      const dayBatches = batches.filter((b) => fromDbDate(b.showDate) === dateISO);
+      const checklist: ChecklistLine[] = expectedLinesFor(dayShows, labelLine).map((line) => {
+        const mine = dayBatches.filter(
+          (b) =>
+            b.business === line.business &&
+            b.platform === line.platform &&
+            (b.slot ?? null) === line.slot,
+        );
+        const ok = mine.find((b) => b.status === "OK");
+        const newest = mine[0];
+        const files = Array.isArray(ok?.files) ? (ok.files as { name?: unknown }[]) : [];
+
+        return {
+          label: line.label,
+          business: line.business,
+          platform: line.platform,
+          slot: line.slot,
+          loaded: ok
+            ? {
+                batchId: ok.id,
+                fileName: typeof files[0]?.name === "string" ? files[0].name : "(unnamed)",
+                uploadedAt: ok.uploadedAt,
+                uploadedByName: ok.uploadedBy?.name ?? null,
+                watchCount: ok.watchCount,
+              }
+            : null,
+          refused:
+            newest && newest.status === "BLOCKED" && newest.id !== ok?.id
+              ? { batchId: newest.id, uploadedAt: newest.uploadedAt }
+              : null,
+        };
+      });
+
       return {
         dateISO,
+        checklist,
         liveShows: dayShows.filter((s) => !s.cancelled).length,
         shows: dayShows,
         expected,
