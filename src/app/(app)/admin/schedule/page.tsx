@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { FileSpreadsheet } from "lucide-react";
 import { Badge, Card, CardHeader, LinkButton, PageHeader, Stat } from "@/components/ui";
 import { requireBoss } from "@/lib/auth/guards";
+import { BUSINESS_LABEL, BUSINESS_SHORT } from "@/lib/domain/business";
 import { checkCandidate } from "@/lib/domain/schedule";
 import { SEATS } from "@/lib/domain/types";
 import {
@@ -169,9 +170,12 @@ export default async function BuildSchedulePage({
         // An unnamed release is known by its dates, so its label already *is*
         // the date range — printing both read "Sep 16 – Sep 30 · Sep 16 – Sep 30".
         description={
-          view.release.label === view.release.dateRange
+          // Which kind of show leads, because two releases can cover the same
+          // fortnight and the dates alone would read as a duplicate.
+          `${BUSINESS_LABEL[view.release.business]} · ` +
+          (view.release.label === view.release.dateRange
             ? view.release.dateRange
-            : `${view.release.label} · ${view.release.dateRange}`
+            : `${view.release.label} · ${view.release.dateRange}`)
         }
         action={
           <div className="flex flex-wrap items-center gap-2">
@@ -201,7 +205,9 @@ export default async function BuildSchedulePage({
             size="sm"
             variant={r.id === view.release.id ? "primary" : "ghost"}
           >
-            {r.label}
+            {/* Two releases can share a label when they share dates, so the
+                kind of show is the only thing that tells these buttons apart. */}
+            {BUSINESS_SHORT[r.business]} · {r.label}
           </LinkButton>
         ))}
         <LinkButton href={`/admin/releases/${view.release.id}`} size="sm" variant="secondary">

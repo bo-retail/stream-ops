@@ -10,6 +10,7 @@ import type {
   ScheduleValidation,
   ShowInput,
 } from "@/lib/domain/schedule";
+import type { Business } from "@/lib/domain/business";
 import type { BusinessSettings, DateISO, Platform, ShowStatus, Slot } from "@/lib/domain/types";
 import { getSettings } from "./settings";
 import { getPriorities, getReleaseSummary, listReleaseCast } from "./releases";
@@ -228,6 +229,8 @@ export function toAvailabilityInput(a: AvailabilityView): AvailabilityInput {
 export interface EmployeeShow {
   showId: string;
   dateISO: DateISO;
+  /** Watches or diamonds. One streamer can be on either. */
+  business: Business;
   platform: Platform;
   slot: Slot;
   startsAt: Date;
@@ -271,6 +274,7 @@ export async function getEmployeePeriod(
         select: {
           id: true,
           date: true,
+          business: true,
           platform: true,
           slot: true,
           startsAt: true,
@@ -298,6 +302,7 @@ export async function getEmployeePeriod(
     return {
       showId: show.id,
       dateISO: fromDbDate(show.date),
+      business: show.business,
       platform: show.platform,
       slot: show.slot,
       startsAt: show.startsAt,
@@ -342,6 +347,7 @@ export async function getUpcomingShows(userId: string, take = 8): Promise<Employ
         select: {
           id: true,
           date: true,
+          business: true,
           platform: true,
           slot: true,
           startsAt: true,
@@ -358,6 +364,7 @@ export async function getUpcomingShows(userId: string, take = 8): Promise<Employ
     return {
       showId: show.id,
       dateISO: fromDbDate(show.date),
+      business: show.business,
       platform: show.platform,
       slot: show.slot,
       startsAt: show.startsAt,

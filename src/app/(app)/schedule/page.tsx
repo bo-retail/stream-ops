@@ -13,7 +13,7 @@ import {
   Td,
   Th,
 } from "@/components/ui";
-import { PlatformBadge, SlotBadge } from "@/components/show-labels";
+import { BusinessBadge, PlatformBadge, SlotBadge } from "@/components/show-labels";
 import { requireStreamer } from "@/lib/auth/guards";
 import { formatDate, formatMinutes, isDateISO } from "@/lib/domain/dates";
 import { formatPeriod, formatPeriodShort, nextPeriod, periodFor, previousPeriod } from "@/lib/domain/periods";
@@ -132,6 +132,7 @@ export default async function MySchedulePage({
                       <Td className="whitespace-nowrap font-medium">{formatDate(s.dateISO)}</Td>
                       <Td>
                         <span className="flex flex-wrap items-center gap-1.5">
+                          <BusinessBadge business={s.business} />
                           <PlatformBadge platform={s.platform} />
                           <SlotBadge slot={s.slot} />
                           {s.status === "CANCELLED" ? (

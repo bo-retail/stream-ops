@@ -1,5 +1,5 @@
 import { Alert, Card, CardHeader, EmptyState, LinkButton, PageHeader, Stat } from "@/components/ui";
-import { PlatformBadge, SlotBadge } from "@/components/show-labels";
+import { BusinessBadge, PlatformBadge, SlotBadge } from "@/components/show-labels";
 import type { AuthUser } from "@/lib/auth/guards";
 import { formatDate, formatMinutes } from "@/lib/domain/dates";
 import { getOpenReleasesForUser } from "@/lib/server/availability";
@@ -78,6 +78,7 @@ export async function EmployeeDashboard({ user }: { user: AuthUser }) {
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-ink">{formatDate(s.dateISO)}</p>
                   <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                    <BusinessBadge business={s.business} />
                     <PlatformBadge platform={s.platform} />
                     <SlotBadge slot={s.slot} />
                   </div>

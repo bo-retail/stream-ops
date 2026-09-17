@@ -10,7 +10,7 @@ import {
   PageHeader,
   Stat,
 } from "@/components/ui";
-import { PlatformBadge } from "@/components/show-labels";
+import { BusinessBadge, PlatformBadge } from "@/components/show-labels";
 import { MissingReports } from "@/components/missing-reports";
 import { cn } from "@/lib/utils";
 import { prisma } from "@/lib/db";
@@ -56,6 +56,7 @@ export async function BossDashboard() {
     select: {
       id: true,
       date: true,
+      business: true,
       platform: true,
       slot: true,
       startsAt: true,
@@ -69,6 +70,7 @@ export async function BossDashboard() {
   const now = Date.now();
   const todayShows = todayRows.map((s) => ({
     id: s.id,
+    business: s.business,
     platform: s.platform,
     slot: s.slot,
     startHM: clock.format(s.startsAt),
@@ -282,6 +284,9 @@ export async function BossDashboard() {
                 <li key={show.id} className="px-4 py-2.5">
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-1.5">
+                      {/* The one place both kinds of show sit side by side, so
+                          the diamond ones have to be tellable at a glance. */}
+                      <BusinessBadge business={show.business} />
                       <PlatformBadge platform={show.platform} />
                       <Badge tone={show.slot === "DAY" ? "warn" : "brand"}>
                         {SLOT_SHORT[show.slot]}
