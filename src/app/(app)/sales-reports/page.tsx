@@ -20,6 +20,7 @@ import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
 import { listShowDays, missingReports } from "@/lib/server/shipping";
 import type { DayShow } from "@/lib/server/shipping";
 import { RemoveReport } from "./remove-report";
+import { RestoreReport } from "./restore-report";
 import { UploadForm } from "./upload-form";
 
 export const metadata: Metadata = { title: "Sales report entry" };
@@ -78,7 +79,11 @@ export default async function SalesReportsPage() {
       />
 
       <div className="space-y-5">
-        <MissingReports days={missing} />
+        {/* No X here. The dashboard is a list of things to do and a day can be
+            taken off it; this page is the record of what has come in, so a
+            cleared day still shows up as missing — with the name of whoever
+            cleared it, and a way to put it back. */}
+        <MissingReports days={missing} canDismiss={false} />
 
         <UploadForm targets={targets} />
 
@@ -204,6 +209,12 @@ export default async function SalesReportsPage() {
                               ? ` (${day.refusedAfter.uploadedByName.split(" ")[0]})`
                               : ""}
                           </p>
+                        ) : null}
+                        {/* Only while the day is genuinely still short of
+                            something — once its files are in, who cleared the
+                            reminder stops being worth saying. */}
+                        {day.dismissed && (day.report === null || day.missing) ? (
+                          <RestoreReport dateISO={day.dateISO} byName={day.dismissed.byName} />
                         ) : null}
                       </Td>
                       <Td className="tabular">{loaded ? day.report!.watchCount : "—"}</Td>

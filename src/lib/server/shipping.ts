@@ -84,6 +84,14 @@ export interface ShowDay {
    * published — no code change, nothing to register.
    */
   checklist: ChecklistLine[];
+  /**
+   * Somebody took this day off the dashboard.
+   *
+   * It is still missing and still says so here — clearing it settles a to-do,
+   * it does not load a report. Named so the page can say who decided, which is
+   * the whole reason this is worth recording rather than just hiding the row.
+   */
+  dismissed: { byName: string | null; at: Date } | null;
   boxesTotal: number;
   boxesSent: number;
 }
@@ -117,7 +125,7 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
   const today = todayISO(settings.timezone);
   const from = addDays(today, -lookBackDays);
 
-  const [shows, batches, boxes] = await Promise.all([
+  const [shows, batches, boxes, dismissals] = await Promise.all([
     // Read as individual shows rather than counted, because what a day is
     // waiting for depends on which shows ran, not how many. Cancelled ones are
     // included so a day that was called off still appears saying so — dropping
@@ -152,6 +160,10 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
       by: ["showDate", "status"],
       where: { showDate: { gte: toDbDate(from), lte: toDbDate(today) } },
       _count: { _all: true },
+    }),
+    prisma.dismissedReport.findMany({
+      where: { showDate: { gte: toDbDate(from), lte: toDbDate(today) } },
+      select: { showDate: true, dismissedAt: true, dismissedBy: { select: { name: true } } },
     }),
   ]);
 
@@ -250,6 +262,7 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
       );
 
       const expected = expectedFilesFor(dayShows);
+      const cleared = dismissals.find((d) => fromDbDate(d.showDate) === dateISO);
 
       /*
         The checklist: what the day is waiting for, and what has come in.
@@ -296,6 +309,9 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
       return {
         dateISO,
         checklist,
+        dismissed: cleared
+          ? { byName: cleared.dismissedBy?.name ?? null, at: cleared.dismissedAt }
+          : null,
         liveShows: dayShows.filter((s) => !s.cancelled).length,
         shows: dayShows,
         expected,
@@ -425,8 +441,32 @@ export async function missingReports(lookBackDays = LOOK_BACK_DAYS): Promise<Mis
     latest.set(key, [...(latest.get(key) ?? []), ...platformsOf(batch.files)]);
   }
 
+  /*
+    Days somebody has cleared off the dashboard.
+
+    Excluded here rather than in the component, so every caller of this banner
+    agrees about what is still outstanding — including the copy of it at the top
+    of Sales report entry, which is the same to-do summary and would otherwise
+    keep naming days the director has already settled.
+
+    The record of the day itself is not touched. Sales report entry's table is
+    built by `listShowDays`, which goes on listing a cleared day as missing and
+    says who cleared it, because that table is the account of what has actually
+    been loaded rather than a list of things to do.
+  */
+  const cleared = new Set(
+    (
+      await prisma.dismissedReport.findMany({
+        where: { showDate: { gte: toDbDate(from), lte: toDbDate(to) } },
+        select: { showDate: true },
+      })
+    ).map((d) => fromDbDate(d.showDate)),
+  );
+
   const out: MissingReport[] = [];
   for (const [dateISO, dayShows] of showsByDate) {
+    if (cleared.has(dateISO)) continue;
+
     const expected = expectedFilesFor(dayShows);
     if (expected.tiktok === 0 && expected.ebay === 0) continue;
 

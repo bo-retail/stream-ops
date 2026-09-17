@@ -50,7 +50,7 @@ export async function ShippingDashboard({ user }: { user: AuthUser }) {
 
       {missingReports.length > 0 ? (
         <div className="mb-5">
-          <MissingReports days={missingReports} />
+          <MissingReports days={missingReports} canDismiss />
         </div>
       ) : null}
 

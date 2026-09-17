@@ -171,7 +171,7 @@ export async function BossDashboard() {
       {/* A day that ran shows and never got its reports stops everything
           downstream, and looks exactly like a quiet day if nobody says so. */}
       <div className="mb-5">
-        <MissingReports days={missingReports} />
+        <MissingReports days={missingReports} canDismiss />
       </div>
 
       {/* The money first, because it is the only thing on this page that says

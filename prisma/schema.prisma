@@ -130,6 +130,7 @@ model User {
 
   importsUploaded ImportBatch[] @relation("ImportUploadedBy")
   packagesClosed  Package[]     @relation("PackageClosedBy")
+  reportsDismissed DismissedReport[] @relation("ReportDismissedBy")
   scans           ScanEvent[]   @relation("ScanBy")
 
   @@index([role, isActive])
@@ -400,6 +401,29 @@ model ScheduleSnapshot {
   createdBy User    @relation("SnapshotCreatedBy", fields: [createdById], references: [id])
 
   @@unique([releaseId, version])
+}
+
+/// A missing-report day somebody has taken off the dashboard.
+///
+/// The dashboard is a list of things needing attention now, and a day that has
+/// been dealt with some other way — a show that never really ran, a report that
+/// is not coming — sits there forever otherwise. A banner nobody can clear is a
+/// banner people stop reading, and then the one that matters goes unread too.
+///
+/// It hides the day from the dashboard and nowhere else. Sales report entry
+/// still lists it as missing, and says who cleared it and when, because that
+/// page is the record of what has actually been loaded rather than a to-do
+/// list. Nothing about the day's data changes.
+///
+/// Keyed by the date, so clearing one clears it for the whole team: it is a
+/// shared job, and one person settling it should settle it for everybody.
+model DismissedReport {
+  showDate DateTime @id @db.Date
+
+  dismissedById String?
+  dismissedAt   DateTime @default(now())
+
+  dismissedBy User? @relation("ReportDismissedBy", fields: [dismissedById], references: [id], onDelete: SetNull)
 }
 
 /// Business configuration. Single row, id "singleton".
