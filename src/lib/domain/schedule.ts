@@ -51,6 +51,27 @@ export interface AvailabilityInput {
   slot: Slot;
 }
 
+/**
+ * Somebody already on a show in a different release.
+ *
+ * Each release is built on its own screen, and a watch release and a diamond
+ * release can cover the same days with shows at the same hours — the 09/15
+ * diamond show ran 10:32–16:01 against the watch day show's 10:06–16:05. Until
+ * these were passed in, every check below looked at one release only, so
+ * somebody already on a published diamond show could be picked, auto-filled
+ * and published onto an overlapping watch show without a word.
+ *
+ * `label` names the other show in full ("Diamond TikTok Day on 2026-09-20"),
+ * because "already on another show" does not tell the boss where to look.
+ */
+export interface BookedElsewhere {
+  userId: string;
+  userName: string;
+  label: string;
+  startsAt: Date;
+  endsAt: Date;
+}
+
 export type IssueCode =
   | "UNSTAFFED"
   | "DOUBLE_BOOKED"
@@ -105,6 +126,8 @@ export interface ValidateOptions {
   /** Users expected to submit availability, for the missing-submission warning. */
   expectedUserIds?: string[];
   submittedUserIds?: string[];
+  /** Shows these people are already on in other releases. See `BookedElsewhere`. */
+  elsewhere?: BookedElsewhere[];
 }
 
 /** "TikTok Day on 2026-08-21" — how a show is named in every message. */
@@ -199,6 +222,26 @@ export function validateSchedule(
           showIds: [a.show.id, b.show.id],
         });
       }
+    }
+  }
+
+  // The same, against shows in other releases. An error for the same reason:
+  // one person cannot be on two shows at once, whichever screen each was built
+  // on, and publishing it would promise both shows somebody they do not have.
+  for (const a of active) {
+    const show = showById.get(a.showId)!;
+    for (const other of options.elsewhere ?? []) {
+      if (other.userId !== a.userId) continue;
+      if (!instantsOverlap(show.startsAt, show.endsAt, other.startsAt, other.endsAt)) continue;
+      issues.push({
+        code: "DOUBLE_BOOKED",
+        severity: "error",
+        message: `${a.userName} is on ${showLabel(show)} here and on ${other.label} at the same time.`,
+        dateISO: show.dateISO,
+        userId: a.userId,
+        seat: a.seat,
+        showIds: [show.id],
+      });
     }
   }
 
@@ -393,6 +436,8 @@ export function checkCandidate(
     shows: ShowInput[];
     availability?: AvailabilityInput[];
     timeOffByUser?: Record<string, DateISO[]>;
+    /** Shows they are already on in other releases. */
+    elsewhere?: BookedElsewhere[];
   },
 ): { ok: boolean; reason?: string; severity?: IssueSeverity } {
   const showById = new Map(options.shows.map((s) => [s.id, s]));
@@ -415,6 +460,13 @@ export function checkCandidate(
       reason: `Already on ${showLabel(showById.get(clash.showId)!)}`,
       severity: "error",
     };
+  }
+
+  const elsewhere = (options.elsewhere ?? []).find(
+    (e) => e.userId === userId && instantsOverlap(show.startsAt, show.endsAt, e.startsAt, e.endsAt),
+  );
+  if (elsewhere) {
+    return { ok: false, reason: `Already on ${elsewhere.label}`, severity: "error" };
   }
 
   if ((options.timeOffByUser?.[userId] ?? []).includes(show.dateISO)) {

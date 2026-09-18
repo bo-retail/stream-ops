@@ -70,6 +70,7 @@ export default async function AvailabilityPage({
     startHM: o.startHM,
     endHM: o.endHM,
     cancelled: o.cancelled,
+    takenBy: o.takenBy,
     offered: availability.picks.some((p) => p.dateISO === o.dateISO && p.slot === o.slot),
   }));
 

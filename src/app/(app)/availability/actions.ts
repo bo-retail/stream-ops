@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { formatDateRange, fromDbDate, isDateISO, toDbDate } from "@/lib/domain/dates";
 import type { Slot } from "@/lib/domain/types";
 import { businessOfRelease } from "@/lib/server/business";
+import { takenElsewhere } from "@/lib/server/availability";
 import { isAskedAbout } from "@/lib/server/releases";
 
 export interface AvailabilityState {
@@ -124,6 +125,13 @@ export async function toggleShow(
     return { ok: "Taken back." };
   }
 
+  // Already on a show at that time on another published schedule — a diamond
+  // show while this is a watch request, or the other way round. Taking an
+  // offer back is always allowed (above); making a new one for a time they
+  // cannot work is not.
+  const busy = (await takenElsewhere(user.id, d.releaseId)).get(`${d.dateISO}|${slot}`);
+  if (busy) return { error: `You're already on ${busy} at that time.` };
+
   await prisma.availability.create({
     data: {
       userId: user.id,
@@ -189,6 +197,7 @@ export async function fillPeriod(
     select: { startDate: true, endDate: true },
   });
 
+  const busy = await takenElsewhere(user.id, d.releaseId);
   const seen = new Set<string>();
   const rows: { dateISO: string; slot: Slot }[] = [];
   for (const show of shows) {
@@ -200,6 +209,8 @@ export async function fillPeriod(
     if (isOff) continue;
     // Both platforms share a slot, so one tap answers for both.
     const key = `${dateISO}|${show.slot}`;
+    // Already working then on another published schedule.
+    if (busy.has(key)) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     rows.push({ dateISO, slot: show.slot });
@@ -210,7 +221,7 @@ export async function fillPeriod(
       error:
         shows.length === 0
           ? "There are no shows in this request."
-          : "Every day with those shows is booked off, so there is nothing to offer.",
+          : "Every one of those shows is on a day you booked off or at a time you are already working, so there is nothing to offer.",
     };
   }
 
@@ -297,12 +308,15 @@ export async function copyLastPeriodAvailability(
 
   const release = await prisma.release.findUnique({
     where: { id: releaseId },
-    select: { startDate: true },
+    select: { startDate: true, business: true },
   });
   if (!release) return { error: "That request no longer exists." };
 
+  // The last request of the same kind. A diamond request and a watch request
+  // can run side by side, and what somebody could do for one says nothing
+  // about the other.
   const previous = await prisma.release.findFirst({
-    where: { id: { not: releaseId }, endDate: { lt: release.startDate } },
+    where: { id: { not: releaseId }, business: release.business, endDate: { lt: release.startDate } },
     orderBy: { endDate: "desc" },
     select: { id: true, name: true, startDate: true, endDate: true },
   });
@@ -324,6 +338,7 @@ export async function copyLastPeriodAvailability(
     select: { startDate: true, endDate: true },
   });
 
+  const busyNow = await takenElsewhere(user.id, releaseId);
   const seen = new Set<string>();
   const rows: { dateISO: string; slot: Slot }[] = [];
   for (const show of shows) {
@@ -334,6 +349,7 @@ export async function copyLastPeriodAvailability(
     );
     if (isOff) continue;
     const key = `${dateISO}|${show.slot}`;
+    if (busyNow.has(key)) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     rows.push({ dateISO, slot: show.slot });

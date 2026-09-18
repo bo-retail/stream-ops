@@ -26,6 +26,8 @@ export interface SlotOption {
   startHM: string;
   endHM: string;
   cancelled: boolean;
+  /** The show they are already working then on another schedule, or null. */
+  takenBy: string | null;
   /** True when this person has offered to work it. */
   offered: boolean;
 }
@@ -86,7 +88,10 @@ function SlotTile({
   }, [state.ok, router]);
 
   const offered = option.offered;
-  const disabled = locked || dayOff || option.cancelled;
+  // Already working then on another schedule. An offer made before that was
+  // published can still be taken back, so only a new one is blocked.
+  const taken = option.takenBy !== null && !offered;
+  const disabled = locked || dayOff || option.cancelled || taken;
 
   return (
     <div
@@ -111,12 +116,17 @@ function SlotTile({
             <span className="block text-xs text-ink-muted">
               {option.startHM}–{option.endHM}
             </span>
+            {option.takenBy ? (
+              <span className="mt-0.5 block text-xs font-medium text-warn-700">
+                You&apos;re on {option.takenBy} then
+              </span>
+            ) : null}
           </span>
           {offered ? (
             <Check className="h-4 w-4 shrink-0 text-ok-700" aria-hidden />
           ) : (
             <span className="shrink-0 text-xs text-ink-subtle">
-              {option.cancelled ? "Off" : "Tap"}
+              {option.cancelled ? "Off" : taken ? "Taken" : "Tap"}
             </span>
           )}
         </button>

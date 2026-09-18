@@ -3,6 +3,7 @@ import { checkCandidate, planCopyForward, validateSchedule } from "./schedule";
 import type {
   AssignmentInput,
   AvailabilityInput,
+  BookedElsewhere,
   CopySourceShow,
   CopyTargetShow,
   ShowInput,
@@ -474,5 +475,100 @@ describe("copying the last release forward", () => {
 
   it("has nothing to say when there is no previous release", () => {
     expect(planCopyForward([], [target()], everyone)).toEqual({ toCreate: [], skipped: 0 });
+  });
+});
+
+/*
+  Shows in another release.
+
+  A watch release and a diamond release are built on separate screens but can
+  cover the same days at the same hours — on 09/15 the diamond show ran
+  10:32–16:01 against the watch day show's 10:06–16:05. Each check used to see
+  only its own release, so somebody on a published diamond show could be put on
+  an overlapping watch show and both would publish.
+*/
+describe("shows in another release", () => {
+  const diamondMorning: BookedElsewhere = {
+    userId: "maria",
+    userName: "Maria",
+    label: "Diamond TikTok Day on 2026-08-21",
+    startsAt: at(10, 30),
+    endsAt: at(16),
+  };
+
+  it("refuses to publish somebody who is on an overlapping show elsewhere", () => {
+    const watchDay = show({ slot: "DAY" }); // 13:00–19:00
+    const result = validateSchedule([watchDay], [one(watchDay, "maria", 1)], {
+      elsewhere: [diamondMorning],
+    });
+    expect(result.canPublish).toBe(false);
+    expect(result.errors.map((e) => e.code)).toEqual(["DOUBLE_BOOKED"]);
+    expect(result.errors[0].message).toContain("Diamond TikTok Day on 2026-08-21");
+  });
+
+  it("lets them work a show that does not overlap", () => {
+    const watchNight = show({ slot: "NIGHT" }); // 19:00–01:00
+    const result = validateSchedule([watchNight], [one(watchNight, "maria", 1)], {
+      elsewhere: [diamondMorning],
+    });
+    expect(result.canPublish).toBe(true);
+    expect(codes(result)).not.toContain("DOUBLE_BOOKED");
+  });
+
+  it("does not count back-to-back as a clash", () => {
+    const afterwards = show({ startsAt: at(16), endsAt: at(19) });
+    const result = validateSchedule([afterwards], [one(afterwards, "maria", 1)], {
+      elsewhere: [diamondMorning],
+    });
+    expect(codes(result)).not.toContain("DOUBLE_BOOKED");
+  });
+
+  it("only concerns the person who is booked elsewhere", () => {
+    const watchDay = show({ slot: "DAY" });
+    const result = validateSchedule([watchDay], [one(watchDay, "dani", 1)], {
+      elsewhere: [diamondMorning],
+    });
+    expect(codes(result)).not.toContain("DOUBLE_BOOKED");
+  });
+
+  it("ignores a cancelled show here, which needs nobody", () => {
+    const cancelled = show({ slot: "DAY", status: "CANCELLED" });
+    const result = validateSchedule([cancelled], [one(cancelled, "maria", 1)], {
+      elsewhere: [diamondMorning],
+    });
+    expect(codes(result)).not.toContain("DOUBLE_BOOKED");
+  });
+
+  it("catches a night show elsewhere running into the next morning", () => {
+    const lateElsewhere: BookedElsewhere = { ...diamondMorning, startsAt: at(22), endsAt: nextDay(2) };
+    const earlyNextDay = show({ dateISO: "2026-08-22", startsAt: nextDay(1), endsAt: nextDay(7) });
+    const result = validateSchedule([earlyNextDay], [one(earlyNextDay, "maria", 1)], {
+      elsewhere: [lateElsewhere],
+    });
+    expect(result.canPublish).toBe(false);
+  });
+
+  it("greys them out in the picker, naming the other show", () => {
+    const watchDay = show({ slot: "DAY" });
+    const result = checkCandidate("maria", watchDay, {
+      assignments: [],
+      shows: [watchDay],
+      elsewhere: [diamondMorning],
+    });
+    expect(result).toEqual({
+      ok: false,
+      reason: "Already on Diamond TikTok Day on 2026-08-21",
+      severity: "error",
+    });
+  });
+
+  it("leaves them pickable for a show that does not overlap", () => {
+    const watchNight = show({ slot: "NIGHT" });
+    const result = checkCandidate("maria", watchNight, {
+      assignments: [],
+      shows: [watchNight],
+      elsewhere: [diamondMorning],
+    });
+    expect(result.ok).toBe(true);
   });
 });

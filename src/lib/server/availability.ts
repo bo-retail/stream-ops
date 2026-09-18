@@ -1,6 +1,8 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { datesBetween, fromDbDate } from "@/lib/domain/dates";
+import { BUSINESS_SHORT } from "@/lib/domain/business";
+import { addDays, datesBetween, fromDbDate, instantsOverlap, toDbDate } from "@/lib/domain/dates";
+import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
 import type { DateISO, Slot } from "@/lib/domain/types";
 import { getSettings } from "./settings";
 import type { ReleaseSummary } from "./releases";
@@ -18,6 +20,64 @@ export interface ShowOption {
   endHM: string;
   /** True when every show in this slot has been cancelled — nothing to offer. */
   cancelled: boolean;
+  /**
+   * The show this person is already working at that time on another published
+   * schedule — "Diamond TikTok Day" — or null. They cannot be on both, so it is
+   * not something to offer.
+   */
+  takenBy: string | null;
+}
+
+/**
+ * Which of a release's times this person is already working on another
+ * published schedule, keyed `date|slot`, with the show that has them.
+ *
+ * Only published schedules: somebody asked for their availability never sees a
+ * draft, and a tile saying "you're on a diamond show then" for a draft would
+ * tell them about a schedule that does not exist yet. The boss's builder counts
+ * drafts too — see `getReleaseView`.
+ *
+ * A slot is taken if any of this release's shows in it overlaps the other one,
+ * by real start and end times; the dates either side are read because a night
+ * show crosses midnight.
+ */
+export async function takenElsewhere(userId: string, releaseId: string): Promise<Map<string, string>> {
+  const shows = await prisma.show.findMany({
+    where: { releaseId, status: "SCHEDULED" },
+    select: { date: true, slot: true, startsAt: true, endsAt: true },
+  });
+  const taken = new Map<string, string>();
+  if (shows.length === 0) return taken;
+
+  const dates = shows.map((s) => fromDbDate(s.date)).sort();
+  const mine = await prisma.assignment.findMany({
+    where: {
+      userId,
+      show: {
+        releaseId: { not: releaseId },
+        status: "SCHEDULED",
+        release: { scheduleStatus: "PUBLISHED" },
+        date: {
+          gte: toDbDate(addDays(dates[0], -1)),
+          lte: toDbDate(addDays(dates[dates.length - 1], 1)),
+        },
+      },
+    },
+    select: { show: { select: { business: true, platform: true, slot: true, startsAt: true, endsAt: true } } },
+  });
+
+  for (const s of shows) {
+    const other = mine.find((m) => instantsOverlap(s.startsAt, s.endsAt, m.show.startsAt, m.show.endsAt));
+    if (!other) continue;
+    const key = `${fromDbDate(s.date)}|${s.slot}`;
+    if (!taken.has(key)) {
+      taken.set(
+        key,
+        `${BUSINESS_SHORT[other.show.business]} ${PLATFORM_SHORT[other.show.platform]} ${SLOT_SHORT[other.show.slot]}`,
+      );
+    }
+  }
+  return taken;
 }
 
 export interface AvailabilityForRelease {
@@ -108,6 +168,7 @@ export async function getAvailabilityForRelease(
   const daysOff = dates.filter((d) =>
     timeOff.some((t) => fromDbDate(t.startDate) <= d && fromDbDate(t.endDate) >= d),
   );
+  const taken = await takenElsewhere(userId, releaseId);
 
   // Both platforms run a slot at the same hours unless the boss changed one, so
   // a slot is described by whichever of its shows is still scheduled.
@@ -124,6 +185,7 @@ export async function getAvailabilityForRelease(
         startHM: clock.format(representative.startsAt),
         endHM: clock.format(representative.endsAt),
         cancelled: live.length === 0,
+        takenBy: taken.get(`${date}|${slot}`) ?? null,
       });
     }
   }

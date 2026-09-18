@@ -3,13 +3,15 @@ import { prisma } from "@/lib/db";
 import { addDays, datesBetween, fromDbDate, toDbDate } from "@/lib/domain/dates";
 import { periodFor } from "@/lib/domain/periods";
 import type { Period } from "@/lib/domain/periods";
-import { validateSchedule } from "@/lib/domain/schedule";
+import { planCopyForward, showLabel, validateSchedule } from "@/lib/domain/schedule";
 import type {
   AssignmentInput,
   AvailabilityInput,
+  BookedElsewhere,
   ScheduleValidation,
   ShowInput,
 } from "@/lib/domain/schedule";
+import { BUSINESS_SHORT } from "@/lib/domain/business";
 import type { Business } from "@/lib/domain/business";
 import type { BusinessSettings, DateISO, Platform, ShowStatus, Slot } from "@/lib/domain/types";
 import { getSettings } from "./settings";
@@ -68,8 +70,34 @@ export interface ReleaseView {
   /** Who the boss named as priority here, best first. Empty when off. */
   priorities: { userId: string; name: string; rank: number }[];
   timeOffByUser: Record<string, DateISO[]>;
+  /**
+   * Shows people are already on in other releases over these dates — a watch
+   * release and a diamond release can cover the same days at the same hours.
+   * See `BookedElsewhere` in the domain.
+   */
+  elsewhere: BookedElsewhere[];
   validation: ScheduleValidation;
   settings: BusinessSettings;
+}
+
+/**
+ * Everyone's shows that would clash with a new placement: this release's own,
+ * and the ones they are already on in other releases.
+ *
+ * The one list the auto-fill and its confirm step both check against, so
+ * neither can drop somebody onto a watch show while they are on a diamond one.
+ */
+export function busyPeriods(
+  view: ReleaseView,
+): { userId: string; startsAt: Date; endsAt: Date }[] {
+  return [
+    ...view.shows.flatMap((s) =>
+      s.status === "SCHEDULED"
+        ? s.assignments.map((a) => ({ userId: a.userId, startsAt: s.startsAt, endsAt: s.endsAt }))
+        : [],
+    ),
+    ...view.elsewhere.map((e) => ({ userId: e.userId, startsAt: e.startsAt, endsAt: e.endsAt })),
+  ];
 }
 
 /** Formats an instant as `HH:mm` in the business zone. */
@@ -139,6 +167,57 @@ export async function getReleaseView(releaseId: string): Promise<ReleaseView | n
     to: release.endDate,
   });
 
+  /*
+    Shows people are already on in other releases over the same days.
+
+    A day either side, because a night show crosses midnight: the diamond night
+    show on the 17th can clash with a watch show dated the 18th. The overlap
+    itself is decided on the real start and end times, not the dates.
+
+    Drafts count, not only published schedules. Two releases being built at the
+    same time are exactly when this matters, and the boss is the only one who
+    sees either — so the message says which is which.
+  */
+  const elsewhereRows = await prisma.assignment.findMany({
+    where: {
+      show: {
+        releaseId: { not: releaseId },
+        status: "SCHEDULED",
+        date: {
+          gte: toDbDate(addDays(release.startDate, -1)),
+          lte: toDbDate(addDays(release.endDate, 1)),
+        },
+      },
+    },
+    select: {
+      userId: true,
+      user: { select: { name: true } },
+      show: {
+        select: {
+          business: true,
+          date: true,
+          platform: true,
+          slot: true,
+          startsAt: true,
+          endsAt: true,
+          release: { select: { scheduleStatus: true } },
+        },
+      },
+    },
+  });
+  const elsewhere: BookedElsewhere[] = elsewhereRows.map((row) => ({
+    userId: row.userId,
+    userName: row.user.name,
+    label:
+      `${BUSINESS_SHORT[row.show.business]} ${showLabel({
+        dateISO: fromDbDate(row.show.date),
+        platform: row.show.platform,
+        slot: row.show.slot,
+      })}` + (row.show.release.scheduleStatus === "PUBLISHED" ? "" : " (not published yet)"),
+    startsAt: row.show.startsAt,
+    endsAt: row.show.endsAt,
+  }));
+
   const shows: ShowView[] = showRows.map((show) => ({
     id: show.id,
     dateISO: fromDbDate(show.date),
@@ -188,6 +267,7 @@ export async function getReleaseView(releaseId: string): Promise<ReleaseView | n
       maxShowsPerPerson: release.maxShowsPerPerson,
       expectedUserIds: streamers.map((s) => s.id),
       submittedUserIds: submissions.map((s) => s.userId),
+      elsewhere,
     },
   );
 
@@ -201,6 +281,7 @@ export async function getReleaseView(releaseId: string): Promise<ReleaseView | n
     submittedUserIds: submissions.map((s) => s.userId),
     priorities,
     timeOffByUser,
+    elsewhere,
     validation,
     settings,
   };
@@ -403,3 +484,84 @@ export async function listPublishedReleases(take = 8) {
 }
 
 export { addDays };
+
+/**
+ * Who "Copy last release" would put where, and what it would leave out.
+ *
+ * Kept out of the button's action so it can be exercised without a session.
+ * Three rules beyond the weekday match `planCopyForward` does:
+ *
+ *   - The last release of the SAME kind. Watch and diamond releases run side by
+ *     side, and "whichever ended most recently" could be the other one —
+ *     copying the diamond pair onto the watch rota, or the other way round.
+ *   - Only people this release was sent to, who are still streamers. A release
+ *     sent to two people must not have a third copied onto it just because they
+ *     worked the last one.
+ *   - Never onto a show that overlaps one they are already on, in this release
+ *     or another — the same rule the picker, the auto-fill and publishing keep.
+ */
+export async function planCopyLastRelease(releaseId: string): Promise<
+  | { error: string }
+  | { toCreate: { showId: string; userId: string; seat: number }[]; skipped: number; clashing: number }
+> {
+  const release = await prisma.release.findUnique({
+    where: { id: releaseId },
+    select: { id: true, startDate: true, business: true },
+  });
+  if (!release) return { error: "That release no longer exists." };
+  const view = await getReleaseView(releaseId);
+  if (!view) return { error: "That release no longer exists." };
+
+  const previous = await prisma.release.findFirst({
+    where: { id: { not: releaseId }, business: release.business, endDate: { lt: release.startDate } },
+    orderBy: { endDate: "desc" },
+    select: { id: true },
+  });
+  if (!previous) return { error: "There is no earlier release to copy from." };
+
+  const [previousShows, currentShows] = await Promise.all([
+    prisma.show.findMany({
+      where: { releaseId: previous.id, status: "SCHEDULED" },
+      select: {
+        date: true,
+        platform: true,
+        slot: true,
+        assignments: { select: { userId: true, seat: true } },
+      },
+    }),
+    prisma.show.findMany({
+      where: { releaseId, status: "SCHEDULED" },
+      select: { id: true, date: true, platform: true, slot: true, assignments: { select: { seat: true } } },
+    }),
+  ]);
+
+  const eligible = new Set(view.streamers.map((s) => s.id));
+  const { toCreate: planned, skipped } = planCopyForward(
+    previousShows,
+    currentShows.map((s) => ({
+      id: s.id,
+      date: s.date,
+      platform: s.platform,
+      slot: s.slot,
+      takenSeats: s.assignments.map((a) => a.seat),
+    })),
+    eligible,
+  );
+
+  const showTimes = new Map(view.shows.map((s) => [s.id, s]));
+  const busy = busyPeriods(view);
+  const toCreate = planned.filter((c) => {
+    const show = showTimes.get(c.showId);
+    return (
+      !show ||
+      !busy.some(
+        (b) =>
+          b.userId === c.userId &&
+          b.startsAt.getTime() < show.endsAt.getTime() &&
+          show.startsAt.getTime() < b.endsAt.getTime(),
+      )
+    );
+  });
+
+  return { toCreate, skipped, clashing: planned.length - toCreate.length };
+}

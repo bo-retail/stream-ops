@@ -14,11 +14,10 @@ import {
 } from "@/lib/domain/dates";
 import { blockerFor, rankCandidates } from "@/lib/domain/assign";
 import type { Candidate } from "@/lib/domain/assign";
-import { planCopyForward } from "@/lib/domain/schedule";
 import { PLATFORM_SHORT, SEATS, SEATS_PER_SHOW, SLOT_SHORT } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
 import { businessOfRelease } from "@/lib/server/business";
-import { getReleaseView } from "@/lib/server/schedule";
+import { busyPeriods, getReleaseView, planCopyLastRelease } from "@/lib/server/schedule";
 import { getSettings } from "@/lib/server/settings";
 import { scheduledHoursPrinted } from "@/lib/server/timeclock";
 
@@ -596,63 +595,15 @@ export async function copyLastRelease(
   if (!parsed.success) return { error: parsed.error.issues[0].message };
   const { releaseId } = parsed.data;
 
-  const release = await prisma.release.findUnique({
-    where: { id: releaseId },
-    select: { id: true, startDate: true },
-  });
-  if (!release) return { error: "That release no longer exists." };
-
-  const previous = await prisma.release.findFirst({
-    where: { id: { not: releaseId }, endDate: { lt: release.startDate } },
-    orderBy: { endDate: "desc" },
-    select: { id: true, name: true, startDate: true, endDate: true },
-  });
-  if (!previous) return { error: "There is no earlier release to copy from." };
-
-  const [previousShows, currentShows] = await Promise.all([
-    prisma.show.findMany({
-      where: { releaseId: previous.id, status: "SCHEDULED" },
-      select: {
-        date: true,
-        platform: true,
-        slot: true,
-        assignments: { select: { userId: true, seat: true } },
-      },
-    }),
-    prisma.show.findMany({
-      where: { releaseId, status: "SCHEDULED" },
-      select: { id: true, date: true, platform: true, slot: true, assignments: { select: { seat: true } } },
-    }),
-  ]);
-
-  // Who can still be scheduled. See `planCopyForward` for why this is the whole
-  // question rather than a copy.
-  const eligible = new Set(
-    (
-      await prisma.user.findMany({
-        where: { isActive: true, role: "EMPLOYEE", team: "STREAMING" },
-        select: { id: true },
-      })
-    ).map((u) => u.id),
-  );
-
-  const { toCreate, skipped } = planCopyForward(
-    previousShows,
-    currentShows.map((s) => ({
-      id: s.id,
-      date: s.date,
-      platform: s.platform,
-      slot: s.slot,
-      takenSeats: s.assignments.map((a) => a.seat),
-    })),
-    eligible,
-  );
+  const plan = await planCopyLastRelease(releaseId);
+  if ("error" in plan) return { error: plan.error };
+  const { toCreate, skipped, clashing } = plan;
 
   if (toCreate.length === 0) {
     return {
       error:
-        skipped > 0
-          ? `Nothing to copy — the ${skipped} placement(s) that matched belong to people who are no longer streamers.`
+        skipped + clashing > 0
+          ? `Nothing to copy — the ${skipped + clashing} placement(s) that matched are for people not on this release, no longer streamers, or already on another show at that time.`
           : "Nothing to copy — no matching shows, or every seat is already filled.",
     };
   }
@@ -670,7 +621,8 @@ export async function copyLastRelease(
         actorId: boss.id,
         summary:
           `Copied ${toCreate.length} placements from the previous release` +
-          (skipped > 0 ? `; skipped ${skipped} for people who are no longer streamers` : ""),
+          (skipped > 0 ? `; skipped ${skipped} for people not on this release or no longer streamers` : "") +
+          (clashing > 0 ? `; skipped ${clashing} already on another show at that time` : ""),
       },
     }),
   ]);
@@ -680,7 +632,10 @@ export async function copyLastRelease(
     ok:
       `Copied ${toCreate.length} placement(s) from the previous release. Check them before publishing.` +
       (skipped > 0
-        ? ` ${skipped} were left out — those people are no longer streamers.`
+        ? ` ${skipped} were left out — those people are not on this release or no longer streamers.`
+        : "") +
+      (clashing > 0
+        ? ` ${clashing} were left out — those people are already on another show at that time.`
         : ""),
   };
 }
@@ -795,12 +750,9 @@ async function buildProposal(releaseId: string): Promise<Proposal | null> {
   }
 
   // Running list of who is on what, so a person picked earlier in this pass is
-  // not also picked for an overlapping show later in it.
-  const placed = view.shows.flatMap((s) =>
-    s.status === "SCHEDULED"
-      ? s.assignments.map((a) => ({ userId: a.userId, startsAt: s.startsAt, endsAt: s.endsAt }))
-      : [],
-  );
+  // not also picked for an overlapping show later in it — and nobody is picked
+  // while they are on a show in another release, watch or diamond.
+  const placed = busyPeriods(view);
 
   const picks: ProposedPick[] = [];
   const gaps: ProposedGap[] = [];
@@ -986,11 +938,9 @@ export async function commitSchedule(
   const counts = new Map<string, number>(
     view.streamers.map((s) => [s.id, view.validation.showsByUser[s.id] ?? 0]),
   );
-  const placed = view.shows.flatMap((s) =>
-    s.status === "SCHEDULED"
-      ? s.assignments.map((a) => ({ userId: a.userId, startsAt: s.startsAt, endsAt: s.endsAt }))
-      : [],
-  );
+  // Re-checked against other releases too: one may have been published since
+  // this proposal was drawn up.
+  const placed = busyPeriods(view);
 
   const toWrite: { showId: string; seat: number; userId: string }[] = [];
   let dropped = 0;
