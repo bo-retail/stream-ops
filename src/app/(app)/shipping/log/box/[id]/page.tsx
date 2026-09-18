@@ -26,6 +26,7 @@ const KIND_LABEL: Record<string, { text: string; tone: "ok" | "warn" | "danger" 
   ITEM_ACCEPTED: { text: "In the box", tone: "ok" },
   ITEM_REFUSED: { text: "Refused", tone: "danger" },
   ITEM_OVERRIDE: { text: "Added against the report", tone: "warn" },
+  ITEM_PLACEHOLDER: { text: "In the box — sold as a placeholder", tone: "ok" },
   CLOSE_COMPLETE: { text: "Closed", tone: "ok" },
   CLOSE_INCOMPLETE: { text: "Closed incomplete", tone: "warn" },
   CLOSE_UNVERIFIED: { text: "Marked sent without scanning", tone: "warn" },
@@ -99,7 +100,17 @@ export default async function BoxPage({ params }: { params: Promise<{ id: string
               <tbody>
                 {box.items.map((i) => (
                   <tr key={i.stockNumber}>
-                    <Td className="tabular font-medium">{i.stockNumber}</Td>
+                    <Td className="tabular font-medium">
+                      {i.stockNumber}
+                      {/* The report only said "a piece". Which piece it was is
+                          the one thing a dispute about this box turns on. */}
+                      {i.placeholder ? (
+                        <p className="mt-0.5 text-xs font-normal text-ink-muted">
+                          Placeholder listing
+                          {i.pieces.length > 0 ? ` — the piece: ${i.pieces.join(", ")}` : " — no piece recorded"}
+                        </p>
+                      ) : null}
+                    </Td>
                     <Td className="tabular text-ink-muted">{i.expected}</Td>
                     <Td className="tabular">
                       {i.scanned > i.expected ? (
@@ -130,7 +141,7 @@ export default async function BoxPage({ params }: { params: Promise<{ id: string
                 <tr>
                   <Th>Time</Th>
                   <Th>What happened</Th>
-                  <Th>Watch</Th>
+                  <Th>{box.business === "DIAMOND" ? "Piece" : "Watch"}</Th>
                   <Th>By</Th>
                   <Th>Note</Th>
                 </tr>

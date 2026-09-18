@@ -1,6 +1,13 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { fromDbDate, toDbDate } from "@/lib/domain/dates";
+import type { Business } from "@/lib/domain/business";
+import {
+  decidePlaceholderScan,
+  isPlaceholderStock,
+  listingOfNote,
+  placeholderNote,
+} from "@/lib/domain/imports/placeholders";
 import {
   looksLikeShippingLabel,
   matchTracking,
@@ -32,11 +39,21 @@ export interface PackingItemView {
   scanned: number;
   /** Still to go in. Never negative — an over-scan is an override, not a debt. */
   outstanding: number;
+  /**
+   * The line is a placeholder listing ("LGD - As seen on screen…"), not a
+   * stock number. Nothing on the piece carries it, so the packer scans the
+   * piece's own tag instead. See `domain/imports/placeholders`.
+   */
+  placeholder: boolean;
+  /** The real tags recorded against a placeholder line, in the order scanned. */
+  pieces: string[];
 }
 
 export interface PackingBoxView {
   id: string;
   tracking: string;
+  /** Watches or diamonds — for the words on the screen, not for any rule. */
+  business: Business;
   platform: "TIKTOK" | "EBAY";
   showDate: DateISO;
   buyer: string;
@@ -56,6 +73,7 @@ export interface PackingBoxView {
 const SELECT = {
   id: true,
   trackingNumber: true,
+  business: true,
   platform: true,
   showDate: true,
   buyer: true,
@@ -69,11 +87,19 @@ const SELECT = {
     select: { stockNumber: true, expectedQty: true, scannedQty: true },
     orderBy: { stockNumber: "asc" as const },
   },
+  // Which real piece went in against each placeholder line. Nearly always an
+  // empty list: only a box sold under a placeholder listing has any.
+  scans: {
+    where: { kind: "ITEM_PLACEHOLDER" as const },
+    select: { stockNumber: true, note: true },
+    orderBy: { at: "asc" as const },
+  },
 } as const;
 
 type Row = {
   id: string;
   trackingNumber: string;
+  business: Business;
   platform: "TIKTOK" | "EBAY";
   showDate: Date;
   buyer: string;
@@ -84,6 +110,7 @@ type Row = {
   closedAt: Date | null;
   closedBy: { name: string } | null;
   items: { stockNumber: string; expectedQty: number; scannedQty: number }[];
+  scans: { stockNumber: string | null; note: string | null }[];
 };
 
 export function toBoxView(row: Row): PackingBoxView {
@@ -92,11 +119,16 @@ export function toBoxView(row: Row): PackingBoxView {
     expected: i.expectedQty,
     scanned: i.scannedQty,
     outstanding: Math.max(0, i.expectedQty - i.scannedQty),
+    placeholder: isPlaceholderStock(i.stockNumber),
+    pieces: row.scans
+      .filter((s) => listingOfNote(s.note) === i.stockNumber && s.stockNumber)
+      .map((s) => s.stockNumber as string),
   }));
 
   return {
     id: row.id,
     tracking: row.trackingNumber,
+    business: row.business,
     platform: row.platform,
     showDate: fromDbDate(row.showDate),
     buyer: row.buyer,
@@ -345,6 +377,11 @@ export async function packItem(
 
   const line = box.items.find((i) => i.stockNumber === stockNumber);
   if (!line) {
+    // A box sold under a placeholder listing expects "a piece", not a number,
+    // so the tag on the piece is the answer — if it passes the checks.
+    const placeholder = await packPlaceholder(userId, box, stockNumber, rawScan);
+    if (placeholder) return placeholder;
+
     /*
       Not in this box — or not a watch at all.
 
@@ -431,6 +468,120 @@ export async function packItem(
     data: { packageId, userId, kind: "ITEM_ACCEPTED", stockNumber, rawScan },
   });
   return reload(packageId);
+}
+
+/**
+ * The scan kinds that mean something went into a box.
+ *
+ * Counted wherever the day's items are totted up — the packer's tally, the
+ * shipping workbook. A piece recorded against a placeholder listing went in the
+ * box as surely as one that matched its order, and leaving it out would make
+ * whoever packed the diamond placeholders look slower than they were.
+ */
+export const PACKED_ITEM_KINDS = ["ITEM_ACCEPTED", "ITEM_PLACEHOLDER"] as const;
+
+/**
+ * Puts a piece in a box that was sold under a placeholder listing.
+ *
+ * Null when the box has no placeholder still waiting, which is nearly every
+ * box, and those pay for none of the lookups below. Otherwise the tag is
+ * checked against the rest of the day before it is recorded — see
+ * `decidePlaceholderScan` for why each check exists — and the increment is the
+ * same conditional statement `packItem` uses, so two packers cannot both fill
+ * the last placeholder in a box.
+ */
+async function packPlaceholder(
+  userId: string,
+  box: PackingBoxView,
+  stockNumber: string,
+  rawScan: string,
+): Promise<ScanOutcome | null> {
+  if (!box.items.some((i) => i.placeholder && i.outstanding > 0)) return null;
+
+  // "That day" is the box's own show date: the day whose orders a mix-up
+  // could come from, since those are the parcels on the table together.
+  const showDate = toDbDate(box.showDate);
+  const [onAnother, elsewhere] = await Promise.all([
+    prisma.packageItem.findFirst({
+      where: { stockNumber, expectedQty: { gt: 0 }, packageId: { not: box.id }, package: { showDate } },
+      select: { package: { select: { trackingNumber: true } } },
+    }),
+    prisma.scanEvent.findFirst({
+      where: { kind: "ITEM_PLACEHOLDER", stockNumber, packageId: { not: box.id }, package: { showDate } },
+      select: { package: { select: { trackingNumber: true } } },
+    }),
+  ]);
+
+  const decision = decidePlaceholderScan({
+    scanned: stockNumber,
+    lines: box.items,
+    filledHere: box.items.flatMap((i) => i.pieces),
+    onAnotherOrder: onAnother?.package.trackingNumber ?? null,
+    packedElsewhere: elsewhere?.package.trackingNumber ?? null,
+  });
+
+  if (decision.kind === "none") return null;
+
+  if (decision.kind === "refuse") {
+    const refusal = {
+      notATag: {
+        note: "Placeholder: not a tag — probably a misread",
+        message: `Could not read "${stockNumber}" as the tag on a piece — probably a misread. Scan the tag again, or type the number and press Enter.`,
+      },
+      alreadyInThisBox: {
+        note: "Placeholder: already recorded in this box",
+        message: `${stockNumber} is already recorded in this box. Each piece goes in once.`,
+      },
+      onAnotherOrder: {
+        note: `Placeholder: on another customer's order (${decision.otherBox})`,
+        message: `${stockNumber} is on another customer's order (box ${decision.otherBox}). It does not go in this box.`,
+      },
+      packedElsewhere: {
+        note: `Placeholder: already packed into ${decision.otherBox}`,
+        message: `${stockNumber} was already packed into box ${decision.otherBox} as that customer's piece. A piece only ships once.`,
+      },
+    }[decision.reason];
+
+    await prisma.scanEvent.create({
+      data: { packageId: box.id, userId, kind: "ITEM_REFUSED", stockNumber, rawScan, note: refusal.note },
+    });
+    return {
+      kind: "refused",
+      box,
+      message: refusal.message,
+      // A misread is not something to add, and nor is a piece already in this
+      // box. The other two are the same as any "not in this box": the report
+      // says no, and if the piece really belongs, adding it closes the box
+      // incomplete in front of the director.
+      stockNumber:
+        decision.reason === "notATag" || decision.reason === "alreadyInThisBox" ? undefined : stockNumber,
+      unreadable: decision.reason === "notATag" ? true : undefined,
+    };
+  }
+
+  const claimed = await prisma.$queryRaw<{ scannedQty: number }[]>`
+    UPDATE "PackageItem"
+       SET "scannedQty" = "scannedQty" + 1
+     WHERE "packageId" = ${box.id}
+       AND "stockNumber" = ${decision.listing}
+       AND "scannedQty" < "expectedQty"
+    RETURNING "scannedQty"
+  `;
+  // Somebody else filled it between reading the box and now. Nothing was
+  // written; showing the box as it now stands is the whole answer.
+  if (claimed.length === 0) return reload(box.id, "That piece was just recorded from another scanner.");
+
+  await prisma.scanEvent.create({
+    data: {
+      packageId: box.id,
+      userId,
+      kind: "ITEM_PLACEHOLDER",
+      stockNumber,
+      rawScan,
+      note: placeholderNote(decision.listing),
+    },
+  });
+  return reload(box.id, `${stockNumber} recorded as this customer's piece.`);
 }
 
 /**
@@ -657,7 +808,7 @@ export async function getPackerDays(showDate: Date): Promise<PackerDay[]> {
     }),
     prisma.scanEvent.groupBy({
       by: ["userId"],
-      where: { package: { showDate }, kind: "ITEM_ACCEPTED" },
+      where: { package: { showDate }, kind: { in: [...PACKED_ITEM_KINDS] } },
       _count: { _all: true },
     }),
     prisma.scanEvent.groupBy({
@@ -775,7 +926,7 @@ export async function getPersonDay(
   const [boxes, items] = await Promise.all([
     listBoxes({ showDate, closedById: userId }),
     prisma.scanEvent.count({
-      where: { userId, kind: "ITEM_ACCEPTED", package: { showDate } },
+      where: { userId, kind: { in: [...PACKED_ITEM_KINDS] }, package: { showDate } },
     }),
   ]);
 

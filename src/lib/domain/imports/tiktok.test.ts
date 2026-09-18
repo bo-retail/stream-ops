@@ -235,6 +235,46 @@ describe("the shift tag", () => {
     expect(result.flags.some((f) => f.severity === "info" && f.message.includes("blank on 1 row(s)"))).toBe(true);
   });
 
+  /*
+    Every row of the 09/15 diamond export has a bare 1–9 in Seller SKU — the
+    listing's variation number, on real pieces as well as placeholders. Read as
+    show tags, that put "36 row(s) had an unreadable shift tag" at the top of
+    every diamond upload.
+  */
+  it("does not warn about the diamond shop's variation numbers", () => {
+    const result = parse([
+      paidRow({ "Creator Handle": "caratclublive", "Seller SKU": "1", "Variation": "1", "Product Name": "E11397" }),
+      paidRow({
+        "Creator Handle": "caratclublive",
+        "Seller SKU": "9",
+        "Variation": "9",
+        "Product Name": "LGD - As seen on screen - No returns or cancellations",
+        "Order ID": "2",
+      }),
+    ]);
+    expect(result.sales).toHaveLength(2);
+    expect(result.sales.every((s) => s.shiftTag === "09.08.26 AM")).toBe(true);
+    expect(result.flags.some((f) => f.message.includes("unreadable shift tag"))).toBe(false);
+    const notes = result.flags.filter((f) => f.message.includes("variation number"));
+    expect(notes).toHaveLength(1);
+    expect(notes[0].severity).toBe("info");
+  });
+
+  it("still warns about a bare number on the watch shop, where it is a broken show tag", () => {
+    const result = parse([paidRow({ "Creator Handle": "vaultshowlive", "Seller SKU": "1" })]);
+    expect(
+      result.flags.some((f) => f.severity === "warning" && f.message.includes("unreadable shift tag")),
+    ).toBe(true);
+    expect(result.flags.some((f) => f.message.includes("variation number"))).toBe(false);
+  });
+
+  it("still warns about real junk on the diamond shop", () => {
+    const result = parse([paidRow({ "Creator Handle": "caratclublive", "Seller SKU": "LGD-X" })]);
+    expect(
+      result.flags.some((f) => f.severity === "warning" && f.message.includes("unreadable shift tag")),
+    ).toBe(true);
+  });
+
   it("warns but does not act when most tags disagree with the file's window", () => {
     // An item listed in the morning can sell at night. The file decides the
     // show; the tag is only a sanity check (R1).

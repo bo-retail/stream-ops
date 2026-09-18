@@ -22,7 +22,7 @@ export default async function PackingPage() {
     <>
       <PageHeader
         title="Packing"
-        description="Scan a shipping label to open its box, then scan each watch as it goes in."
+        description="Scan a shipping label to open its box, then scan everything in it as it goes in."
       />
       <ScanClient />
     </>

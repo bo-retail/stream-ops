@@ -17,6 +17,7 @@
  */
 
 import type { DateISO } from "../types";
+import { isPlaceholderStock } from "./placeholders";
 import { findSuffixCollisions, normaliseStockNumber, trackingCarrier } from "./tracking";
 import type { ImportFlag, ImportPlatform, ShowKey, WatchSale } from "./types";
 
@@ -148,6 +149,30 @@ export function checkIntegrity(sales: readonly WatchSale[], boxes: readonly Box[
     flags.push({
       severity: "blocking",
       message: `${noStock.length} paid watch(es) have no stock number, so a packer could not scan them. First: order ${noStock[0].orderRef}.`,
+    });
+  }
+
+  /*
+    Pieces sold under a placeholder listing — see `placeholders`.
+
+    Said at upload rather than discovered at the table, so whoever loads the
+    file knows those boxes pack differently: there is no stock number on the
+    order to scan, and the packer scans the tag on the piece instead. Not a
+    warning, because nothing is wrong with the file. This is how a show with
+    more than 100 pieces has to be listed.
+  */
+  const placeholders = sales.filter((s) => isPlaceholderStock(s.stockNumber));
+  if (placeholders.length > 0) {
+    const listings = [...new Set(placeholders.map((s) => s.stockNumber.trim()))];
+    flags.push({
+      severity: "info",
+      message:
+        `${placeholders.length} piece(s) were sold under a placeholder listing (${listings
+          .slice(0, 2)
+          .map((l) => `"${l}"`)
+          .join(", ")}${listings.length > 2 ? ` and ${listings.length - 2} more` : ""}). ` +
+        `Their boxes have no stock number to scan — the packer scans the tag on the piece, and ` +
+        `that number is recorded against the order.`,
     });
   }
 

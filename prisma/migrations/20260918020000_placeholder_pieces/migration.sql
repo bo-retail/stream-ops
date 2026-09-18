@@ -1,0 +1,26 @@
+-- A piece sold under a placeholder listing, recorded by its real tag.
+--
+-- TikTok caps a live at 100 listed items, so a bigger show lists the extras as
+-- stand-ins — "LGD #1", "LGD #2" — and each is switched to the real SKU after
+-- the show. The export does not wait for that. On 09/15 it was downloaded 21
+-- hours later with labels already bought, and nine rows still read
+-- "LGD - As seen on screen - No returns or cancellations".
+--
+-- Nothing on the physical piece carries that title, so the packer had nothing
+-- to scan and every one of those boxes could only close incomplete. Now she
+-- scans the tag on the piece, and this is the row that records it: the scan's
+-- stock number is the real piece, its note the listing it was sold as. The
+-- report never knew which piece went to which customer. After this, the scan
+-- log does.
+--
+-- Its own kind rather than an ordinary "in the box", because the two mean
+-- different things in a dispute. "In the box" says the scanned piece matched
+-- the order. This says the order could not name the piece and the packer's
+-- scan is the only record of which one it was.
+--
+-- Purely additive: one enum value, nothing dropped, no row rewritten.
+--
+-- Note on enums: PostgreSQL will not let a value added in a transaction be
+-- *used* in that same transaction. Nothing below uses it, so this is safe.
+
+ALTER TYPE "ScanKind" ADD VALUE IF NOT EXISTS 'ITEM_PLACEHOLDER';

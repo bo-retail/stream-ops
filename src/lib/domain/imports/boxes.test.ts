@@ -104,6 +104,28 @@ describe("integrity checks", () => {
     expect(checkIntegrity(sales, buildBoxes(sales))).toEqual([]);
   });
 
+  it("says at upload which pieces were sold under a placeholder listing, without calling it a fault", () => {
+    // The 09/15 diamond export: real pieces, and stand-ins past TikTok's 100-item cap.
+    const LGD = "LGD - As seen on screen - No returns or cancellations";
+    const sales = [
+      sale({ business: "DIAMOND", orderRef: "a", stockNumber: "E11397", tracking: "GFUS01073138600001" }),
+      sale({ business: "DIAMOND", orderRef: "b", stockNumber: LGD, tracking: "GFUS01073138600002" }),
+      sale({ business: "DIAMOND", orderRef: "c", stockNumber: LGD, tracking: "GFUS01073138600003" }),
+    ];
+    const flags = checkIntegrity(sales, buildBoxes(sales));
+    const notes = flags.filter((f) => f.message.includes("placeholder listing"));
+    expect(notes).toHaveLength(1);
+    expect(notes[0].severity).toBe("info");
+    expect(notes[0].message).toContain("2 piece(s)");
+    expect(notes[0].message).toContain(LGD);
+    expect(flags.some((f) => f.severity === "blocking")).toBe(false);
+  });
+
+  it("says nothing about placeholders on a day that has none", () => {
+    const sales = [sale({ stockNumber: "MPW-0396" }), sale({ orderRef: "b", stockNumber: "KJE7828-RD-4.00/6" })];
+    expect(checkIntegrity(sales, buildBoxes(sales)).some((f) => f.message.includes("placeholder"))).toBe(false);
+  });
+
   it("imports a paid watch with no label yet, warning and naming the order", () => {
     // eBay 30537 on 09/14: paid, but its label was not bought when the report
     // was downloaded at 4:35 AM. It used to refuse the whole day.

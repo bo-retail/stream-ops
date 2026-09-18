@@ -3,6 +3,7 @@ import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
 import { fromDbDate, toDbDate } from "@/lib/domain/dates";
 import type { DateISO } from "@/lib/domain/types";
+import { PACKED_ITEM_KINDS } from "./packing";
 import { getSettings } from "./settings";
 
 /**
@@ -35,6 +36,7 @@ const KIND_LABEL: Record<string, string> = {
   ITEM_ACCEPTED: "In the box",
   ITEM_REFUSED: "Refused",
   ITEM_OVERRIDE: "Added against the report",
+  ITEM_PLACEHOLDER: "In the box — tag scanned for a placeholder listing",
   CLOSE_COMPLETE: "Closed",
   CLOSE_INCOMPLETE: "Closed incomplete",
   CLOSE_UNVERIFIED: "Marked sent without scanning",
@@ -158,7 +160,7 @@ export async function buildShippingWorkbook(
 
   for (const scan of scans) {
     const c = cell(key(fromDbDate(scan.package.showDate), scan.user.name));
-    if (scan.kind === "ITEM_ACCEPTED") c.items++;
+    if ((PACKED_ITEM_KINDS as readonly string[]).includes(scan.kind)) c.items++;
     if (!c.first || scan.at < c.first) c.first = scan.at;
     if (!c.last || scan.at > c.last) c.last = scan.at;
   }

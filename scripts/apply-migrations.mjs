@@ -51,6 +51,7 @@ const ENUM_VALUES = [
   `ALTER TYPE "TimeEntrySource" ADD VALUE IF NOT EXISTS 'SCHEDULE'`,
   `ALTER TYPE "PackageStatus" ADD VALUE IF NOT EXISTS 'CLOSED_UNVERIFIED'`,
   `ALTER TYPE "ScanKind" ADD VALUE IF NOT EXISTS 'CLOSE_UNVERIFIED'`,
+  `ALTER TYPE "ScanKind" ADD VALUE IF NOT EXISTS 'ITEM_PLACEHOLDER'`,
 ];
 
 /** 42704: the type is not there yet. A migration below creates it. */

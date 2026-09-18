@@ -840,6 +840,10 @@ enum ScanKind {
   ITEM_REFUSED
   /// An unexpected watch was added deliberately, against the data.
   ITEM_OVERRIDE
+  /// The tag on a piece sold under a placeholder listing ("LGD #3"). The report
+  /// only says "a piece", so this row is the record of which piece went to
+  /// that customer: `stockNumber` is the real tag, `note` the listing it sold as.
+  ITEM_PLACEHOLDER
   CLOSE_COMPLETE
   CLOSE_INCOMPLETE
   /// Closed in bulk without being scanned, with the reason on the row. So "why

@@ -233,6 +233,7 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
   const tagCounts = new Map<string, number>();
   const malformed: string[] = [];
   let blankTags = 0;
+  let variationNumbers = 0;
 
   for (const record of records) {
     const orderRef = record["Order ID"];
@@ -273,6 +274,9 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
     const parsedTag = parseShiftTag(rawTag);
     if (!parsedTag) {
       if (rawTag.trim() === "") blankTags++;
+      // The diamond shop's Seller SKU is the listing's variation number, 1–9,
+      // on every row, real pieces included. Not a show tag, so not a bad one.
+      else if (business === "DIAMOND" && /^\d{1,3}$/.test(rawTag.trim())) variationNumbers++;
       else malformed.push(`${orderRef} (${record["Product Name"]}, $${amount})`);
     }
     const tag = parsedTag ? rawTag : defaultShiftTag(showDate, half);
@@ -343,6 +347,26 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
       message:
         `${file.name}: the show tag (Seller SKU) is blank on ${blankTags} row(s). They are credited to this ` +
         `file's show, ${defaultShiftTag(showDate, half)} — on TikTok the file decides the show and the pay anyway.`,
+    });
+  }
+
+  /*
+    The diamond shop uses Seller SKU for something else.
+
+    Every row of the 09/15 diamond export carries a bare 1–9 there — the
+    listing's variation number, real pieces as well as placeholders. Reading
+    those as broken show tags put "36 row(s) had an unreadable shift tag" at the
+    top of every diamond upload, a warning about nothing that would have been
+    there every single time. Noted once instead, like a blank tag, since on
+    TikTok the file decides the show and the pay regardless (R1).
+  */
+  if (variationNumbers > 0) {
+    flags.push({
+      severity: "info",
+      message:
+        `${file.name}: on the diamond shop, Seller SKU holds the listing's variation number rather than a ` +
+        `show tag (${variationNumbers} row(s)). They are credited to this file's show, ` +
+        `${defaultShiftTag(showDate, half)} — on TikTok the file decides the show and the pay anyway.`,
     });
   }
 

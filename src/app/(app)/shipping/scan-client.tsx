@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Check, PackageCheck, ScanLine, TriangleAlert, X } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
+import { ITEM_WORD } from "@/lib/domain/business";
 import { PLATFORM_SHORT } from "@/lib/domain/types";
 import { addAnyway, closeBox, scanItem, scanLabel, startUnknownBox } from "./actions";
 import type { PackingBoxView, ScanOutcome } from "@/lib/server/packing";
@@ -121,7 +122,7 @@ export function ScanClient() {
       <Card className="p-4">
         <form onSubmit={onScan}>
           <label htmlFor="scan" className="mb-1.5 block text-sm font-medium text-ink">
-            {box ? "Scan a watch" : "Scan a shipping label"}
+            {box ? `Scan a ${ITEM_WORD[box.business].one}` : "Scan a shipping label"}
           </label>
           <div className="flex gap-2">
             <div className="relative flex-1">
@@ -135,7 +136,7 @@ export function ScanClient() {
                 autoFocus
                 autoComplete="off"
                 disabled={pending}
-                placeholder={box ? "watch barcode" : "shipping label"}
+                placeholder={box ? `${ITEM_WORD[box.business].one} barcode` : "shipping label"}
                 className="tabular h-14 w-full rounded-lg border border-line-strong bg-surface pl-11 pr-3 text-lg text-ink placeholder:text-ink-subtle focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-60"
               />
             </div>
@@ -250,13 +251,13 @@ export function ScanClient() {
                 {box.totalScanned}
                 <span className="text-base font-normal text-ink-subtle"> of {box.totalExpected}</span>
               </p>
-              <p className="text-xs text-ink-subtle">watches in the box</p>
+              <p className="text-xs text-ink-subtle">{ITEM_WORD[box.business].many} in the box</p>
             </div>
           </div>
 
           {box.items.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-ink-muted">
-              Scan the watches as they go in.
+              Scan the {ITEM_WORD[box.business].many} as they go in.
             </p>
           ) : (
             <ul className="divide-y divide-line">
@@ -268,9 +269,35 @@ export function ScanClient() {
                     key={item.stockNumber}
                     className={`flex items-center justify-between gap-3 px-4 py-2.5 ${done && !extra ? "bg-ok-50/40" : ""}`}
                   >
-                    <span className={`tabular text-sm font-medium ${done ? "text-ink-muted line-through" : "text-ink"}`}>
-                      {item.stockNumber}
-                    </span>
+                    {item.placeholder ? (
+                      /*
+                        A placeholder listing: the report only says "a piece".
+                        Its title is printed on nothing, so the instruction is
+                        the useful part and the title is shown small beneath it.
+                      */
+                      <span className="min-w-0">
+                        <span className={`block text-sm font-medium ${done ? "text-ink-muted" : "text-ink"}`}>
+                          {done ? (
+                            <>Piece recorded: <span className="tabular">{item.pieces.join(", ")}</span></>
+                          ) : (
+                            <>Scan the tag on the piece</>
+                          )}
+                        </span>
+                        <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-subtle">
+                          <Badge tone="neutral">Placeholder listing</Badge>
+                          <span className="truncate">{item.stockNumber}</span>
+                        </span>
+                        {!done && item.pieces.length > 0 ? (
+                          <span className="mt-0.5 block text-xs text-ink-muted">
+                            So far: <span className="tabular">{item.pieces.join(", ")}</span>
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : (
+                      <span className={`tabular text-sm font-medium ${done ? "text-ink-muted line-through" : "text-ink"}`}>
+                        {item.stockNumber}
+                      </span>
+                    )}
                     <span className="tabular shrink-0 text-sm">
                       {extra ? (
                         <span className="font-semibold text-warn-700">
