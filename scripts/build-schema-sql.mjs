@@ -82,22 +82,19 @@ ALTER TABLE "User"
   ADD CONSTRAINT "User_commissionBps_not_negative"
     CHECK ("commissionBps" IS NULL OR "commissionBps" >= 0);
 
--- The same guarantees for each kind of show's own rates, plus a sensible number
--- of people on one: commission is paid per person, so seatsPerShow is what
--- decides whether a show pays out 1% of its sales or 2%.
+-- The same guarantee for each kind of show's own rate.
 ALTER TABLE "BusinessSettings"
-  ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
-  ADD CONSTRAINT "BusinessSettings_seatsPerShow_sensible" CHECK ("seatsPerShow" BETWEEN 1 AND 4);
+  ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0);
 
 -- A database standing up from nothing still needs both rows to exist. The
 -- migration seeds watches by copying the singleton; from empty there is nothing
 -- to copy, so they start on what the two actually pay.
-INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
-VALUES ('WATCH', 100, 2, CURRENT_TIMESTAMP)
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "updatedAt")
+VALUES ('WATCH', 100, CURRENT_TIMESTAMP)
 ON CONFLICT ("business") DO NOTHING;
 
-INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
-VALUES ('DIAMOND', 100, 2, CURRENT_TIMESTAMP)
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "updatedAt")
+VALUES ('DIAMOND', 100, CURRENT_TIMESTAMP)
 ON CONFLICT ("business") DO NOTHING;
 `;
 

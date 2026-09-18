@@ -136,7 +136,7 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
--- CreateTable — what each kind of show pays, and how many people run one.
+-- CreateTable — what each kind of show pays.
 --
 -- Split out of Settings because these are exactly the things that differ. The
 -- timezone stays shared: one company, one place.
@@ -150,22 +150,16 @@ END $$;
 CREATE TABLE IF NOT EXISTS "BusinessSettings" (
     "business" "Business" NOT NULL,
     "streamerCommissionBps" INTEGER NOT NULL DEFAULT 100,
-    -- Two on the watch side, where the pair split camera and computer and swap
-    -- halfway; a diamond show may run with one. A number rather than a constant
-    -- because commission is paid per person, so this decides whether a show
-    -- pays out 1% of its sales or 2%.
-    "seatsPerShow" INTEGER NOT NULL DEFAULT 2,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "BusinessSettings_pkey" PRIMARY KEY ("business")
 );
 
--- A rate below zero is not a rate, and a show run by nobody is not a show.
--- Cheaper to refuse here than to find a negative wage in a payroll export.
+-- A rate below zero is not a rate. Cheaper to refuse here than to find a
+-- negative wage in a payroll export.
 DO $$ BEGIN
   ALTER TABLE "BusinessSettings"
-    ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
-    ADD CONSTRAINT "BusinessSettings_seatsPerShow_sensible" CHECK ("seatsPerShow" BETWEEN 1 AND 4);
+    ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0);
 EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
@@ -173,21 +167,19 @@ END $$;
 -- Watches start on exactly what is being paid today, copied from the singleton
 -- rather than typed again here, so nobody's pay moves by a cent when the
 -- readers switch over.
-INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
-SELECT 'WATCH', "streamerCommissionBps", 2, CURRENT_TIMESTAMP
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "updatedAt")
+SELECT 'WATCH', "streamerCommissionBps", CURRENT_TIMESTAMP
   FROM "Settings" WHERE "id" = 'singleton'
 ON CONFLICT ("business") DO NOTHING;
 
 -- And from an empty database there is nothing to copy.
-INSERT INTO "BusinessSettings" ("business", "seatsPerShow", "updatedAt")
-VALUES ('WATCH', 2, CURRENT_TIMESTAMP)
+INSERT INTO "BusinessSettings" ("business", "updatedAt")
+VALUES ('WATCH', CURRENT_TIMESTAMP)
 ON CONFLICT ("business") DO NOTHING;
 
--- Diamonds open on 1% a person, the same as watches, and the boss can move one
 -- Diamonds open on 1% a person, the same as watches, and either can be moved
--- without the other on the Payroll screen. Seats stay at two, the safe
--- assumption: a one-person show pays half the commission, so guessing that way
--- round would underpay somebody quietly.
-INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
-VALUES ('DIAMOND', 100, 2, CURRENT_TIMESTAMP)
+-- without the other on the Payroll screen. Each person on a show earns it
+-- separately, whether one person ran the show or two.
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "updatedAt")
+VALUES ('DIAMOND', 100, CURRENT_TIMESTAMP)
 ON CONFLICT ("business") DO NOTHING;

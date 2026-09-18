@@ -49,3 +49,7 @@ schedule-export-test.xlsx
 next-env.d.ts
 
 /src/generated/prisma
+
+# scripts/launch-check.mjs — what every day read just before a migration.
+# Dates and totals only, but specific to one database at one moment.
+launch-before.json

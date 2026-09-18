@@ -460,14 +460,6 @@ model BusinessSettings {
   /// different amount of money.
   streamerCommissionBps Int @default(100)
 
-  /// How many people run one show here.
-  ///
-  /// Two on the watch side, where the pair split camera and computer and swap
-  /// halfway. A diamond show may run with one. A number rather than a constant
-  /// because commission is paid per person, so this is what decides whether a
-  /// show pays out 1% of its sales or 2%.
-  seatsPerShow Int @default(2)
-
   updatedAt DateTime @updatedAt
 }
 
@@ -605,6 +597,10 @@ enum ImportStatus {
   OK
   /// A file was not what the code expects, or a check failed. No boxes made.
   BLOCKED
+  /// An upload from before the checklist, replaced by a later upload of the
+  /// same day. The old model never read these; the migration to the new one
+  /// marks them so that nothing ever does. Kept, never shown as the day's data.
+  SUPERSEDED
 }
 
 /// One upload of a show day's order exports.

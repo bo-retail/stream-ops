@@ -44,13 +44,13 @@ CREATE TYPE "ReleaseStatus" AS ENUM ('DRAFT', 'OPEN', 'CLOSED');
 CREATE TYPE "TimeEntrySource" AS ENUM ('SELF', 'ADMIN', 'SCHEDULE');
 
 -- CreateEnum
-CREATE TYPE "ImportStatus" AS ENUM ('OK', 'BLOCKED');
+CREATE TYPE "ImportStatus" AS ENUM ('OK', 'BLOCKED', 'SUPERSEDED');
 
 -- CreateEnum
 CREATE TYPE "PackageStatus" AS ENUM ('OPEN', 'CLOSED_COMPLETE', 'CLOSED_INCOMPLETE', 'CLOSED_UNVERIFIED');
 
 -- CreateEnum
-CREATE TYPE "ScanKind" AS ENUM ('LABEL', 'ITEM_ACCEPTED', 'ITEM_REFUSED', 'ITEM_OVERRIDE', 'CLOSE_COMPLETE', 'CLOSE_INCOMPLETE', 'CLOSE_UNVERIFIED', 'REOPEN');
+CREATE TYPE "ScanKind" AS ENUM ('LABEL', 'ITEM_ACCEPTED', 'ITEM_REFUSED', 'ITEM_OVERRIDE', 'ITEM_PLACEHOLDER', 'CLOSE_COMPLETE', 'CLOSE_INCOMPLETE', 'CLOSE_UNVERIFIED', 'REOPEN');
 
 -- CreateTable
 CREATE TABLE "User" (
@@ -196,10 +196,18 @@ CREATE TABLE "ScheduleSnapshot" (
 );
 
 -- CreateTable
+CREATE TABLE "DismissedReport" (
+    "showDate" DATE NOT NULL,
+    "dismissedById" TEXT,
+    "dismissedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "DismissedReport_pkey" PRIMARY KEY ("showDate")
+);
+
+-- CreateTable
 CREATE TABLE "BusinessSettings" (
     "business" "Business" NOT NULL,
     "streamerCommissionBps" INTEGER NOT NULL DEFAULT 100,
-    "seatsPerShow" INTEGER NOT NULL DEFAULT 2,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "BusinessSettings_pkey" PRIMARY KEY ("business")
@@ -590,6 +598,9 @@ ALTER TABLE "ScheduleSnapshot" ADD CONSTRAINT "ScheduleSnapshot_releaseId_fkey" 
 ALTER TABLE "ScheduleSnapshot" ADD CONSTRAINT "ScheduleSnapshot_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "DismissedReport" ADD CONSTRAINT "DismissedReport_dismissedById_fkey" FOREIGN KEY ("dismissedById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "AuditLog" ADD CONSTRAINT "AuditLog_actorId_fkey" FOREIGN KEY ("actorId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -682,20 +693,17 @@ ALTER TABLE "User"
   ADD CONSTRAINT "User_commissionBps_not_negative"
     CHECK ("commissionBps" IS NULL OR "commissionBps" >= 0);
 
--- The same guarantees for each kind of show's own rates, plus a sensible number
--- of people on one: commission is paid per person, so seatsPerShow is what
--- decides whether a show pays out 1% of its sales or 2%.
+-- The same guarantee for each kind of show's own rate.
 ALTER TABLE "BusinessSettings"
-  ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
-  ADD CONSTRAINT "BusinessSettings_seatsPerShow_sensible" CHECK ("seatsPerShow" BETWEEN 1 AND 4);
+  ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0);
 
 -- A database standing up from nothing still needs both rows to exist. The
 -- migration seeds watches by copying the singleton; from empty there is nothing
 -- to copy, so they start on what the two actually pay.
-INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
-VALUES ('WATCH', 100, 2, CURRENT_TIMESTAMP)
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "updatedAt")
+VALUES ('WATCH', 100, CURRENT_TIMESTAMP)
 ON CONFLICT ("business") DO NOTHING;
 
-INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "seatsPerShow", "updatedAt")
-VALUES ('DIAMOND', 100, 2, CURRENT_TIMESTAMP)
+INSERT INTO "BusinessSettings" ("business", "streamerCommissionBps", "updatedAt")
+VALUES ('DIAMOND', 100, CURRENT_TIMESTAMP)
 ON CONFLICT ("business") DO NOTHING;

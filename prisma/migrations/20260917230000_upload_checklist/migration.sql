@@ -17,18 +17,29 @@
 --
 -- BACKFILL
 --
--- Every batch already on record was written under the old model: one upload
--- holding the whole day. Those are deliberately left null rather than guessed
--- at. A historical batch's `files` JSON lists what it contained, and splitting
--- one retrospectively would mean inventing which of its sales belonged to which
--- line — a guess, in a table payroll reads. Read as one upload covering the
--- day, which is exactly what they were.
+-- Not here. Every batch already on record was written under the old model, one
+-- upload holding the whole day, and is left null by this file. The migration
+-- that follows assigns them — from each sale's own `show` column, which the
+-- import had already decided, so nothing about it is a guess.
 --
--- Additive: two nullable columns and one index. No row rewritten, nothing
--- dropped, and every statement safe to run twice.
+-- SUPERSEDED
+--
+-- Under the old model a day read only its newest upload; earlier ones stayed on
+-- record and were simply never read. Under the new one, a day reads the newest
+-- upload of each line. Translating the first into the second faithfully means
+-- marking those earlier uploads as history outright, so that none of them can
+-- become the "newest" of a line the day's last upload happened not to carry.
+-- The next migration does the marking; the value has to exist first, and in a
+-- file of its own, because PostgreSQL will not let a value added in a
+-- transaction be used in that same transaction.
+--
+-- Additive: two nullable columns, one index and one enum value. No row
+-- rewritten, nothing dropped, and every statement safe to run twice.
 
 ALTER TABLE "ImportBatch" ADD COLUMN IF NOT EXISTS "platform" "Platform";
 ALTER TABLE "ImportBatch" ADD COLUMN IF NOT EXISTS "slot" "Slot";
+
+ALTER TYPE "ImportStatus" ADD VALUE IF NOT EXISTS 'SUPERSEDED';
 
 -- Finding the latest upload for one line of a day's checklist.
 CREATE INDEX IF NOT EXISTS "ImportBatch_showDate_business_platform_slot_uploadedAt_idx"

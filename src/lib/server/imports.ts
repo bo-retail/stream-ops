@@ -10,6 +10,7 @@ import { parseCsv } from "@/lib/domain/imports/csv";
 import { parseEbayFile } from "@/lib/domain/imports/ebay";
 import { placeEbayFile } from "@/lib/domain/imports/ebay-business";
 import type { EbayPlacement } from "@/lib/domain/imports/ebay-business";
+import { isPlaceholderStock, listingOfNote } from "@/lib/domain/imports/placeholders";
 import { parseTikTokFile } from "@/lib/domain/imports/tiktok";
 import { detectPlatform } from "@/lib/domain/imports/types";
 import type { DroppedRow, ImportFlag, WatchSale } from "@/lib/domain/imports/types";
@@ -405,6 +406,7 @@ export async function runImport(
   const written = await prisma.$transaction(
     async (tx) => {
       const supersededIds: string[] = [];
+      const splitOrigins: string[] = [];
       let firstBatchId = "";
 
       for (const key of keys) {
@@ -442,6 +444,21 @@ export async function runImport(
           select: { id: true },
         });
         supersededIds.push(...previous.map((b) => b.id));
+        /*
+          A day loaded before the checklist was split into lines on the way in,
+          and its later lines are copies whose ids extend the original's — which
+          is the one its boxes still point at. Replacing one of those lines must
+          be able to clear that day's stale boxes too, so the original counts as
+          replaced along with it — for the box clean-up only. The original is
+          still another line's current upload, so it must never be counted as
+          replaced when working out what the day holds. Only boxes nothing on
+          the day still wants are ever cleared (see the end of this), so this
+          widens what is considered, not what is removed.
+        */
+        for (const b of previous) {
+          const origin = b.id.split("-")[0];
+          if (origin !== b.id) splitOrigins.push(origin);
+        }
 
         const batch = await tx.importBatch.create({
           data: {
@@ -453,7 +470,8 @@ export async function runImport(
             uploadedById,
             files: myFiles,
             flags: flags as unknown as object[],
-            watchCount: mine.length,
+            // Pieces, not rows — the same count the rest of the day uses.
+            watchCount: mine.reduce((n, s) => n + (s.qty || 1), 0),
             boxCount: myBoxes.length,
             droppedCount: myDrops.length,
           },
@@ -531,6 +549,12 @@ export async function runImport(
           trackingNumber: true,
           status: true,
           items: { select: { id: true, stockNumber: true, scannedQty: true } },
+          // The real pieces a packer recorded against placeholder lines, so a
+          // report that now names them can be matched to what is in the box.
+          scans: {
+            where: { kind: "ITEM_PLACEHOLDER" },
+            select: { stockNumber: true, note: true },
+          },
         },
       });
       const byTracking = new Map(existing.map((p) => [p.trackingNumber, p]));
@@ -591,20 +615,63 @@ export async function runImport(
         });
 
         const wanted = new Map(box.items.map((i) => [i.stockNumber, i.expected]));
+
+        /*
+          A placeholder the report has now replaced with the real SKU.
+
+          Dani switches "LGD #3" to the piece's real stock number after the
+          show, so a report downloaded again later names the real piece where
+          the placeholder was. If the packer already scanned that piece's tag
+          against the placeholder, it is in the box: the scan counts for the
+          real line, and the placeholder line goes. Without this, the placeholder
+          would read "1 scanned, 0 expected" and the real line "0 of 1", and a
+          correctly packed box could only close incomplete.
+
+          Only a piece the report now names in this very box is carried across.
+          A different real SKU from the one she scanned is a genuine mismatch,
+          and is left exactly as it is for the director to see.
+        */
+        const carried = new Map<string, number>();
+        const placeholderLeft = new Map<string, number>();
+        for (const item of row.items) {
+          if (!isPlaceholderStock(item.stockNumber) || wanted.has(item.stockNumber)) continue;
+          let left = item.scannedQty;
+          for (const scan of row.scans) {
+            if (left === 0) break;
+            if (listingOfNote(scan.note) !== item.stockNumber || !scan.stockNumber) continue;
+            if (!wanted.has(scan.stockNumber)) continue;
+            carried.set(scan.stockNumber, (carried.get(scan.stockNumber) ?? 0) + 1);
+            left--;
+          }
+          placeholderLeft.set(item.id, left);
+        }
+
         for (const item of row.items) {
           const expected = wanted.get(item.stockNumber);
           if (expected === undefined) {
-            // Gone from the file. Drop it if untouched; if it was scanned, that
-            // happened and the row stays, expecting nothing.
-            if (item.scannedQty === 0) {
+            // Gone from the file. Drop it if nothing of it is in the box; if it
+            // was scanned, that happened and the row stays, expecting nothing.
+            const scanned = placeholderLeft.get(item.id) ?? item.scannedQty;
+            if (scanned === 0) {
               await tx.packageItem.delete({ where: { id: item.id } });
             } else {
-              await tx.packageItem.update({ where: { id: item.id }, data: { expectedQty: 0 } });
+              await tx.packageItem.update({
+                where: { id: item.id },
+                data: { expectedQty: 0, scannedQty: scanned },
+              });
             }
             wanted.delete(item.stockNumber);
             continue;
           }
-          await tx.packageItem.update({ where: { id: item.id }, data: { expectedQty: expected } });
+          await tx.packageItem.update({
+            where: { id: item.id },
+            data: {
+              expectedQty: expected,
+              ...(carried.has(item.stockNumber)
+                ? { scannedQty: item.scannedQty + carried.get(item.stockNumber)! }
+                : {}),
+            },
+          });
           wanted.delete(item.stockNumber);
         }
 
@@ -616,6 +683,7 @@ export async function runImport(
               packageId: row.id,
               stockNumber,
               expectedQty,
+              scannedQty: carried.get(stockNumber) ?? 0,
             })),
           });
         }
@@ -637,7 +705,7 @@ export async function runImport(
       if (supersededIds.length > 0) {
         await tx.package.deleteMany({
           where: {
-            batchId: { in: supersededIds },
+            batchId: { in: [...supersededIds, ...splitOrigins] },
             status: "OPEN",
             /*
               Measured against the whole day, not against the file just

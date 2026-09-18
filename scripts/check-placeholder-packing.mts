@@ -26,6 +26,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { assertDevDatabase } from "./dev-only.mjs";
 import { prisma } from "../src/lib/db";
 import { toDbDate } from "../src/lib/domain/dates";
+import { parseCsv } from "../src/lib/domain/imports/csv";
 import { isPlaceholderStock } from "../src/lib/domain/imports/placeholders";
 import { runImport } from "../src/lib/server/imports";
 import {
@@ -212,6 +213,72 @@ try {
   check("and still names its piece", survived?.items[0].pieces, ["TAG-90001"]);
   const stillOpen = await getBoxById(p2.id);
   check("an open box keeps its piece too", stillOpen?.items[0].pieces, ["TAG-90002"]);
+
+  /* ------------------------------ after Dani swaps in the real SKUs */
+
+  /*
+    Dani switches each "LGD #n" to the piece's real SKU after the show, so a
+    report downloaded again later names the real piece where the placeholder
+    was. Four boxes, four situations:
+
+      p1  packed and closed with TAG-90001     closed boxes are never touched
+      p2  open, TAG-90002 already scanned in    the scan counts for the real line
+      p3  open, nothing scanned yet             simply becomes the real line
+      p4  open, TAG-90004 scanned — but the     a genuine mismatch, left for the
+          report now names TAG-99999            director to see
+  */
+  const [, , p3, p4] = placeholderBoxes;
+  await openBoxByScan(packer.id, p4.trackingNumber);
+  await packItem(packer.id, p4.id, "TAG-90004");
+
+  const orderOf = async (tracking: string) =>
+    (await prisma.salesRecord.findFirstOrThrow({ where: { tracking }, select: { orderRef: true } })).orderRef.trim();
+  const swap = new Map([
+    [await orderOf(p1.trackingNumber), "TAG-90001"],
+    [await orderOf(p2.trackingNumber), "TAG-90002"],
+    [await orderOf(p3.trackingNumber), "TAG-90003"],
+    [await orderOf(p4.trackingNumber), "TAG-99999"],
+  ]);
+  const rows = parseCsv(readFileSync(diamondPath, "utf8").replace(/^﻿/, ""));
+  const nameCol = rows[0].indexOf("Product Name");
+  const swapped = rows.map((r, i) => {
+    const real = i > 0 ? swap.get((r[0] ?? "").trim()) : undefined;
+    return real ? r.map((v, c) => (c === nameCol ? real : v)) : r;
+  });
+  const cell = (v: string) => (/[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+  const afterSwap = await runImport(
+    [{ name: "diamond.csv", text: "﻿" + swapped.map((r) => r.map(cell).join(",")).join("\r\n") }],
+    packer.id,
+  );
+  check("the report with the real SKUs swapped in is accepted", afterSwap.status, "OK");
+
+  const b1 = await getBoxById(p1.id);
+  check("the closed box is left exactly as it was packed", [b1?.status, b1?.items.map((i) => i.pieces)], ["CLOSED_COMPLETE", [["TAG-90001"]]]);
+
+  const b2 = await getBoxById(p2.id);
+  check(
+    "the scanned piece now counts for its real line, and the placeholder line is gone",
+    b2?.items.map((i) => [i.stockNumber, i.expected, i.scanned]),
+    [["TAG-90002", 1, 1]],
+  );
+  check("so a correctly packed box is complete", b2?.complete, true);
+  const closed2 = await sealBox(packer.id, p2.id, false);
+  check("and closes complete, the ordinary way", boxOf(closed2)?.status, "CLOSED_COMPLETE");
+
+  const b3 = await getBoxById(p3.id);
+  check(
+    "an untouched placeholder box simply becomes the real line",
+    b3?.items.map((i) => [i.stockNumber, i.expected, i.scanned]),
+    [["TAG-90003", 1, 0]],
+  );
+
+  const b4 = await getBoxById(p4.id);
+  check(
+    "a piece that is not the one the report now names is left as a mismatch",
+    b4?.items.map((i) => [i.placeholder, i.expected, i.scanned]).sort(),
+    [[false, 1, 0], [true, 0, 1]],
+  );
+  check("which cannot close complete", b4?.complete, false);
 } finally {
   console.log("\nCleaning up.");
   await cleanUp();

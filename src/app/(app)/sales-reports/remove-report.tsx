@@ -46,8 +46,15 @@ export function RemoveReport({ batchId, dateISO }: { batchId: string; dateISO: s
       <div className="w-full space-y-2 rounded-lg border border-danger-200 bg-danger-50 p-3 text-left">
         <p className="text-sm font-semibold text-danger-700">Remove the report for {dateISO}?</p>
         <p className="text-sm text-danger-700">
-          This removes {impact.watches} watch{impact.watches === 1 ? "" : "es"}, {impact.boxes} box
-          {impact.boxes === 1 ? "" : "es"} and everything loaded for that day. It cannot be undone.
+          This removes {impact.watches} sale{impact.watches === 1 ? "" : "s"}, {impact.boxes} box
+          {impact.boxes === 1 ? "" : "es"} and everything loaded for that day — the watch and the
+          diamond reports alike. It cannot be undone.
+        </p>
+        {/* The one thing easy to get wrong with two kinds of show on a day:
+            this is not how to take back one bad file. */}
+        <p className="text-sm text-danger-700">
+          To replace just one file, don&apos;t remove anything — upload the corrected file on its own
+          and it replaces that line only.
         </p>
 
         {destructive ? (

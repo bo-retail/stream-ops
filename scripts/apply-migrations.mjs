@@ -52,12 +52,44 @@ const ENUM_VALUES = [
   `ALTER TYPE "PackageStatus" ADD VALUE IF NOT EXISTS 'CLOSED_UNVERIFIED'`,
   `ALTER TYPE "ScanKind" ADD VALUE IF NOT EXISTS 'CLOSE_UNVERIFIED'`,
   `ALTER TYPE "ScanKind" ADD VALUE IF NOT EXISTS 'ITEM_PLACEHOLDER'`,
+  // Used by the split migration, the file after the one that adds it.
+  `ALTER TYPE "ImportStatus" ADD VALUE IF NOT EXISTS 'SUPERSEDED'`,
 ];
 
 /** 42704: the type is not there yet. A migration below creates it. */
 const UNDEFINED_OBJECT = "42704";
 
-const url = process.env.DIRECT_URL || process.env.DATABASE_URL;
+/*
+  The direct endpoint, not the pooler — the same rule as prisma.config.ts, and
+  for the same reason: migrations do not belong on a transaction pooler. Neon's
+  direct endpoint is the pooled host without "-pooler", so it is derived rather
+  than needing a second secret kept in step. DIRECT_URL still wins if it is set.
+*/
+const url = process.env.DIRECT_URL || process.env.DATABASE_URL?.replace("-pooler.", ".");
+
+/*
+  Both set, pointing at different databases.
+
+  The trap this is here for: DATABASE_URL changed to production for the launch,
+  DIRECT_URL left on this computer's database. DIRECT_URL wins, so the
+  migrations run against the laptop, find nothing to do, report success — and
+  production is never touched, while every check pointed at DATABASE_URL says
+  production is fine. It happened in the launch rehearsal. So it is refused.
+*/
+if (process.env.DIRECT_URL && process.env.DATABASE_URL) {
+  const hostOf = (u) => new URL(u).hostname.replace("-pooler.", ".");
+  const direct = hostOf(process.env.DIRECT_URL);
+  const pooled = hostOf(process.env.DATABASE_URL);
+  if (direct !== pooled) {
+    console.error(
+      `\nREFUSED. DATABASE_URL points at ${pooled} but DIRECT_URL points at ${direct}.\n` +
+        `Migrations would run against ${direct}. They have to be the same database.\n\n` +
+        `Delete the DIRECT_URL line from .env (it is worked out from DATABASE_URL) and run this again.\n`,
+    );
+    process.exit(1);
+  }
+}
+
 if (!url) {
   console.error("Neither DIRECT_URL nor DATABASE_URL is set in this window.");
   process.exit(1);

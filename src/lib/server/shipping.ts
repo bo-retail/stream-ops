@@ -12,6 +12,7 @@ import { BUSINESS_SHORT } from "@/lib/domain/business";
 import type { Business } from "@/lib/domain/business";
 import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
 import type { DateISO, Platform, Slot } from "@/lib/domain/types";
+import { latestBatchIds } from "./sales-data";
 import { getSettings } from "./settings";
 
 export type { DayShow, ExpectedFiles };
@@ -124,7 +125,7 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
   const today = todayISO(settings.timezone);
   const from = addDays(today, -lookBackDays);
 
-  const [shows, batches, boxes, dismissals] = await Promise.all([
+  const [shows, allBatches, boxes, dismissals] = await Promise.all([
     // Read as individual shows rather than counted, because what a day is
     // waiting for depends on which shows ran, not how many. Cancelled ones are
     // included so a day that was called off still appears saying so — dropping
@@ -165,6 +166,16 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
       select: { showDate: true, dismissedAt: true, dismissedBy: { select: { name: true } } },
     }),
   ]);
+
+  /*
+    Old uploads replaced by a later one of the same day are history. The old
+    model never read them, the migration to this one marked them so, and they
+    are neither a day's report nor its newest attempt — so they are set aside
+    here, once, where the type then guarantees nothing below can show one.
+  */
+  const batches = allBatches.filter(
+    (b): b is typeof b & { status: "OK" | "BLOCKED" } => b.status !== "SUPERSEDED",
+  );
 
   const dates = new Set<DateISO>();
   const showsByDate = new Map<DateISO, DayShow[]>();
@@ -523,15 +534,25 @@ export async function reportRemovalImpact(batchId: string): Promise<RemovalImpac
   if (!batch) return null;
 
   const showDate = batch.showDate;
-  const [batches, watches, boxes, scannedBoxes, scans] = await Promise.all([
+  const dateISO = fromDbDate(showDate);
+  const current = await latestBatchIds(dateISO, dateISO);
+  const [batches, sold, boxes, scannedBoxes, scans] = await Promise.all([
     prisma.importBatch.count({ where: { showDate } }),
-    prisma.salesRecord.count({ where: { showDate } }),
+    /*
+      What the day reads, not every row ever uploaded for it.
+
+      Every upload keeps its own sales rows, so a day loaded twice holds two
+      copies. Counting all of them told the person about to remove it "856"
+      for a day whose report reads 591 — a number that appears nowhere else,
+      in the one dialog where the number is the point.
+    */
+    prisma.salesRecord.aggregate({ where: { batchId: { in: current } }, _sum: { qty: true } }),
     prisma.package.count({ where: { showDate } }),
     prisma.package.count({ where: { showDate, scans: { some: {} } } }),
     prisma.scanEvent.count({ where: { package: { showDate } } }),
   ]);
 
-  return { dateISO: fromDbDate(showDate), batches, watches, boxes, scannedBoxes, scans };
+  return { dateISO, batches, watches: sold._sum.qty ?? 0, boxes, scannedBoxes, scans };
 }
 
 /**

@@ -141,7 +141,7 @@ try {
   check("both kinds of show have their own rates", rates.length, 2);
   check(
     "and each can be moved without the other",
-    rates.every((r) => r.seatsPerShow >= 1 && r.streamerCommissionBps >= 0),
+    rates.every((r) => r.streamerCommissionBps >= 0),
     true,
   );
 
