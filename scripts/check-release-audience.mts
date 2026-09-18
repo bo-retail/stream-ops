@@ -145,6 +145,20 @@ try {
     "2 of 2",
   );
 
+  /*
+    Somebody who answered and was then taken off the list. Their submission is
+    still on record, and counting it would read "2 of 1" — out of step with the
+    Requests list, which no longer shows them.
+  */
+  await prisma.releaseMember.deleteMany({ where: { releaseId: diamond.id, userId: d2.id } });
+  const narrowed = await getReleaseSummary(diamond.id);
+  check(
+    "an answer from somebody taken off the list no longer counts",
+    `${narrowed?.submittedCount} of ${narrowed?.askedCount}`,
+    "1 of 1",
+  );
+  await prisma.releaseMember.create({ data: { releaseId: diamond.id, userId: d2.id } });
+
   /* The seat picker already worked; it must still agree with all of the above. */
   const cast = (await listReleaseCast(diamond.id)).map((c) => c.name).sort();
   check("only those two can be seated on it", cast, ["Diamond One", "Diamond Two"]);

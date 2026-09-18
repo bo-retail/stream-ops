@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Badge, Card, CardHeader, EmptyState, LinkButton, PageHeader, Stat } from "@/components/ui";
 import { requireBoss } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
+import { isOnRelease } from "@/lib/domain/release-members";
 import { listReleases } from "@/lib/server/releases";
 import { listStreamers } from "@/lib/server/team";
 import { AnswerList } from "./requests-client";
@@ -18,7 +19,7 @@ export default async function RequestsPage() {
 
   // Everything answered, in one query rather than one per release.
   const ids = asked.map((r) => r.id);
-  const [submissions, picks] = await Promise.all([
+  const [submissions, picks, memberRows] = await Promise.all([
     ids.length > 0
       ? prisma.availabilitySubmission.findMany({
           where: { releaseId: { in: ids } },
@@ -32,7 +33,18 @@ export default async function RequestsPage() {
           _count: { _all: true },
         })
       : Promise.resolve([]),
+    ids.length > 0
+      ? prisma.releaseMember.findMany({
+          where: { releaseId: { in: ids } },
+          select: { releaseId: true, userId: true },
+        })
+      : Promise.resolve([]),
   ]);
+
+  const membersOf = new Map<string, string[]>();
+  for (const m of memberRows) {
+    membersOf.set(m.releaseId, [...(membersOf.get(m.releaseId) ?? []), m.userId]);
+  }
 
   const submittedBy = new Map(
     submissions.map((s) => [`${s.releaseId}|${s.userId}`, s.submittedAt]),
@@ -42,8 +54,18 @@ export default async function RequestsPage() {
   const open = asked.filter((r) => r.status === "OPEN");
   const closed = asked.filter((r) => r.status === "CLOSED");
 
+  /*
+    The people a release was sent to — not every streamer.
+
+    A diamond release sent to eight people listed all seventeen streamers as
+    "Waiting", nine of whom were never asked and never will answer, while the
+    header above it correctly said "0 of 8". A release built before there was
+    a list of people went to everybody, so an empty list still means all.
+  */
   function peopleFor(releaseId: string): PersonAnswer[] {
+    const members = membersOf.get(releaseId) ?? [];
     return streamers
+      .filter((s) => isOnRelease(members, s.id))
       .map((s) => {
         const submittedAt = submittedBy.get(`${releaseId}|${s.id}`) ?? null;
         return {

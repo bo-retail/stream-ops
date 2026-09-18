@@ -99,16 +99,16 @@ async function toSummaries(rows: SummaryRow[], teamSize: number): Promise<Releas
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
 
-  const [showRows, submissionCounts] = await Promise.all([
+  const [showRows, submissionRows] = await Promise.all([
     prisma.show.groupBy({
       by: ["releaseId"],
       where: { releaseId: { in: ids }, status: "SCHEDULED" },
       _count: { _all: true },
     }),
-    prisma.availabilitySubmission.groupBy({
-      by: ["releaseId"],
+    // Who answered, not just how many — only the people a release was sent to count.
+    prisma.availabilitySubmission.findMany({
       where: { releaseId: { in: ids } },
-      _count: { _all: true },
+      select: { releaseId: true, userId: true },
     }),
   ]);
 
@@ -135,7 +135,6 @@ async function toSummaries(rows: SummaryRow[], teamSize: number): Promise<Releas
   }
 
   const showCounts = new Map(showRows.map((r) => [r.releaseId, r._count._all]));
-  const submitted = new Map(submissionCounts.map((r) => [r.releaseId, r._count._all]));
 
   /*
     How many people each release was sent to.
@@ -181,7 +180,18 @@ async function toSummaries(rows: SummaryRow[], teamSize: number): Promise<Releas
       showCount,
       totalSeats: showCount * 2,
       filledSeats: filledByRelease.get(row.id) ?? 0,
-      submittedCount: submitted.get(row.id) ?? 0,
+      /*
+        Answers from the people it was sent to. Somebody who answered and was
+        later taken off the list still has a submission on record, and counting
+        it would read "9 of 8 answered" — out of step with the list beneath it.
+      */
+      submittedCount: (() => {
+        const members = membersByRelease.get(row.id) ?? [];
+        const answered = submissionRows.filter((s) => s.releaseId === row.id);
+        return members.length === 0
+          ? answered.length
+          : answered.filter((s) => isOnRelease(members, s.userId)).length;
+      })(),
       askedCount: askedCount(membersByRelease.get(row.id) ?? [], teamSize),
     };
   });
