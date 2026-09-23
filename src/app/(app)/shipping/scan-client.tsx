@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, PackageCheck, ScanLine, TriangleAlert, X } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
 import { ITEM_WORD, items } from "@/lib/domain/business";
@@ -44,16 +44,64 @@ export function ScanClient() {
   const [unknownLabel, setUnknownLabel] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
   const [note, setNote] = useState("");
-  const [pending, startTransition] = useTransition();
+  /** How many scans are still with the server. Never a reason to refuse one. */
+  const [inFlight, setInFlight] = useState(0);
+  const busy = inFlight > 0;
 
   const input = useRef<HTMLInputElement>(null);
   const focus = () => input.current?.focus();
+
+  /*
+    The box, kept where a queued scan can read it.
+
+    Queued work runs outside the render that started it, so it cannot use `box`
+    from that render — by the time it runs, the scan before it may have opened,
+    filled or closed something. Everything that changes the box goes through
+    `show`, so the two never disagree.
+  */
+  const boxRef = useRef<PackingBoxView | null>(null);
+  function show(next: PackingBoxView | null) {
+    boxRef.current = next;
+    setBox(next);
+  }
+
+  /*
+    One scan at a time, in the order they were scanned, and none of them lost.
+
+    The input used to be disabled while a scan was saving and a scan arriving in
+    that gap was dropped. A barcode scanner is a keyboard typing at full speed
+    into whatever has focus: the packer sees nothing happen, or half a code
+    lands and comes back as a misread — 48389 read as 4838. So the input now
+    stays live and the scans are held here instead, which also keeps them in
+    order: a watch scanned right after a label still reaches the box that label
+    opened.
+  */
+  const queue = useRef<Promise<void>>(Promise.resolve());
+  function enqueue(work: () => Promise<ScanOutcome>) {
+    setInFlight((n) => n + 1);
+    queue.current = queue.current
+      .then(async () => {
+        const outcome = await work();
+        apply(outcome);
+      })
+      .catch((error: unknown) => {
+        // A dropped connection mid-parcel must say so, not fail silently and
+        // leave her believing a watch went in the box.
+        setStatus({
+          tone: "danger",
+          text: `That scan did not reach the server: ${
+            error instanceof Error ? error.message : "connection lost"
+          }. Scan it again.`,
+        });
+      })
+      .finally(() => setInFlight((n) => n - 1));
+  }
 
   // The scanner types into whatever has focus. If anything ever steals it, the
   // next scan lands nowhere and the packer sees no response at all.
   useEffect(() => {
     if (!closing) focus();
-  }, [box, closing, pending]);
+  }, [box, closing, busy]);
 
   function apply(outcome: ScanOutcome) {
     switch (outcome.kind) {
@@ -68,7 +116,7 @@ export function ScanClient() {
           lost by the card disappearing.
         */
         if (outcome.box.status !== "OPEN") {
-          setBox(null);
+          show(null);
           setUnknownLabel(null);
           setStatus({
             tone: "ok",
@@ -79,12 +127,12 @@ export function ScanClient() {
           });
           break;
         }
-        setBox(outcome.box);
+        show(outcome.box);
         setUnknownLabel(null);
         setStatus(outcome.message ? { tone: "ok", text: outcome.message } : null);
         break;
       case "alreadyPacked":
-        setBox(null);
+        show(null);
         setUnknownLabel(null);
         setStatus({
           tone: "info",
@@ -92,12 +140,12 @@ export function ScanClient() {
         });
         break;
       case "unknownLabel":
-        setBox(null);
+        show(null);
         setUnknownLabel(outcome.tracking);
         setStatus({ tone: "warn", text: "That label is not in any uploaded report." });
         break;
       case "refused":
-        setBox(outcome.box);
+        show(outcome.box);
         // The stock number comes off the outcome, not out of the sentence. This
         // used to match on the wording of the refusal, so rewording one would
         // have removed the only way to record a watch that really is in the box.
@@ -120,16 +168,20 @@ export function ScanClient() {
   function onScan(event: React.FormEvent) {
     event.preventDefault();
     const value = input.current?.value.trim() ?? "";
-    if (value === "" || pending) return;
     if (input.current) input.current.value = "";
+    if (value === "") return;
 
-    startTransition(async () => {
-      apply(box ? await scanItem(box.id, value) : await scanLabel(value));
+    // Which box it goes to is decided when its turn comes, not now: the scan
+    // ahead of it in the queue may be the label that opens the box it belongs in.
+    enqueue(() => {
+      const open = boxRef.current;
+      return open ? scanItem(open.id, value) : scanLabel(value);
     });
   }
 
+  // The buttons go through the same queue, so a scan and a tap can never cross.
   function run(fn: () => Promise<ScanOutcome>) {
-    startTransition(async () => apply(await fn()));
+    enqueue(fn);
   }
 
   // A box in no report expects nothing, so everything in it is "over" — the
@@ -151,22 +203,30 @@ export function ScanClient() {
                 className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-ink-subtle"
                 aria-hidden
               />
+              {/* Never disabled. A scanner types whether or not the screen is
+                  ready, and a disabled input swallows the keystrokes: the scan
+                  vanishes, or half of it lands and comes back a misread. It is
+                  always live, and anything scanned mid-save waits its turn. */}
               <input
                 id="scan"
                 ref={input}
                 autoFocus
                 autoComplete="off"
-                disabled={pending}
                 placeholder={box ? `${ITEM_WORD[box.business].one} barcode` : "shipping label"}
-                className="tabular h-14 w-full rounded-lg border border-line-strong bg-surface pl-11 pr-3 text-lg text-ink placeholder:text-ink-subtle focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:opacity-60"
+                className="tabular h-14 w-full rounded-lg border border-line-strong bg-surface pl-11 pr-3 text-lg text-ink placeholder:text-ink-subtle focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
               />
+              {busy ? (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-ink-subtle">
+                  Saving{inFlight > 1 ? ` ${inFlight}` : ""}…
+                </span>
+              ) : null}
             </div>
             {box ? (
               <Button
                 type="button"
                 variant="secondary"
                 onClick={() => {
-                  setBox(null);
+                  show(null);
                   setStatus(null);
                   focus();
                 }}
@@ -195,7 +255,7 @@ export function ScanClient() {
                 size="sm"
                 variant="secondary"
                 className="mt-2"
-                disabled={pending}
+                disabled={busy}
                 onClick={() => run(() => addAnyway(box.id, status.offerAdd!))}
               >
                 It really is in the box — add it anyway
@@ -207,7 +267,7 @@ export function ScanClient() {
                   <Button
                     type="button"
                     size="sm"
-                    disabled={pending}
+                    disabled={busy}
                     onClick={() => {
                       const label = status.switchLabel!;
                       const boxId = box.id;
@@ -224,10 +284,10 @@ export function ScanClient() {
                   type="button"
                   size="sm"
                   variant="secondary"
-                  disabled={pending}
+                  disabled={busy}
                   onClick={() => {
                     const label = status.switchLabel!;
-                    setBox(null);
+                    show(null);
                     run(() => scanLabel(label));
                   }}
                 >
@@ -240,7 +300,7 @@ export function ScanClient() {
 
         {unknownLabel ? (
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button type="button" disabled={pending} onClick={() => run(() => startUnknownBox(unknownLabel))}>
+            <Button type="button" disabled={busy} onClick={() => run(() => startUnknownBox(unknownLabel))}>
               Pack it anyway
             </Button>
             <span className="text-xs text-ink-muted">
@@ -359,7 +419,7 @@ export function ScanClient() {
                   <Button
                     type="button"
                     variant="danger"
-                    disabled={pending}
+                    disabled={busy}
                     onClick={() => {
                       const boxId = box.id;
                       const reason = note;
@@ -379,7 +439,7 @@ export function ScanClient() {
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
-                  disabled={!canCloseCleanly || pending}
+                  disabled={!canCloseCleanly || busy}
                   onClick={() => run(() => closeBox(box.id, false))}
                 >
                   <PackageCheck className="h-4 w-4" aria-hidden />
