@@ -11,6 +11,10 @@
  * scanned against a closed box is still refused, because nothing can go into a
  * box that has gone.
  *
+ * This is the server half only. The screen's half — letting go of a box once it
+ * is closed, and queueing scans rather than dropping them — has no test here:
+ * there is nothing in this project that can drive a React component.
+ *
  * Its own boxes, so it needs no export files and no schedule:
  *
  *   DATABASE_URL=<a development database> \
@@ -52,14 +56,17 @@ async function cleanUp() {
   await prisma.package.deleteMany({ where: { id: { in: ids } } });
 }
 
+// Outside the try: `process.exit` does not run a `finally`, so skipping from
+// inside it would leave the connection open.
+const packer = await prisma.user.findFirst({ where: { isActive: true }, select: { id: true } });
+if (!packer) {
+  console.log("SKIP  need an account. Run the seed first.");
+  await prisma.$disconnect();
+  process.exit(0);
+}
+
 try {
   await cleanUp();
-
-  const packer = await prisma.user.findFirst({ where: { isActive: true }, select: { id: true } });
-  if (!packer) {
-    console.log("SKIP  need an account. Run the seed first.");
-    process.exit(0);
-  }
 
   const showDate = toDbDate(await packingDayISO());
   const boxA = await prisma.package.create({
@@ -103,7 +110,11 @@ try {
 
   /* The closed box's own label is honestly already packed. */
   const again = await packItem(packer.id, boxA.id, LABEL_A);
-  check("its own label reads as already packed", again.kind, "alreadyPacked");
+  check(
+    "its own label reads as already packed, and as that box",
+    again.kind === "alreadyPacked" ? again.box.tracking : again.kind,
+    LABEL_A,
+  );
 
   /* A watch, though, still cannot go into a box that has gone. */
   const late = await packItem(packer.id, boxA.id, "70001");

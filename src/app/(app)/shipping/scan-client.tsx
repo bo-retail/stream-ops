@@ -31,6 +31,22 @@ interface Status {
   switchLabel?: string;
 }
 
+/**
+ * How long one scan may hold up the ones behind it.
+ *
+ * Generous — a slow morning on the warehouse wifi is not a failure — but
+ * finite, because the queue is strictly one at a time.
+ */
+const SCAN_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("no answer in 15 seconds")), SCAN_TIMEOUT_MS);
+  });
+  return Promise.race([work, expiry]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
 const TONE_STYLES: Record<Tone, string> = {
   ok: "border-ok-200 bg-ok-50 text-ok-700",
   warn: "border-warn-200 bg-warn-50 text-warn-700",
@@ -77,25 +93,73 @@ export function ScanClient() {
     opened.
   */
   const queue = useRef<Promise<void>>(Promise.resolve());
-  function enqueue(work: () => Promise<ScanOutcome>) {
+
+  /**
+   * Queued work, in scan order. `null` means it only moved the screen on — a
+   * box put down — and there is no outcome to show.
+   *
+   * Nothing waits forever. A request that never settles would hold every scan
+   * behind it for the rest of the morning, with the input still accepting them,
+   * so the queue gives up on one after `SCAN_TIMEOUT_MS` and carries on. That
+   * does not cancel it at the server, which is why the wording below says the
+   * scan *may* not have been saved rather than that it was not.
+   */
+  function enqueue(work: () => Promise<ScanOutcome | null>) {
     setInFlight((n) => n + 1);
     queue.current = queue.current
-      .then(async () => {
-        const outcome = await work();
-        apply(outcome);
-      })
-      .catch((error: unknown) => {
-        // A dropped connection mid-parcel must say so, not fail silently and
-        // leave her believing a watch went in the box.
+      .then(() => withTimeout(work()))
+      .then(
+        (outcome) => {
+          if (outcome) apply(outcome);
+        },
+        // Separate from the outcome above: a scan that failed on the way to the
+        // server and a screen that failed to show what came back are different
+        // problems, and telling her to scan again is only safe for the first.
+        (error: unknown) => {
+          setStatus({
+            tone: "danger",
+            text:
+              `That scan may not have been saved (${
+                error instanceof Error ? error.message : "connection lost"
+              }). ` + `Check the count below before scanning it again.`,
+          });
+        },
+      )
+      .catch(() => {
         setStatus({
           tone: "danger",
-          text: `That scan did not reach the server: ${
-            error instanceof Error ? error.message : "connection lost"
-          }. Scan it again.`,
+          text: "That scan was saved, but the screen could not show the result. Reload the page.",
         });
       })
       .finally(() => setInFlight((n) => n - 1));
   }
+
+  /*
+    A stall is loud.
+
+    The old screen disabled the input while it saved, so a stall announced
+    itself: typing did nothing. Now that scans queue instead, a hung request
+    would look like an ordinary morning while swallowing a parcel's worth of
+    scans, so anything still saving after a few seconds says so on screen.
+  */
+  const [stalled, setStalled] = useState(false);
+  useEffect(() => {
+    if (!busy) {
+      setStalled(false);
+      return;
+    }
+    const timer = setTimeout(() => setStalled(true), 4000);
+    return () => clearTimeout(timer);
+  }, [busy]);
+
+  // Scans still with the server are not on the screen and not anywhere else, so
+  // closing the tab would lose them without a word.
+  useEffect(() => {
+    if (!busy) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy]);
 
   // The scanner types into whatever has focus. If anything ever steals it, the
   // next scan lands nowhere and the packer sees no response at all.
@@ -118,13 +182,31 @@ export function ScanClient() {
         if (outcome.box.status !== "OPEN") {
           show(null);
           setUnknownLabel(null);
-          setStatus({
-            tone: "ok",
-            text:
-              `${outcome.message ?? "Closed."} ` +
-              `${items(outcome.box.business, outcome.box.totalScanned)} in ${outcome.box.tracking}. ` +
-              `Scan the next label.`,
-          });
+          /*
+            Only `sealBox` sends a message, so only that is her closing it.
+
+            A box re-read after an ordinary scan comes back without one — and it
+            can come back closed, because somebody at another scanner closed it
+            while she was working. Telling her "Closed." there credited her with
+            closing a box she had not touched.
+          */
+          setStatus(
+            outcome.message
+              ? {
+                  tone: "ok",
+                  text:
+                    `${outcome.message} ` +
+                    `${items(outcome.box.business, outcome.box.totalScanned)} in ${outcome.box.tracking}. ` +
+                    `Scan the next label.`,
+                }
+              : {
+                  tone: "info",
+                  text:
+                    `This box was closed${
+                      outcome.box.closedByName ? ` by ${outcome.box.closedByName}` : " on another scanner"
+                    }. Your last scan was saved.`,
+                },
+          );
           break;
         }
         show(outcome.box);
@@ -145,7 +227,9 @@ export function ScanClient() {
         setStatus({ tone: "warn", text: "That label is not in any uploaded report." });
         break;
       case "refused":
-        show(outcome.box);
+        // A refusal about a box that is no longer open must not put it back on
+        // screen: the scans after it would be aimed at a parcel that has gone.
+        show(outcome.box.status === "OPEN" ? outcome.box : null);
         // The stock number comes off the outcome, not out of the sentence. This
         // used to match on the wording of the refusal, so rewording one would
         // have removed the only way to record a watch that really is in the box.
@@ -222,20 +306,41 @@ export function ScanClient() {
               ) : null}
             </div>
             {box ? (
+              /*
+                Queued like a scan, not done on the spot.
+
+                Putting the box down changes what every scan behind it means. If
+                it happened immediately, a watch already scanned and still
+                waiting its turn would find no box and be sent as a shipping
+                label — refused for being too short, logged nowhere, and missing
+                from the parcel with nothing to show it was ever scanned.
+              */
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => {
-                  show(null);
-                  setStatus(null);
-                  focus();
-                }}
+                onClick={() =>
+                  enqueue(async () => {
+                    show(null);
+                    setStatus(null);
+                    return null;
+                  })
+                }
               >
                 Put down
               </Button>
             ) : null}
           </div>
         </form>
+
+        {/* A stall used to announce itself by the input going dead. Now that
+            scans queue instead, it has to say so. */}
+        {stalled ? (
+          <div className="mt-3 rounded-lg border border-warn-200 bg-warn-50 px-3 py-2.5 text-sm font-medium text-warn-700">
+            <TriangleAlert className="mr-1.5 inline h-4 w-4" aria-hidden />
+            Still saving {inFlight === 1 ? "a scan" : `${inFlight} scans`} — the connection is slow.
+            Keep this page open. You can carry on scanning.
+          </div>
+        ) : null}
 
         {status ? (
           <div className={`mt-3 rounded-lg border px-3 py-2.5 text-sm font-medium ${TONE_STYLES[status.tone]}`}>
@@ -287,8 +392,11 @@ export function ScanClient() {
                   disabled={busy}
                   onClick={() => {
                     const label = status.switchLabel!;
-                    show(null);
-                    run(() => scanLabel(label));
+                    // Inside the queued work, for the same reason as "Put down".
+                    run(async () => {
+                      show(null);
+                      return scanLabel(label);
+                    });
                   }}
                 >
                   Put this box down and open that one
