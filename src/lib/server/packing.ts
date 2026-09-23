@@ -322,7 +322,23 @@ export async function packItem(
 
   const box = await getBoxById(packageId);
   if (!box) return { kind: "error", message: "That box no longer exists." };
-  if (box.status !== "OPEN") return { kind: "alreadyPacked", box };
+
+  /*
+    The box on screen is closed, and a shipping label was scanned.
+
+    That is the next parcel, so it opens it. It used to be answered "already
+    packed" and thrown away — the packer closed a box, scanned the next label,
+    was told the box she had just finished was already packed, and had to scan
+    the same label a second time to get anywhere. One wasted scan per parcel,
+    and a message about the wrong box.
+
+    A watch scanned into a closed box is still "already packed": nothing can go
+    into a box that has gone.
+  */
+  if (box.status !== "OPEN") {
+    if (looksLikeShippingLabel(rawScan)) return openBoxByScan(userId, rawScan);
+    return { kind: "alreadyPacked", box };
+  }
 
   /*
     A shipping label, scanned while a box is open.

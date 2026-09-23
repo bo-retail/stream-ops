@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Check, PackageCheck, ScanLine, TriangleAlert, X } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
-import { ITEM_WORD } from "@/lib/domain/business";
+import { ITEM_WORD, items } from "@/lib/domain/business";
 import { PLATFORM_SHORT } from "@/lib/domain/types";
 import { addAnyway, closeBox, scanItem, scanLabel, startUnknownBox } from "./actions";
 import type { PackingBoxView, ScanOutcome } from "@/lib/server/packing";
@@ -58,6 +58,27 @@ export function ScanClient() {
   function apply(outcome: ScanOutcome) {
     switch (outcome.kind) {
       case "box":
+        /*
+          A closed box is not the box she is packing any more.
+
+          Holding on to it left the screen asking for watches for a parcel that
+          had gone, so the next label was sent as a watch, answered "already
+          packed" and thrown away — she had to scan every label twice. It is let
+          go of here, and the confirmation says what was closed so nothing is
+          lost by the card disappearing.
+        */
+        if (outcome.box.status !== "OPEN") {
+          setBox(null);
+          setUnknownLabel(null);
+          setStatus({
+            tone: "ok",
+            text:
+              `${outcome.message ?? "Closed."} ` +
+              `${items(outcome.box.business, outcome.box.totalScanned)} in ${outcome.box.tracking}. ` +
+              `Scan the next label.`,
+          });
+          break;
+        }
         setBox(outcome.box);
         setUnknownLabel(null);
         setStatus(outcome.message ? { tone: "ok", text: outcome.message } : null);
