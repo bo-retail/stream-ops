@@ -4,7 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Upload } from "lucide-react";
-import { Alert, Button, Card, CardHeader, Field, Select } from "@/components/ui";
+import { Alert, Button, Card, CardHeader, Field, Input } from "@/components/ui";
 import { formatDate } from "@/lib/domain/dates";
 import { uploadReports } from "./actions";
 import type { UploadState } from "./actions";
@@ -60,8 +60,8 @@ export function UploadForm({ targets }: { targets: UploadTarget[] }) {
   const form = useRef<HTMLFormElement>(null);
 
   // Land on the oldest day still waiting — that is the one somebody has to do.
-  const firstMissing = targets.find((t) => !t.loaded)?.dateISO;
-  const [day, setDay] = useState(firstMissing ?? targets[0]?.dateISO ?? "");
+  const waiting = targets.filter((t) => !t.loaded);
+  const [day, setDay] = useState(waiting[0]?.dateISO ?? targets[0]?.dateISO ?? "");
 
   useEffect(() => {
     if (state.ok) {
@@ -79,16 +79,25 @@ export function UploadForm({ targets }: { targets: UploadTarget[] }) {
         description="Whatever the marketplaces produced for that show day — the app works out which file is which."
       />
       <form ref={form} action={action} className="space-y-3 p-4">
+        {/*
+          Any day, typed in, rather than a list of the days the schedule knows
+          about.
+
+          The list was built from published shows, so a day whose schedule had
+          since been changed — or deleted — could not be chosen at all, and its
+          report could not be entered however much the files were the right
+          ones. The day is read out of the orders anyway and the choice is only
+          ever a confirmation of it, so there is nothing for the schedule to
+          decide here.
+        */}
         <Field label="Which show day are these for?" htmlFor="showDate">
-          <Select id="showDate" name="showDate" value={day} onChange={(e) => setDay(e.target.value)}>
-            {targets.length === 0 ? <option value="">No published show days yet</option> : null}
-            {targets.map((t) => (
-              <option key={t.dateISO} value={t.dateISO}>
-                {formatDate(t.dateISO, "long")}
-                {t.loaded ? " — already loaded" : t.partial ? ` — missing ${t.partial}` : ""}
-              </option>
-            ))}
-          </Select>
+          <Input
+            id="showDate"
+            name="showDate"
+            type="date"
+            value={day}
+            onChange={(e) => setDay(e.target.value)}
+          />
         </Field>
 
         {chosen ? (
@@ -99,6 +108,30 @@ export function UploadForm({ targets }: { targets: UploadTarget[] }) {
               : chosen.partial
                 ? ` It has a report, but it is missing ${chosen.partial}. Upload all of that day's files together — a new upload replaces the last one, so the missing file on its own is refused.`
                 : ""}
+          </p>
+        ) : day !== "" ? (
+          <p className="text-sm text-ink-muted">
+            No published shows are recorded for {formatDate(day, "long")}. The files still decide
+            the day, so the reports can be uploaded anyway.
+          </p>
+        ) : null}
+
+        {waiting.length > 0 ? (
+          <p className="text-xs text-ink-subtle">
+            Still waiting:{" "}
+            {waiting.map((t, i) => (
+              <span key={t.dateISO}>
+                {i > 0 ? ", " : ""}
+                <button
+                  type="button"
+                  onClick={() => setDay(t.dateISO)}
+                  className="font-medium text-brand-700 underline hover:no-underline"
+                >
+                  {formatDate(t.dateISO, "short")}
+                </button>
+                {t.partial ? ` (${t.partial})` : ""}
+              </span>
+            ))}
           </p>
         ) : null}
 
