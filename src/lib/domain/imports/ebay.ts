@@ -19,7 +19,14 @@
 
 import type { Business } from "../business";
 import type { DateISO } from "../types";
-import { checkHeaders, isBlankRow, parseCsv, toRecords } from "./csv";
+import {
+  checkHeaders,
+  isBlankRow,
+  parseCsv,
+  roundedOffColumns,
+  roundedOffMessage,
+  toRecords,
+} from "./csv";
 import { EBAY_HEADERS, defaultShiftTag, parseMoney, parseShiftTag } from "./types";
 import type { DroppedRow, ImportFlag, ParseResult, ShowKey, WatchSale } from "./types";
 
@@ -54,18 +61,82 @@ export interface EbayFile {
  * what stops the parser stopping at line 3 and reading nothing.
  */
 function locateTable(rows: string[][]): { header: string[]; data: string[][]; footer: string[][] } {
-  const header = rows[1] ?? [];
+  /*
+    The header is found rather than assumed to be the second line.
+
+    eBay's own export puts a row of bare commas above it, but a file that has
+    been opened and saved again — which is what happens when a sample show's
+    stock numbers are typed in — no longer has that row, and the header is the
+    first line. Reading line 2 there took the first order as the column names
+    and stopped the whole upload with "the export has changed shape".
+  */
+  // The same test `detectPlatform` makes, on the same window. That one runs
+  // first, so anything looser here would only describe files it already turned
+  // away — and the two drifting apart is how an edited report came to be
+  // refused as "neither a TikTok nor an eBay export".
+  const headerIndex = rows
+    .slice(0, 5)
+    .findIndex((row) => (row[0] ?? "").trim() === "Sales Record Number");
+  const start = headerIndex === -1 ? 1 : headerIndex;
+  const header = rows[start] ?? [];
   const data: string[][] = [];
-  let i = 2;
+  let i = start + 1;
 
   for (; i < rows.length; i++) {
     const row = rows[i];
     if (row.length <= 5) break; // blank line, or a footer line — the table is over
+    /*
+      A footer padded out to the full width.
+
+      Saving the file again fills every short row to 82 fields, so the two
+      footer lines stop being recognisable by their width. "310" in the first
+      column would then be read as an order with a sales record number of 310.
+    */
+    if (isFooterRow(row)) break;
     if (isBlankRow(row)) continue; // the all-empty placeholder row
     data.push(row);
   }
 
   return { header, data, footer: rows.slice(i) };
+}
+
+/**
+ * The columns that hold numbers too long for a spreadsheet to keep whole.
+ *
+ * Only these are checked for that damage. Everything else in the file is text
+ * somebody wrote — `Item Title` carries the stock number — and refusing a whole
+ * day because a listing was called "5E+3" would be worse than the thing being
+ * guarded against.
+ */
+const EBAY_LONG_NUMBER_COLUMNS = [
+  "Tracking Number",
+  "Item Number",
+  "Transaction ID",
+  "Order Number",
+  "Sales Record Number",
+] as const;
+
+/**
+ * `9/8/2026 12:00:00 PM` — a date a spreadsheet wrote, not a tag anyone typed.
+ *
+ * Unreadable on its own does not mean a spreadsheet did it. A tag is typed once
+ * into a listing template and copied across the show, so one typo — `9.8.26 PM`,
+ * `09/08/26 PM` — makes every tag on a small day unreadable too. That is a
+ * warning the floor can act on, and refusing it would be worse than useless:
+ * downloading the report again returns the same label, because the label is
+ * what the listing really says. Only the shape below is Excel's doing, and only
+ * that is refused.
+ */
+function looksLikeSpreadsheetDateTime(raw: string): boolean {
+  return /^\d{1,2}\/\d{1,2}\/\d{2,4}(\s|,|$)/.test(raw.trim());
+}
+
+/** eBay signs off with a count and the seller's id, whatever the row width. */
+function isFooterRow(row: string[]): boolean {
+  return (
+    row.slice(0, 3).some((cell) => /record\(s\) downloaded/i.test(cell)) ||
+    /^Seller ID\s*:/i.test(row[0] ?? "")
+  );
 }
 
 /**
@@ -106,6 +177,97 @@ export function parseEbayFile(file: EbayFile, business: Business = "WATCH"): Par
 
   const records = toRecords(header, data).filter((r) => r["Sales Record Number"] !== "");
 
+  /*
+    What a spreadsheet does to a file that has been opened and saved.
+
+    Two kinds of damage, both silent and neither recoverable from the file
+    itself, so each is refused rather than worked around: long numbers rounded
+    off, and dates rewritten into a form eBay never writes.
+  */
+  const damaged = roundedOffColumns(records, EBAY_LONG_NUMBER_COLUMNS);
+  if (damaged.length > 0) {
+    return { sales: [], dropped: [], flags: [...flags, { severity: "blocking", message: roundedOffMessage(file.name, damaged) }] };
+  }
+
+  /*
+    `Sep-08-26` rewritten as `9/8/2026`.
+
+    Excel reads that column as dates and writes them back in its own format.
+    Nothing downstream could read them: every row came out with no show date at
+    all, the day landed as an empty string, and the upload died several steps
+    later with "Invalid date" — a message about neither the file nor the fix.
+  */
+  const DATE_COLUMNS = ["Sale Date", "Paid On Date"] as const;
+  const badDates = records.flatMap((r) =>
+    DATE_COLUMNS.filter((c) => r[c] !== "" && parseEbayDate(r[c]) === null).map((c) => ({
+      column: c,
+      value: r[c],
+    })),
+  );
+  // Any unreadable date is damage: eBay writes Mon-DD-YY on every row of every
+  // report, so there is no file where some are readable and some are not.
+  const noDateAtAll =
+    records.length > 0 && !records.some((r) => DATE_COLUMNS.some((c) => parseEbayDate(r[c]) !== null));
+  if (badDates.length > 0 || noDateAtAll) {
+    return {
+      sales: [],
+      dropped: [],
+      flags: [
+        ...flags,
+        {
+          severity: "blocking",
+          message:
+            `${file.name}: ` +
+            (badDates.length > 0
+              ? `the ${badDates[0].column} column reads "${badDates[0].value}" instead of the form eBay ` +
+                `writes (Sep-08-26), on ${badDates.length} row(s). A spreadsheet has rewritten the dates`
+              : `no row carries a date this can read`) +
+            `, so there is no way to tell which show day this is. Nothing was imported. ` +
+            `Download the report again, and if it needs editing, open it in Google Sheets (File, Import, and ` +
+            `turn off "Convert text to numbers"), or in Excel use Data, From Text/CSV and set every column to Text.`,
+        },
+      ],
+    };
+  }
+
+  /*
+    The show tag, converted into a date-time.
+
+    `09.08.26 PM` is a date to a spreadsheet, and it comes back as
+    `9/8/2026 12:00:00 PM`. On eBay this tag is the only thing separating the
+    day show from the night one, so every row would fall to PM and the whole
+    day's commission would go to the night pair — with nothing worse than a
+    warning to show for it.
+
+    Only tags that have something in them count. On a sample show most rows
+    carry no tag at all, which is a different problem and already warned about
+    further down.
+  */
+  const tagged = records.filter((r) => r["Item Number"] !== "" && r["Custom Label"] !== "");
+  if (
+    tagged.length > 1 &&
+    tagged.every((r) => parseShiftTag(r["Custom Label"]) === null) &&
+    tagged.every((r) => looksLikeSpreadsheetDateTime(r["Custom Label"]))
+  ) {
+    return {
+      sales: [],
+      dropped: [],
+      flags: [
+        ...flags,
+        {
+          severity: "blocking",
+          message:
+            `${file.name}: every show tag reads like "${tagged[0]["Custom Label"]}" rather than "09.08.26 PM" — ` +
+            `a spreadsheet has rewritten the Custom Label column. On eBay that tag is the only thing that says ` +
+            `whether a sale belongs to the day show or the night one, so importing this would pay the wrong ` +
+            `pair. Nothing was imported. Download the report again, and if it needs editing, open it in Google ` +
+            `Sheets (File, Import, and turn off "Convert text to numbers"), or in Excel use Data, From Text/CSV ` +
+            `and set every column to Text.`,
+        },
+      ],
+    };
+  }
+
   /* ---------------------------------------------------------- groups (R7) */
 
   const groups = new Map<string, Record<string, string>[]>();
@@ -117,8 +279,17 @@ export function parseEbayFile(file: EbayFile, business: Business = "WATCH"): Par
   }
 
   // The footer's count is the number of sales records, not the number of rows.
+  // Read from wherever the phrase landed. Saving the file again can merge the
+  // count and the words into one cell, and this is the only check that would
+  // catch rows lost in that re-save — so it must not go quiet just because the
+  // footer changed shape.
   const footerCount = footer
-    .map((row) => (row[1] ?? "").toLowerCase().includes("record(s) downloaded") ? Number(row[0]) : NaN)
+    .map((row) => {
+      const line = row.slice(0, 3).join(" ");
+      // The count as a spreadsheet may have written it: `1,010 record(s)`.
+      const match = /([\d,]+)\s*record\(s\) downloaded/i.exec(line);
+      return match ? Number(match[1].replace(/,/g, "")) : NaN;
+    })
     .find((n) => Number.isFinite(n));
   if (footerCount !== undefined && footerCount !== groups.size) {
     flags.push({

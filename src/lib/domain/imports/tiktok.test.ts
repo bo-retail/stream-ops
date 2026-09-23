@@ -361,3 +361,37 @@ describe("which shop exported it", () => {
     expect(result.sales[0]?.business).toBe("DIAMOND");
   });
 });
+
+describe("a report edited outside the app", () => {
+  /*
+    Sample shows are typed into the file before it is uploaded — the stock
+    numbers only exist after the show — so the file gets opened in a
+    spreadsheet. Excel keeps fifteen digits; a tracking number has twenty-two.
+  */
+  it("refuses one whose tracking numbers a spreadsheet rounded off", () => {
+    const result = parse([
+      paidRow({ "Tracking ID": "9.23469E+21" }),
+      paidRow({ "Order ID": "576461234567890124\t", "Tracking ID": "9.23469E+21" }),
+    ]);
+    expect(result.sales).toHaveLength(0);
+    expect(result.flags[0].severity).toBe("blocking");
+    expect(result.flags[0].message).toContain("Tracking ID");
+    expect(result.flags[0].message).toContain("2 row(s)");
+  });
+
+  it("reads one where only the stock numbers were filled in", () => {
+    const result = parse([
+      paidRow({ "Product Name": "37432" }),
+      paidRow({ "Order ID": "576461234567890124\t", "Product Name": "50505" }),
+    ]);
+    expect(result.sales.map((s) => s.stockNumber)).toEqual(["37432", "50505"]);
+    expect(result.flags.some((f) => f.severity === "blocking")).toBe(false);
+  });
+
+  it("still reads a sample listing left as it was sold", () => {
+    // Untouched, the listing name is the stock number — which the packing
+    // screen recognises as a placeholder and answers with the tag on the piece.
+    const result = parse([paidRow({ "Product Name": "Invicta Random Pulls PM Show" })]);
+    expect(result.sales[0].stockNumber).toBe("Invicta Random Pulls PM Show");
+  });
+});

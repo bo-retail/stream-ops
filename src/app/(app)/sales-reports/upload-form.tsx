@@ -150,6 +150,16 @@ export function UploadForm({ targets }: { targets: UploadTarget[] }) {
           you choose above is checked against what the orders actually say — if they disagree,
           nothing is imported.
         </p>
+        {/* Sample shows are typed into the file before it comes here, so this
+            is about a thing people will actually do, not a general warning. */}
+        <p className="text-xs text-ink-subtle">
+          <strong className="font-medium text-ink-muted">Editing a report first?</strong> Filling in
+          the stock numbers for a sample show is fine, but do not save it from Excel — it rounds the
+          tracking numbers down to <span className="tabular">9.43461E+21</span> and the day&apos;s
+          boxes cannot be built. Use Google Sheets (File, Import, with &ldquo;Convert text to
+          numbers&rdquo; off), or in Excel open it with Data, From Text/CSV and set every column to
+          Text. An upload with rounded-off numbers is refused and says so.
+        </p>
 
         {state.error ? (
           <Alert tone="danger" title="Not imported">

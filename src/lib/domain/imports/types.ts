@@ -337,9 +337,17 @@ export function detectPlatform(rows: readonly (readonly string[])[]): ImportPlat
   const first = rows[0]?.map((c) => c.trim()) ?? [];
   if (first[0] === "Order ID") return "TIKTOK";
 
-  // eBay opens with a row of bare commas; the header is the line after it.
-  const second = rows[1]?.map((c) => c.trim()) ?? [];
-  if (second[0] === "Sales Record Number") return "EBAY";
+  /*
+    eBay's own export opens with a row of bare commas and puts the header on the
+    line after it — but a file that has been opened and saved again has lost
+    that row, and the header is the first line. This has to look in the same
+    window `locateTable` does: it runs before the reader, so assuming the second
+    line here turned away edited reports before anything else could read them.
+  */
+  const ebay = rows
+    .slice(0, 5)
+    .some((row) => (row[0] ?? "").trim() === "Sales Record Number");
+  if (ebay) return "EBAY";
 
   return null;
 }

@@ -13,7 +13,7 @@
 import { TZDate } from "@date-fns/tz";
 import type { DateISO } from "../types";
 import { businessOfHandle } from "../business";
-import { checkHeaders, parseCsv, toRecords } from "./csv";
+import { checkHeaders, parseCsv, roundedOffColumns, roundedOffMessage, toRecords } from "./csv";
 import {
   TIKTOK_HEADERS,
   TIKTOK_NIGHT_FROM_HOUR,
@@ -84,6 +84,20 @@ export interface TikTokFile {
 }
 
 /**
+ * The columns holding numbers too long for a spreadsheet to keep whole.
+ *
+ * Checked for rounding damage, and nothing else is: `Product Name` carries the
+ * stock number on a sample show and is whatever the listing was called.
+ */
+const TIKTOK_LONG_NUMBER_COLUMNS = [
+  "Tracking ID",
+  "Order ID",
+  "SKU ID",
+  "Product ID",
+  "Package ID",
+] as const;
+
+/**
  * Parses one TikTok file into paid watches, dropped rows and flags.
  *
  * A header that does not match the contract stops the file dead with a blocking
@@ -104,6 +118,7 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
       sales: [],
       dropped: [],
       flags: [
+        ...flags,
         {
           severity: "blocking",
           message: `${file.name}: the TikTok export has changed shape — ${header.problems[0]}. No figures produced.`,
@@ -122,7 +137,26 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
     (r) => (r["Order ID"] ?? "") !== "",
   );
   if (records.length === 0) {
-    return { sales: [], dropped: [], flags: [{ severity: "blocking", message: `${file.name} has no rows.` }] };
+    return { sales: [], dropped: [], flags: [...flags, { severity: "blocking", message: `${file.name} has no rows.` }] };
+  }
+
+  /*
+    Long numbers a spreadsheet has rounded off.
+
+    A sample show's stock numbers are typed into this file before it is
+    uploaded, which means it gets opened in something. Excel rounds a 22-digit
+    tracking number to 9.23469E+21 and every parcel that shared its first six
+    digits becomes the same box. On 09/18 that turned 127 tracking numbers into
+    59, one of them covering 138 rows. Better refused at the door than found at
+    the packing table.
+  */
+  const damaged = roundedOffColumns(records, TIKTOK_LONG_NUMBER_COLUMNS);
+  if (damaged.length > 0) {
+    return {
+      sales: [],
+      dropped: [],
+      flags: [...flags, { severity: "blocking", message: roundedOffMessage(file.name, damaged) }],
+    };
   }
 
   /* ------------------------------------------- which show is this file (R1) */
@@ -143,6 +177,7 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
       sales: [],
       dropped: [],
       flags: [
+        ...flags,
         {
           severity: "blocking",
           message: `${file.name}: no readable Created Time, so the show cannot be determined.`,
@@ -185,6 +220,7 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
       sales: [],
       dropped: [],
       flags: [
+        ...flags,
         {
           severity: "blocking",
           message:
@@ -199,6 +235,7 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
       sales: [],
       dropped: [],
       flags: [
+        ...flags,
         {
           severity: "blocking",
           message:
@@ -216,6 +253,7 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
       sales: [],
       dropped: [],
       flags: [
+        ...flags,
         {
           severity: "blocking",
           message:

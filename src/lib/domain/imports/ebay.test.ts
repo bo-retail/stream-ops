@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { parseCsv } from "./csv";
 import { parseEbayDate, parseEbayFile } from "./ebay";
-import { EBAY_HEADERS } from "./types";
+import { EBAY_HEADERS, detectPlatform } from "./types";
 
 /**
  * Builds an eBay export from partial rows, including the decoration.
@@ -195,5 +196,185 @@ describe("housekeeping flags", () => {
     const result = parseEbayFile({ name: "x.csv", text });
     expect(result.sales).toHaveLength(0);
     expect(result.flags[0].severity).toBe("blocking");
+  });
+});
+
+/**
+ * A report that has been opened, edited and saved again.
+ *
+ * Sample shows are listed under one stand-in listing — "Invicta Random Pulls PM
+ * Show" — and the stock numbers are typed into the file afterwards, so this is
+ * a file the app is meant to accept. Saving it changes two things that have
+ * nothing to do with the edit: the row of bare commas above the header is gone,
+ * and every short row is padded out to the full width.
+ */
+function resaved(text: string): string {
+  const lines = text.replace(/^﻿/, "").split("\r\n");
+  const width = lines[1].split(",").length;
+  return (
+    "﻿" +
+    lines
+      .slice(1)
+      .map((line) => {
+        const short = width - line.split(",").length;
+        return short > 0 ? line + ",".repeat(short) : line;
+      })
+      .join("\r\n")
+  );
+}
+
+describe("a report edited outside the app", () => {
+  it("reads one whose header is now the first line", () => {
+    const text = resaved(ebayCsv([single(), single({ "Sales Record Number": "29467", "Transaction ID": "b" })]));
+    const result = parseEbayFile({ name: "edited.csv", text });
+    expect(result.sales).toHaveLength(2);
+    expect(result.flags.some((f) => f.severity === "blocking")).toBe(false);
+  });
+
+  it("does not read the padded footer as an order", () => {
+    const text = resaved(ebayCsv([single()]));
+    const result = parseEbayFile({ name: "edited.csv", text });
+    expect(result.sales).toHaveLength(1);
+    expect(result.sales.map((s) => s.orderRef)).toEqual(["29466"]);
+  });
+
+  it("refuses one whose long numbers a spreadsheet rounded off", () => {
+    const text = ebayCsv([single({ "Tracking Number": "9.43461E+21" })]);
+    const result = parseEbayFile({ name: "edited.csv", text });
+    expect(result.sales).toHaveLength(0);
+    expect(result.flags[0].severity).toBe("blocking");
+    expect(result.flags[0].message).toContain("Tracking Number");
+    expect(result.flags[0].message).toContain("9.43461E+21");
+  });
+
+  it("keeps reading a stock number that only looks like one", () => {
+    // 5E+3 is not what a rounded-off number looks like, and a stock number is
+    // never refused for its shape.
+    const result = parse([single({ "Item Title": "5E3" })]);
+    expect(result.sales[0].stockNumber).toBe("5E3");
+  });
+});
+
+describe("recognising an edited report before anything reads it", () => {
+  /*
+    `detectPlatform` runs first, in `readFiles`. It used to assume the header
+    was the second line too, so an edited report was turned away as "neither a
+    TikTok nor an eBay export" — one layer above the reader that had just been
+    taught to handle it.
+  */
+  it("knows a re-saved eBay file is an eBay file", () => {
+    const rows = parseCsv(resaved(ebayCsv([single()])));
+    expect(detectPlatform(rows)).toBe("EBAY");
+  });
+
+  it("still knows an untouched one", () => {
+    expect(detectPlatform(parseCsv(ebayCsv([single()])))).toBe("EBAY");
+  });
+
+  it("refuses a file whose dates a spreadsheet rewrote", () => {
+    const result = parse([single({ "Sale Date": "9/8/2026", "Paid On Date": "9/8/2026" })]);
+    expect(result.sales).toHaveLength(0);
+    expect(result.flags[0].severity).toBe("blocking");
+    expect(result.flags[0].message).toContain("Sep-08-26");
+  });
+
+  it("does not mistake a listing title for a rounded-off number", () => {
+    // Only the columns holding long numbers are checked, so a stock number of
+    // this shape is somebody's listing, not damage.
+    const result = parse([single({ "Item Title": "5E+3" })]);
+    expect(result.sales).toHaveLength(1);
+    expect(result.sales[0].stockNumber).toBe("5E+3");
+  });
+
+  it("catches the zero-padded form when the whole column went together", () => {
+    // What a converted column looks like: every long value padded, never one.
+    const result = parse([
+      single({ "Tracking Number": "9434608106245500000000" }),
+      single({
+        "Sales Record Number": "29467",
+        "Transaction ID": "b",
+        "Tracking Number": "9434608106245600000000",
+      }),
+    ]);
+    expect(result.sales).toHaveLength(0);
+    expect(result.flags[0].message).toContain("Tracking Number");
+  });
+
+  it("leaves a padded-looking number alone when its column disagrees", () => {
+    /*
+      One value with zeros past the fifteenth digit, one without. A spreadsheet
+      converts a whole column at once, so a column that disagrees with itself
+      was never converted — this is an id that happens to end in zeros, which
+      roughly one TikTok order in a thousand does. Refusing on that alone turned
+      away 23% of untouched days in testing, each unimportable however many
+      times the report was downloaded again.
+    */
+    const result = parse([
+      single({ "Tracking Number": "9434608106245500000000" }),
+      single({
+        "Sales Record Number": "29467",
+        "Transaction ID": "b",
+        "Tracking Number": "9434608106245591652376",
+      }),
+    ]);
+    expect(result.sales).toHaveLength(2);
+    expect(result.flags.some((f) => f.severity === "blocking")).toBe(false);
+  });
+
+  it("leaves one repeated number alone, however it ends", () => {
+    // The same value twice is not a column agreeing with itself. A sample show
+    // sells under one listing, so its ids repeat on every row.
+    const result = parse([
+      single({ "Tracking Number": "9434608106245500000000" }),
+      single({
+        "Sales Record Number": "29467",
+        "Transaction ID": "b",
+        "Tracking Number": "9434608106245500000000",
+      }),
+    ]);
+    expect(result.sales).toHaveLength(2);
+    expect(result.flags.some((f) => f.severity === "blocking")).toBe(false);
+  });
+
+  it("refuses a file whose show tags a spreadsheet turned into date-times", () => {
+    // The tag is the only thing separating the eBay day show from the night one.
+    const result = parse([
+      single({ "Custom Label": "9/8/2026 12:00:00 PM" }),
+      single({
+        "Sales Record Number": "29467",
+        "Transaction ID": "b",
+        "Custom Label": "9/8/2026 12:00:00 PM",
+      }),
+    ]);
+    expect(result.sales).toHaveLength(0);
+    expect(result.flags[0].message).toContain("day show");
+  });
+
+  it("but not tags a person mistyped", () => {
+    /*
+      A tag is typed once into a listing template and copied across the show, so
+      one typo makes every tag on a small day unreadable — which looks identical
+      to a converted column until you look at the shape. Refusing this would be
+      a dead end: the report downloads again saying the same thing, because it
+      is what the listing says. It stays the warning it always was.
+    */
+    const result = parse([
+      single({ "Custom Label": "9.8.26 PM" }),
+      single({ "Sales Record Number": "29467", "Transaction ID": "b", "Custom Label": "9.8.26 PM" }),
+    ]);
+    expect(result.sales).toHaveLength(2);
+    expect(result.flags.some((f) => f.severity === "blocking")).toBe(false);
+    expect(result.flags.some((f) => f.message.includes("fix the listing"))).toBe(true);
+  });
+
+  it("but not a sample show, where most rows carry no tag at all", () => {
+    // 300 of 314 rows on the real 09/18 report had an empty Custom Label.
+    const result = parse([
+      single({ "Custom Label": "" }),
+      single({ "Sales Record Number": "29467", "Transaction ID": "b", "Custom Label": "" }),
+      single({ "Sales Record Number": "29468", "Transaction ID": "c" }),
+    ]);
+    expect(result.sales).toHaveLength(3);
+    expect(result.flags.some((f) => f.severity === "blocking")).toBe(false);
   });
 });
