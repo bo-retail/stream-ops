@@ -13,7 +13,14 @@
 import { TZDate } from "@date-fns/tz";
 import type { DateISO } from "../types";
 import { businessOfHandle } from "../business";
-import { checkHeaders, parseCsv, roundedOffColumns, roundedOffMessage, toRecords } from "./csv";
+import {
+  checkHeaders,
+  notedRoundingMessage,
+  parseCsv,
+  roundedOffColumns,
+  roundedOffMessage,
+  toRecords,
+} from "./csv";
 import {
   TIKTOK_HEADERS,
   TIKTOK_NIGHT_FROM_HOUR,
@@ -89,13 +96,22 @@ export interface TikTokFile {
  * Checked for rounding damage, and nothing else is: `Product Name` carries the
  * stock number on a sample show and is whatever the listing was called.
  */
-const TIKTOK_LONG_NUMBER_COLUMNS = [
-  "Tracking ID",
-  "Order ID",
-  "SKU ID",
-  "Product ID",
-  "Package ID",
-] as const;
+const TIKTOK_LONG_NUMBER_COLUMNS = ["Tracking ID", "Order ID"] as const;
+
+/**
+ * Long numbers that are written down and never acted on.
+ *
+ * `SKU ID` is kept against the line and `Package ID` as the package it came
+ * from; `Product ID` is read by nothing at all. None of them decides a parcel,
+ * a show or a figure — boxes are grouped on the tracking number rather than the
+ * package id, deliberately — so rounding them costs detail in the record and
+ * nothing more.
+ *
+ * `Order ID` is not among them. It becomes the order reference, the order's
+ * totals are checked against it, and a collapsed one would merge two unrelated
+ * orders into a single arithmetic.
+ */
+const TIKTOK_NOTED_NUMBER_COLUMNS = ["SKU ID", "Product ID", "Package ID"] as const;
 
 /**
  * Parses one TikTok file into paid watches, dropped rows and flags.
@@ -158,6 +174,9 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
       flags: [...flags, { severity: "blocking", message: roundedOffMessage(file.name, damaged) }],
     };
   }
+
+  const noted = roundedOffColumns(records, TIKTOK_NOTED_NUMBER_COLUMNS);
+  if (noted.length > 0) flags.push({ severity: "warning", message: notedRoundingMessage(file.name, noted) });
 
   /* ------------------------------------------- which show is this file (R1) */
 

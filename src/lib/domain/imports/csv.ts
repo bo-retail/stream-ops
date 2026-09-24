@@ -258,6 +258,26 @@ export function roundedOffMessage(fileName: string, damaged: readonly RoundedOff
 }
 
 /**
+ * The same damage, in a column nothing depends on.
+ *
+ * Said rather than acted on: the day is imported, the record carries a rounded
+ * number where it should carry an exact one, and whoever looks at it later
+ * knows why. The distinction between this and `roundedOffMessage` is the whole
+ * difference between a file that cannot be used and one that is merely less
+ * precise than it should be.
+ */
+export function notedRoundingMessage(fileName: string, damaged: readonly RoundedOffColumn[]): string {
+  const list = damaged.map((d) => `${d.column} on ${d.rows} row(s) of the file`).join(", ");
+  return (
+    `${fileName}: this file has been opened and saved in a spreadsheet, which rounded off ${list} — ` +
+    `${damaged[0].column} reads "${damaged[0].example}". Nothing in the app depends on those columns, so ` +
+    `this on its own is not a reason to refuse the file. To keep them exact, open the report in Google ` +
+    `Sheets (File, Import, and turn off "Convert text to numbers"), or in Excel use Data, From Text/CSV ` +
+    `and set every column to Text.`
+  );
+}
+
+/**
  * Compares a file's headers against what the code was written for.
  *
  * The whole point of the ingestion rules is that they depend on exact column

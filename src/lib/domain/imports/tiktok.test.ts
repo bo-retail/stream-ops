@@ -395,3 +395,28 @@ describe("a report edited outside the app", () => {
     expect(result.sales[0].stockNumber).toBe("Invicta Random Pulls PM Show");
   });
 });
+
+describe("damage that matters against damage that does not", () => {
+  it("reads a file whose SKU, product and package ids were rounded", () => {
+    const result = parse([
+      paidRow({ "SKU ID": "1.72941E+18", "Product ID": "1.72951E+18", "Package ID": "1.15341E+18" }),
+      paidRow({ "Order ID": "576461234567890124\t", "SKU ID": "1.72942E+18", "Product ID": "1.72952E+18", "Package ID": "1.15342E+18" }),
+    ]);
+    expect(result.sales).toHaveLength(2);
+    expect(result.flags.some((f) => f.severity === "blocking")).toBe(false);
+    expect(result.flags.some((f) => f.message.includes("Nothing in the app depends on those columns"))).toBe(true);
+  });
+
+  it("still refuses one whose tracking was rounded", () => {
+    const result = parse([paidRow({ "Tracking ID": "9.23469E+21" })]);
+    expect(result.flags[0].severity).toBe("blocking");
+    expect(result.sales).toHaveLength(0);
+  });
+
+  it("still refuses one whose order ids were rounded", () => {
+    // The order id is how an order is found again when somebody asks about it.
+    const result = parse([paidRow({ "Order ID": "5.76461E+17" })]);
+    expect(result.flags[0].severity).toBe("blocking");
+    expect(result.sales).toHaveLength(0);
+  });
+});

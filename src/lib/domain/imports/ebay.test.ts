@@ -378,3 +378,76 @@ describe("recognising an edited report before anything reads it", () => {
     expect(result.flags.some((f) => f.severity === "blocking")).toBe(false);
   });
 });
+
+describe("damage that matters against damage that does not", () => {
+  /*
+    09/24: a sample show's stock numbers had been typed in by hand, every
+    tracking number survived, and the upload was refused over Item Number and
+    Transaction ID — two columns nothing reads. A day of work turned away for
+    tidiness.
+  */
+  it("reads a file whose Item Number and Transaction ID were rounded", () => {
+    const result = parse([
+      single({ "Item Number": "4.07197E+11", "Transaction ID": "1.23457E+13" }),
+      single({ "Sales Record Number": "29467", "Item Number": "4.07198E+11", "Transaction ID": "1.23458E+13" }),
+    ]);
+    expect(result.sales).toHaveLength(2);
+    expect(result.flags.some((f) => f.severity === "blocking")).toBe(false);
+    const said = result.flags.find((f) => f.message.includes("Nothing in the app depends on those columns"));
+    expect(said?.severity).toBe("warning");
+    expect(said?.message).toContain("Item Number");
+    expect(said?.message).toContain("Transaction ID");
+  });
+
+  it("still knows a summary row from an item row when Item Number is rounded", () => {
+    // The only thing Item Number decides is whether the cell is empty.
+    const result = parse([
+      single({ "Sales Record Number": "29470", "Item Number": "", "Sold For": "$50.00", "Transaction ID": "" }),
+      single({ "Sales Record Number": "29470", "Item Number": "4.07197E+11", "Sold For": "$25.00", "Transaction ID": "a" }),
+      single({ "Sales Record Number": "29470", "Item Number": "4.07198E+11", "Sold For": "$25.00", "Transaction ID": "b" }),
+    ]);
+    expect(result.sales).toHaveLength(2);
+    expect(result.dropped.some((d) => d.reason.includes("summary row"))).toBe(true);
+  });
+
+  it("still refuses one whose tracking numbers were rounded", () => {
+    const result = parse([single({ "Tracking Number": "9.43461E+21" })]);
+    expect(result.sales).toHaveLength(0);
+    expect(result.flags[0].severity).toBe("blocking");
+  });
+});
+
+describe("what the noted-rounding warning says", () => {
+  it("does not claim the day was imported when the file was refused", () => {
+    /*
+      One Excel save rounds Item Number and rewrites the dates, so both fire at
+      once. The refusal and the note arrive together, and the note must not tell
+      her the day landed when nothing did.
+    */
+    const result = parse([
+      single({ "Item Number": "4.07197E+11", "Sale Date": "9/8/2026", "Paid On Date": "9/8/2026" }),
+    ]);
+    expect(result.sales).toHaveLength(0);
+    expect(result.flags.some((f) => f.severity === "blocking")).toBe(true);
+    for (const flag of result.flags) {
+      expect(flag.message).not.toContain("imported in full");
+    }
+  });
+
+  it("says nothing at all about a file nobody opened", () => {
+    const result = parse([single(), single({ "Sales Record Number": "29467", "Transaction ID": "b" })]);
+    expect(result.flags.some((f) => f.message.includes("rounded off"))).toBe(false);
+  });
+
+  it("notices when two item numbers were rounded to the same value", () => {
+    // The realistic collapse: neighbouring listings round to one string.
+    const result = parse([
+      single({ "Item Number": "4.07197E+11" }),
+      single({ "Sales Record Number": "29467", "Transaction ID": "b", "Item Number": "4.07197E+11" }),
+    ]);
+    expect(result.sales).toHaveLength(2);
+    const said = result.flags.find((f) => f.message.includes("Item Number"));
+    expect(said?.severity).toBe("warning");
+    expect(said?.message).toContain("4.07197E+11");
+  });
+});

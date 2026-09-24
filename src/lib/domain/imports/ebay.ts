@@ -22,6 +22,7 @@ import type { DateISO } from "../types";
 import {
   checkHeaders,
   isBlankRow,
+  notedRoundingMessage,
   parseCsv,
   roundedOffColumns,
   roundedOffMessage,
@@ -108,13 +109,22 @@ function locateTable(rows: string[][]): { header: string[]; data: string[][]; fo
  * day because a listing was called "5E+3" would be worse than the thing being
  * guarded against.
  */
-const EBAY_LONG_NUMBER_COLUMNS = [
-  "Tracking Number",
-  "Item Number",
-  "Transaction ID",
-  "Order Number",
-  "Sales Record Number",
-] as const;
+const EBAY_LONG_NUMBER_COLUMNS = ["Tracking Number", "Sales Record Number"] as const;
+
+/**
+ * Long numbers that are only ever written down, never acted on.
+ *
+ * `Item Number` decides nothing but whether a row is an order's summary or one
+ * of its watches, which is a question of whether the cell is empty — a rounded
+ * one still answers it. `Transaction ID` is kept against the line and read by
+ * nothing. Losing them costs a little detail in the record and nothing else.
+ *
+ * Worth saying out loud, because refusing the file over these is what happened
+ * on 09/24: the day's stock numbers had been typed in by hand, the tracking
+ * numbers were all intact, and the upload was turned away over two columns that
+ * change nothing. A day of somebody's work, refused for tidiness.
+ */
+const EBAY_NOTED_NUMBER_COLUMNS = ["Item Number", "Transaction ID", "Order Number"] as const;
 
 /**
  * `9/8/2026 12:00:00 PM` — a date a spreadsheet wrote, not a tag anyone typed.
@@ -188,6 +198,9 @@ export function parseEbayFile(file: EbayFile, business: Business = "WATCH"): Par
   if (damaged.length > 0) {
     return { sales: [], dropped: [], flags: [...flags, { severity: "blocking", message: roundedOffMessage(file.name, damaged) }] };
   }
+
+  const noted = roundedOffColumns(records, EBAY_NOTED_NUMBER_COLUMNS);
+  if (noted.length > 0) flags.push({ severity: "warning", message: notedRoundingMessage(file.name, noted) });
 
   /*
     `Sep-08-26` rewritten as `9/8/2026`.
