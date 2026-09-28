@@ -1,0 +1,223 @@
+# Inventory — handover
+
+Everything decided, everything still open, and what to build first. Written so a
+new session can pick this up without the conversation that produced it.
+
+Read `CLAUDE.md` first (how work is done here). `WHERE-WE-ARE.md` covers the rest
+of the project; this file is inventory only.
+
+**Status on 28 September 2026: nothing has been built yet.** Three rounds of
+questions have gone to Daniel, two are answered, the third is with him. The
+design below is settled enough to start steps 1–3 whenever he replies.
+
+---
+
+## 1. Why
+
+Stock lives in spreadsheets. Every morning **Andres rebuilds the inventory with an
+xlookup** of Gladys's sales reports against a `Sellable` column. That job is what
+this replaces: stock down when something sells, up when a shipment arrives, and
+nobody keeping a second set of numbers.
+
+After inventory comes **profitability**, which needs cost per piece — so the two
+are one arc, not two projects.
+
+**Watches only.** Daniel: *"Let's focus only on watches, strictly, strictly
+watches right now."* Diamonds later.
+
+---
+
+## 2. The files this was worked out from
+
+All in Samuel's Downloads, all read line by line.
+
+| File | What it is |
+|---|---|
+| `Invicta Master Products 09.23.26.xlsx` | The catalogue. 727 models, three sheets: Inventory, Sample, Random Pulls Show. Model, brand, PF code, collection, series, gender, description, image URL, TikTok weight and dimensions, eBay shipping profile. |
+| `BO Retail 9.16.26 Shipping List.xlsx` | Stock arriving. SOP, PO, item, quantity, unit price. 91 lines, 2,937 pieces, $86,846 at cost, all under SOP INV258905. |
+| `INV258905.pdf` | The invoice for that shipment (an image; no extractable text). |
+| `Invicta Shipping List Master.xlsx` | Cost per model. 1,254 rows, 1,095 distinct models, no quantities. Four models appear at two prices. |
+| `09.19 BO retail offer_.xlsx` | Invicta's offer — **and the "order confirmation" Daniel means**. `OH` = their on-hand, `IT` = in transit, `Dani` = quantity he chose, `Qty` = Invicta's recommendation, `BO COSTS` = our cost. Their stock, never ours. |
+
+Numbers in the catalogue worth knowing: `Sellable` is filled for 207 of 727 models
+on the Inventory sheet (6,603 pieces), 289 on Sample (578), 383 on Random Pulls
+(799). `TP` is target price, `ASP` average sold price, `US` units sold, `T. Sold`
+total sold in dollars — the last two are Invicta's figures, not ours. `Lowest`,
+`MSRP`, `TT` and `eBay` are dead columns; ignore them.
+
+---
+
+## 3. What is settled
+
+Daniel answered all 44 of round one and all 18 of round two. These are his
+answers, not inferences.
+
+### The shape of stock
+
+- Counted **per model**, not per piece. Seventeen of `TM-222013` is seventeen units.
+- A model sits in one of **five places**: sellable, **one sample per platform**
+  (eBay and TikTok — a third channel would mean a third sample), random pulls,
+  damaged.
+- **"Random pulls" is a state, not a monthly event**: a model that has a sample
+  but no sellable stock. When sellable hits zero the sample becomes the random-pull
+  piece, and **that physical watch ships**. Exception: expensive models (they buy
+  ~5) where the sample itself is sold from a normal show.
+- Samples are **physically apart** — trays on a table beside the shows, where
+  streamers can reach them. Sellable is on shelves, which streamers cannot take from.
+- A sample can go back to sellable. Damaged returns go to a damaged warehouse.
+- Unsold random pulls stay in random pulls.
+- Only Invicta, including its sub-brands (Activa, Montres Prestige).
+- One location. There **are** watches on the shelf not in the master file.
+
+### Coming in
+
+- Every shipment arrives with a list in the 9.16 shape. Nothing arrives without one.
+- **Gladys's count is the truth, not Invicta's list.** Short → they ship the
+  balance; over → they adjust the invoice. Keep her number, flag the difference.
+- One shipping list can carry several invoices, but a model never appears twice at
+  different prices.
+- Was weekly, going to twice weekly. 20–300 SKUs a shipment.
+- Nothing is ever sent back to Invicta.
+- **Gladys uploads the count** — not Invicta's shipping list.
+
+### Cost
+
+- The shipping-list price is true; so is the order-confirmation (offer) file. The
+  catalogue's `Cost` column is just an xlookup of the shipping list.
+- **No freight or duty** — Invicta delivers free, so the invoice price is landed cost.
+- **Weighted average** where a model was bought at two prices, though Invicta
+  always gives the latest price.
+- Every model must have a cost. Flag anything without one.
+
+### Going out
+
+- **Stock comes off when an order is paid.**
+- On a random-pull sale, believe **the scanned tag**: the scanner reads Invicta's
+  own barcode, which **is** the model number (e.g. `48912`). Their sticker is the
+  order they sold in, and **restarts at 1 every show** — it identifies nothing.
+- Cancelled or returned: sellable back to inventory, slightly damaged to the sample
+  pulls, fully damaged to damaged. **The app cannot know about a cancellation** —
+  Daniel wants an upload template for it.
+- Write-offs and giveaways: content, gift, lost, broken. Recorded by Gladys,
+  Andres, Claudia, Flora or Daniel — all five can see and change stock.
+
+### What the system should do
+
+- **eBay caps at 750 units at one time per show**, so before each show they choose
+  which models and quantities go to eBay and the rest goes to TikTok. Keep a record
+  of each selection.
+- Produce the listing files: TikTok with weight and dimensions, eBay with the
+  shipping profile. The product template should require that information up front.
+- Warn about running low and about slow movers (so the target price can be cut to
+  get the cash back). A slow mover is "few units at a very low margin for seven
+  consecutive days" — the thresholds are still undefined.
+- **Opening count comes from counting the shelf**, starting fresh. The past is let go.
+- Andres keeps running his xlookup alongside until the app's count is trusted.
+- Morning screen: revenue, COGS, gross margin, ASP, units sold — then total
+  expenses and net margin once those exist. Target **$35,000 a day at 35%**, both
+  platforms together.
+
+### Profitability, the phase after
+
+- Measured per show (AM/PM), per platform, and overall.
+- Revenue − COGS = gross margin; then fees, salary, commission, operating expenses
+  → net margin; then other expenses (renovations, credit card fees).
+- They make money on shipping on both platforms, and there are "unsettled" reports
+  — courier claims that parcels were never handed over. **Flora** holds the report
+  with revenue, fees, shipping gains and operating expenses. Salary and commission
+  come from StreamOps, which already has hours and commission rates.
+
+---
+
+## 4. The one design problem nobody has solved yet
+
+**Stock comes off when an order is paid, but a random-pull piece is only identified
+when it is packed.** On a sample show that is most of the day — on 09/18, 440 of
+the pieces sold went out under listings like `#300 - Invicta Random Pulls`, which
+carry no model number at all.
+
+So between payment and packing the sale is known but the watch is not. A
+random-pull sale needs a **pending** state: revenue at payment, model and cost at
+packing. Two things can resolve it — the model-number column Daniel says they will
+add to the report, or the scan itself.
+
+Question 1 of round three asks whether that column will **always** be filled. If
+yes, stock can come off at payment like everything else and the scan merely
+confirms. If not, the sale waits for the packing table. **This is the only open
+question that changes the build rather than a detail of it.**
+
+---
+
+## 5. What is still open
+
+`Inventory - everything still open.docx` — 33 questions, with Daniel, each tagged
+with the step it holds up. The sections:
+
+- **A. The pending random-pull sale** (3) — the problem above. Also: what if a
+  parcel ships without ever being scanned?
+- **B. Cancellations and returns** (4) — where a cancellation shows up today, what
+  the upload template needs, who uploads it, and whether stock returns when the
+  report says so or when Gladys has the watch in her hand.
+- **C. Slow movers** (4) — actual numbers for "few units" and "very low margin".
+- **D. Receiving** (3) — same-day counting, how a short shipment's balance arrives,
+  whether differences stay on screen until settled.
+- **E. Samples** (4) — who pulls the two samples and when, whether a sold sample is
+  replaced, models that arrive with too few units to split, delisting at zero.
+- **F. Cost** (3) — whether `BO COSTS` is always what we pay, which wins if the
+  invoice differs, who adds a missing cost.
+- **G. The eBay selection** (4) — units or listings, who chooses, TikTok's own cap,
+  whether it produces a file.
+- **H. The morning numbers** (3) — every day or only show days, per-show split,
+  weighted-average COGS.
+- **I. Who does what** (2) — read-only versus edit, how often the shelf is recounted.
+- **J. Profit phase** (3) — examples of Flora's report, the shipping gains and the
+  unsettled claims.
+
+Nothing here stops steps 1–3 except question 1.
+
+---
+
+## 6. The build, in order
+
+| Step | What | Waits on |
+|---|---|---|
+| 0 | **The count.** `Opening stock count sheet.xlsx` is ready: 727 models pre-filled with description, collection and cost, a column per location, and a second tab for models not in the master file. | — |
+| 1 | **Catalogue and stock.** 727 models with cost; the count loaded as the opening balance; stock visible per model. | the count |
+| 2 | **Receiving.** Gladys enters what she counted against a shipment; cost captured; differences flagged. | 1 |
+| 3 | **Deduction.** Paid orders come off from the reports already uploaded. This is what ends Andres's xlookup. | 1, 2 |
+| 4 | **Movements.** Samples pulled, sample → random pulls at zero (ask Gladys first, do not move it silently), returns, damaged, write-offs. | 3 |
+| 5 | **The eBay selection.** Choose under the 750 cap, rest to TikTok, export both listing files. | 3 |
+| 6 | **Morning numbers.** Revenue, COGS, gross margin, ASP, units against the target. | 3 |
+| 7 | **Profitability.** Fees, salary, commission, opex → net margin, plus shipping gains and unsettled claims. | 6 |
+
+Steps 1–3 are the spine. Until stock comes off by itself, the rest is decoration.
+
+---
+
+## 7. What already exists in the app that inventory can stand on
+
+- **Every sale carries a stock number**, and sales are already imported daily with
+  business, platform, show, quantity and price (`SalesRecord`).
+- **Packing records what physically went out**, including the tag scanned against a
+  placeholder listing (`ScanEvent` of kind `ITEM_PLACEHOLDER`). That is how a
+  random-pull piece can be identified at all.
+- **A placeholder listing is already recognised**: a stock number containing a space
+  (`src/lib/domain/imports/placeholders.ts`). `Invicta Random Pulls PM Show` and
+  `#300 - Invicta Random Pulls` both qualify, so the packer is already asked to scan
+  the piece rather than hunt for a number.
+- On 09/18 every real stock number sold was present in both the catalogue and the
+  cost list — so costing has no coverage gap to solve, only the placeholder problem.
+
+---
+
+## 8. Documents produced so far
+
+In Samuel's Downloads:
+
+- `Inventory - questions for Daniel.docx` — round one, 44 questions, **answered**.
+- `Inventory - the plan and what is still open.docx` — the plan, the diagram, round
+  two's 18 questions, **answered**.
+- `Inventory - everything still open.docx` — round three, 33 questions, **pending**.
+- `Opening stock count sheet.xlsx` — ready for the shelf count.
+
+Memory notes: `inventory-phase` holds the same ground in brief.
