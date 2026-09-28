@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { placeEbayFile } from "./ebay-business";
+import { ebayFallback, placeEbayFile } from "./ebay-business";
 import type { EbayShowDay } from "./ebay-business";
 
 const show = (
@@ -68,5 +68,47 @@ describe("placing an eBay export", () => {
         show("DIAMOND", "EBAY"),
       ]),
     ).toEqual({ kind: "placed", business: "DIAMOND" });
+  });
+});
+
+describe("what the schedule still has to answer", () => {
+  const bothRanEbay = placeEbayFile([
+    { business: "WATCH", platform: "EBAY", cancelled: false },
+    { business: "DIAMOND", platform: "EBAY", cancelled: false },
+  ]);
+  const onlyWatches = placeEbayFile([{ business: "WATCH", platform: "EBAY", cancelled: false }]);
+
+  it("asks it nothing when every file named its account", () => {
+    expect(bothRanEbay.kind).toBe("ambiguous");
+    expect(ebayFallback(["WATCH"], bothRanEbay)).toEqual({ kind: "none" });
+    expect(ebayFallback(["WATCH", "DIAMOND"], bothRanEbay)).toEqual({ kind: "none" });
+  });
+
+  it("refuses when a file has no account and the schedule cannot choose", () => {
+    expect(ebayFallback([null], bothRanEbay)).toEqual({
+      kind: "unplaceable",
+      candidates: ["DIAMOND", "WATCH"],
+    });
+  });
+
+  it("refuses even when another file in the upload did name one", () => {
+    /*
+      The case that made this a rule rather than a set: one known account
+      alongside one unknown, and taking a single answer for the upload would
+      write the unknown file under the known one's business.
+    */
+    expect(ebayFallback(["WATCH", null], bothRanEbay).kind).toBe("unplaceable");
+  });
+
+  it("uses the schedule for a file with no account on an ordinary day", () => {
+    expect(ebayFallback([null], onlyWatches)).toEqual({ kind: "fallback", business: "WATCH" });
+  });
+
+  it("falls back to watches when the schedule has no eBay show at all", () => {
+    expect(ebayFallback([null], placeEbayFile([]))).toEqual({ kind: "fallback", business: "WATCH" });
+  });
+
+  it("says nothing about an upload with no eBay files in it", () => {
+    expect(ebayFallback([], bothRanEbay)).toEqual({ kind: "none" });
   });
 });

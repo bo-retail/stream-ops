@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  businessOfEbaySeller,
   BUSINESSES,
   BUSINESS_LABEL,
   BUSINESS_SHORT,
@@ -69,5 +70,24 @@ describe("the words", () => {
       expect(ITEM_WORD[business].one).toBeTruthy();
       expect(ITEM_WORD[business].many).toBeTruthy();
     }
+  });
+});
+
+describe("the eBay seller account on a report", () => {
+  it("places the account we know", () => {
+    expect(businessOfEbaySeller("vaultshowofficial")).toBe("WATCH");
+  });
+
+  it("ignores case and spacing, as the footer is read from a file", () => {
+    expect(businessOfEbaySeller("  VaultShowOfficial ")).toBe("WATCH");
+  });
+
+  it("returns null for an account nobody has registered", () => {
+    /*
+      The safety property the whole design rests on: an unknown account never
+      places anything. The schedule answers instead, exactly as before.
+    */
+    expect(businessOfEbaySeller("caratclubofficial")).toBeNull();
+    expect(businessOfEbaySeller("")).toBeNull();
   });
 });

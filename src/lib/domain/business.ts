@@ -82,3 +82,31 @@ const BY_HANDLE: Record<string, Business> = Object.fromEntries(
 export function businessOfHandle(handle: string): Business | null {
   return BY_HANDLE[handle.trim().toLowerCase()] ?? null;
 }
+
+/**
+ * The eBay seller account each business sells through.
+ *
+ * It was thought eBay named no seller anywhere in its export. It does, on the
+ * last line: `Seller ID : vaultshowofficial`. That matters on a day when both
+ * kinds of show ran eBay, because the schedule then cannot say which account a
+ * file came from and the upload was refused outright — which is what happened
+ * on 09/27, with the floor holding a day's orders it could not load.
+ *
+ * Only accounts that have actually been seen belong here. An account not listed
+ * is not guessed at; the day's schedule answers instead, exactly as before.
+ * Adding one is a line, the same as a TikTok shop.
+ */
+const EBAY_SELLER: Record<string, Business> = {
+  vaultshowofficial: "WATCH",
+};
+
+// Keyed lower case however it was written above, so an account added with a
+// capital in it is still found — the lookup lowercases what it is given.
+const BY_SELLER: Record<string, Business> = Object.fromEntries(
+  Object.entries(EBAY_SELLER).map(([id, business]) => [id.toLowerCase(), business]),
+);
+
+/** Which business an eBay `Seller ID` belongs to, or null if unknown. */
+export function businessOfEbaySeller(sellerId: string): Business | null {
+  return BY_SELLER[sellerId.trim().toLowerCase()] ?? null;
+}

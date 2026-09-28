@@ -141,6 +141,28 @@ function looksLikeSpreadsheetDateTime(raw: string): boolean {
   return /^\d{1,2}\/\d{1,2}\/\d{2,4}(\s|,|$)/.test(raw.trim());
 }
 
+/**
+ * The seller account that exported the file, from its last line.
+ *
+ * `Seller ID : vaultshowofficial`, written below the footer's record count.
+ * Null when the line is missing or unreadable, which is every file that has
+ * been through a spreadsheet and come out with its footer rearranged.
+ */
+export function readEbaySeller(text: string): string | null {
+  const rows = parseCsv(text);
+  // A wide window: a file that has been through a spreadsheet can carry a
+  // dozen padded rows after the footer, and missing the line there would
+  // quietly cost the whole fix. Bounded by the columns it looks at, which on
+  // both exports hold nothing but ids.
+  for (const row of rows.slice(-25)) {
+    for (const cell of row.slice(0, 3)) {
+      const match = /^Seller ID\s*:\s*(.+)$/i.exec(cell.trim());
+      if (match) return match[1].trim();
+    }
+  }
+  return null;
+}
+
 /** eBay signs off with a count and the seller's id, whatever the row width. */
 function isFooterRow(row: string[]): boolean {
   return (

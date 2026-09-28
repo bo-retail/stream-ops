@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseCsv } from "./csv";
-import { parseEbayDate, parseEbayFile } from "./ebay";
+import { parseEbayDate, parseEbayFile, readEbaySeller } from "./ebay";
 import { EBAY_HEADERS, detectPlatform } from "./types";
 
 /**
@@ -449,5 +449,31 @@ describe("what the noted-rounding warning says", () => {
     const said = result.flags.find((f) => f.message.includes("Item Number"));
     expect(said?.severity).toBe("warning");
     expect(said?.message).toContain("4.07197E+11");
+  });
+});
+
+describe("the seller account eBay writes on the last line", () => {
+  it("is read from the footer", () => {
+    expect(readEbaySeller(ebayCsv([single()]))).toBe("vaultshowofficial");
+  });
+
+  it("is null when the line is not there", () => {
+    const text = ebayCsv([single()]).replace("Seller ID : vaultshowofficial", "");
+    expect(readEbaySeller(text)).toBeNull();
+  });
+
+  it("survives a file that was saved again and padded out", () => {
+    expect(readEbaySeller(resaved(ebayCsv([single()])))).toBe("vaultshowofficial");
+  });
+});
+
+describe("reading the seller account from a file's tail", () => {
+  it("finds it past a pile of empty rows a spreadsheet left behind", () => {
+    const text = ebayCsv([single()]) + "\r\n" + ",".repeat(81).concat("\r\n").repeat(10);
+    expect(readEbaySeller(text)).toBe("vaultshowofficial");
+  });
+
+  it("says nothing for a file that is not an eBay export", () => {
+    expect(readEbaySeller("Order ID,Order Status\r\n123,To ship\r\n")).toBeNull();
   });
 });

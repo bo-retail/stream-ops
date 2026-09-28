@@ -1,14 +1,14 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/db";
-import { BUSINESS_SHORT } from "@/lib/domain/business";
+import { BUSINESS_SHORT, businessOfEbaySeller } from "@/lib/domain/business";
 import type { Business } from "@/lib/domain/business";
 import { fromDbDate, toDbDate } from "@/lib/domain/dates";
 import { buildBoxes, checkIntegrity, summariseDay } from "@/lib/domain/imports/boxes";
 import type { Box } from "@/lib/domain/imports/boxes";
 import { parseCsv } from "@/lib/domain/imports/csv";
-import { parseEbayFile } from "@/lib/domain/imports/ebay";
-import { placeEbayFile } from "@/lib/domain/imports/ebay-business";
+import { parseEbayFile, readEbaySeller } from "@/lib/domain/imports/ebay";
+import { ebayFallback, placeEbayFile } from "@/lib/domain/imports/ebay-business";
 import type { EbayPlacement } from "@/lib/domain/imports/ebay-business";
 import { isPlaceholderStock, listingOfNote } from "@/lib/domain/imports/placeholders";
 import { parseTikTokFile } from "@/lib/domain/imports/tiktok";
@@ -101,11 +101,11 @@ function toDropRow(drop: DroppedRow, batchId: string) {
 export function readFiles(
   files: UploadedFile[],
   /**
-   * Whose eBay report this is, resolved from the day's schedule by the caller.
+   * Whose eBay report this is, for any file that does not say so itself.
    *
-   * The file cannot say: eBay names no seller in any of its 82 columns. So a
-   * diamond eBay show starts working the day somebody publishes it — nothing
-   * here needs editing and no shop needs registering. See `placeEbayFile`.
+   * Most files do say: eBay writes the seller account on the last line, and a
+   * file naming one the app knows is placed by it rather than by this. This is
+   * the answer for the rest, worked out from the schedule. See `placeEbayFile`.
    */
   ebayBusiness: Business = "WATCH",
 ): {
@@ -140,8 +140,20 @@ export function readFiles(
       continue;
     }
 
+    /*
+      Each eBay file placed by its own seller account, and only then by the
+      caller's answer.
+
+      Taking one answer for the whole upload is how a diamond report could be
+      written under watches: two eBay files, one from an account the app knows
+      and one from an account it does not, and the known one placed both. The
+      guard below counts the businesses it actually read, so it can only do its
+      job if each file is read on its own terms.
+    */
     const result =
-      platform === "TIKTOK" ? parseTikTokFile(file) : parseEbayFile(file, ebayBusiness);
+      platform === "TIKTOK"
+        ? parseTikTokFile(file)
+        : parseEbayFile(file, ebaySellerBusiness(file.text) ?? ebayBusiness);
 
     sales.push(...result.sales);
     dropped.push(...result.dropped);
@@ -205,6 +217,12 @@ export function readFiles(
   const business = businesses.size === 1 ? [...businesses][0] : null;
 
   return { sales, dropped, flags, boxes, showDate, business, fileInfo };
+}
+
+/** The business an eBay export names on its last line, if we know the account. */
+function ebaySellerBusiness(text: string): Business | null {
+  const seller = readEbaySeller(text);
+  return seller ? businessOfEbaySeller(seller) : null;
 }
 
 /** Which line of a day's checklist a sale fills. */
@@ -281,14 +299,37 @@ export async function runImport(
     the alternative — asking the uploader which show their eBay file is for,
     every single morning — is a question the schedule can already answer.
 
-    This is what makes a diamond eBay show work the day it is published: no code
-    change, no shop to register, no deploy. The schedule says diamonds ran eBay
-    that day, so the eBay file is theirs.
+    That still makes a diamond eBay show work the day it is published, with one
+    exception: a day when both ran eBay, where the schedule cannot choose. Then
+    the file's own seller account decides — and if that account has never been
+    seen before, it has to be registered in `business.ts`, which is a line and a
+    deploy. The refusal below says so, and names the account.
   */
   const firstPass = readFiles(files);
-  const ebayBusiness = firstPass.showDate
+  const scheduled = firstPass.showDate
     ? await resolveEbayBusiness(firstPass.showDate)
     : { kind: "noShow" as const, business: "WATCH" as const };
+
+  /*
+    The file's own seller account, which beats the schedule.
+
+    eBay does name its seller — on the last line, below the record count. So a
+    day when both kinds of show ran eBay is only unanswerable if the account is
+    one nobody has registered; otherwise the file says whose it is, the same way
+    a TikTok export names its shop.
+  */
+  const ebayFiles = files.filter(
+    (f) => firstPass.fileInfo.find((i) => i.name === f.name)?.platform === "EBAY",
+  );
+  const sellerIds = [
+    ...new Set(ebayFiles.map((f) => readEbaySeller(f.text)).filter((s): s is string => s !== null)),
+  ];
+  const fallback = ebayFallback(
+    ebayFiles.map((f) => ebaySellerBusiness(f.text)),
+    scheduled,
+  );
+  const ebayBusiness: EbayPlacement =
+    fallback.kind === "fallback" ? { kind: "placed", business: fallback.business } : scheduled;
 
   const { sales, dropped, flags, boxes, showDate, business, fileInfo } = readFiles(
     files,
@@ -296,20 +337,46 @@ export async function runImport(
   );
 
   /*
-    Both sold on eBay that day and nothing can say which report this is.
+    The file and the schedule disagree about whose eBay show this was.
 
-    Cannot happen until diamonds actually start selling there, and when it does
-    the honest answer is to stop rather than put one show's sales under the
-    other's name and pay the wrong pair.
+    The file wins — it is direct evidence and the schedule is a calendar — but
+    one of the two is then wrong, and the schedule is what the pay is worked out
+    from. Said out loud rather than quietly preferred.
   */
-  if (ebayBusiness.kind === "ambiguous" && fileInfo.some((f) => f.platform === "EBAY")) {
+  if (
+    scheduled.kind === "placed" &&
+    ebayBusiness.kind === "placed" &&
+    scheduled.business !== ebayBusiness.business
+  ) {
+    flags.push({
+      severity: "warning",
+      message:
+        `The schedule says ${BUSINESS_SHORT[scheduled.business]} ran eBay on ${firstPass.showDate}, ` +
+        `but this report was exported by ${BUSINESS_SHORT[ebayBusiness.business]}'s account ` +
+        `("${sellerIds[0]}"). The file was believed — check the schedule, because the pay is worked ` +
+        `out from it.`,
+    });
+  }
+
+  /*
+    Both sold eBay that day, and a file has no account we recognise.
+
+    Only the files without one are stuck: any file naming a known account has
+    already placed itself above. Refused rather than filed under whichever
+    business was read first, which would pay the wrong pair.
+  */
+  if (fallback.kind === "unplaceable" && fileInfo.some((f) => f.platform === "EBAY")) {
     flags.push({
       severity: "blocking",
       message:
-        `${firstPass.showDate} ran an eBay show for both ${ebayBusiness.candidates
+        `${firstPass.showDate} ran an eBay show for both ${fallback.candidates
           .map((b) => BUSINESS_SHORT[b])
-          .join(" and ")}, and an eBay export does not say which seller account it came from. ` +
-        `Upload the two days separately, or tell your admin which this one is.`,
+          .join(" and ")}, and nothing here says which of them this report is. ` +
+        (sellerIds.length > 0
+          ? `It was exported by the eBay account "${sellerIds[0]}", which the app has not been told about. ` +
+            `Send that name to your admin — registering it is one line, and then this answers itself every time.`
+          : `The file does not name its seller account, which every eBay export normally does on its last ` +
+            `line. Upload the two days separately, or tell your admin which this one is.`),
     });
   }
 
