@@ -9,6 +9,7 @@ import {
   placeholderNote,
 } from "@/lib/domain/imports/placeholders";
 import {
+  describeTracking,
   looksLikeShippingLabel,
   matchTracking,
   normaliseScan,
@@ -127,7 +128,8 @@ export function toBoxView(row: Row): PackingBoxView {
 
   return {
     id: row.id,
-    tracking: row.trackingNumber,
+    // The label she is holding, not the cell the marketplace wrote.
+    tracking: describeTracking(row.trackingNumber),
     business: row.business,
     platform: row.platform,
     showDate: fromDbDate(row.showDate),
@@ -160,25 +162,56 @@ export async function getBoxById(id: string): Promise<PackingBoxView | null> {
  * narrowed in the database by the last few digits first, because loading every
  * tracking number ever shipped to match one scan would get slower every day.
  */
-export async function findBoxByScan(rawScan: string): Promise<PackingBoxView | null> {
+async function lookUpScan(rawScan: string): Promise<ScanLookup> {
   const scan = normaliseScan(rawScan);
-  if (scan.length < 8) return null;
+  if (scan.length < 8) return { kind: "none" };
 
+  /*
+    Narrowed by "contains", not "ends with".
+
+    A two-parcel order's cell holds both labels — `(94…438,94…593)` — so the
+    first label's digits are in the middle of the string and the whole thing
+    ends in a bracket. Asking the database for cells that end with the scan's
+    tail found neither label, and the packer was told her parcel was in no
+    report. `matchTracking` still decides; this only has to not rule the box
+    out before it gets there.
+  */
   const tail = scan.slice(-8);
   const candidates = await prisma.package.findMany({
-    where: { trackingNumber: { endsWith: tail } },
+    where: { trackingNumber: { contains: tail } },
     select: SELECT,
   });
-  if (candidates.length === 0) return null;
+  if (candidates.length === 0) return { kind: "none" };
 
   const match = matchTracking(
     scan,
     candidates.map((c) => c.trackingNumber),
   );
-  if (match.status !== "matched") return null;
+  if (match.status === "ambiguous") return { kind: "ambiguous", boxes: match.candidates };
+  if (match.status !== "matched") return { kind: "none" };
 
   const row = candidates.find((c) => c.trackingNumber === match.tracking);
-  return row ? toBoxView(row as Row) : null;
+  return row ? { kind: "box", box: toBoxView(row as Row) } : { kind: "none" };
+}
+
+/**
+ * The box a scan means, or why there isn't one.
+ *
+ * Ambiguous is its own answer and not merely "not found". A label on two boxes
+ * is a question for the director; telling the packer it is in no report would
+ * send her to open an unrecognised box for a parcel the report knows perfectly
+ * well, leaving the real box open and short with nothing tying the two
+ * together.
+ */
+type ScanLookup =
+  | { kind: "box"; box: PackingBoxView }
+  | { kind: "ambiguous"; boxes: string[] }
+  | { kind: "none" };
+
+/** The old shape, for the paths that only care whether there is one box. */
+export async function findBoxByScan(rawScan: string): Promise<PackingBoxView | null> {
+  const found = await lookUpScan(rawScan);
+  return found.kind === "box" ? found.box : null;
 }
 
 /* ==========================================================================
@@ -233,12 +266,31 @@ async function reload(packageId: string, message?: string): Promise<ScanOutcome>
  * telling her the truth in two words stops her hunting for a fault that is not
  * there.
  */
+/**
+ * A label that is on two boxes.
+ *
+ * Refused rather than guessed at, and deliberately not offered as an unknown
+ * box: the parcel is in the report twice over, and packing it into a new one
+ * would leave both of the real boxes open and short.
+ */
+function ambiguousLabel(boxes: readonly string[]): ScanOutcome {
+  return {
+    kind: "error",
+    message:
+      `That label is on ${boxes.length} boxes (${boxes.map(describeTracking).join(", ")}). ` +
+      `Put the parcel aside and ask the director which order it belongs to — packing it into a ` +
+      `new box would leave both of those open and short.`,
+  };
+}
+
 export async function openBoxByScan(userId: string, rawScan: string): Promise<ScanOutcome> {
   const scan = normaliseScan(rawScan);
   if (scan.length < 8) return { kind: "error", message: "That does not look like a shipping label." };
 
-  const box = await findBoxByScan(scan);
-  if (!box) return { kind: "unknownLabel", tracking: scan };
+  const found = await lookUpScan(scan);
+  if (found.kind === "ambiguous") return ambiguousLabel(found.boxes);
+  if (found.kind === "none") return { kind: "unknownLabel", tracking: scan };
+  const box = found.box;
   if (box.status !== "OPEN") return { kind: "alreadyPacked", box };
 
   await prisma.scanEvent.create({
@@ -260,12 +312,24 @@ export async function createUnknownBox(userId: string, rawScan: string): Promise
     return { kind: "error", message: "That does not look like a shipping label." };
   }
 
-  const existing = await findBoxByScan(tracking);
-  if (existing) {
-    return existing.status === "OPEN"
-      ? { kind: "box", box: existing }
-      : { kind: "alreadyPacked", box: existing };
+  const found = await lookUpScan(tracking);
+  if (found.kind === "ambiguous") return ambiguousLabel(found.boxes);
+  if (found.kind === "box") {
+    return found.box.status === "OPEN"
+      ? { kind: "box", box: found.box }
+      : { kind: "alreadyPacked", box: found.box };
   }
+
+  /*
+    A box can exist under this exact label without the lookup above finding it.
+
+    The tracking number is unique, and the match is by suffix rather than by
+    equality, so an oddly shaped value — a long scan kept verbatim from a
+    different symbology — can fail to find itself. Creating it then hits the
+    unique index and throws out of the server action, which reaches the packer
+    as nothing at all. Caught below and answered with the box that was already
+    there.
+  */
 
   /*
     The day being packed, not the day it is here.
@@ -279,18 +343,29 @@ export async function createUnknownBox(userId: string, rawScan: string): Promise
   */
   const showDate = toDbDate(await packingDayISO());
 
-  const created = await prisma.package.create({
-    data: {
-      trackingNumber: tracking,
-      // Nothing anywhere says which marketplace it came from; the director
-      // reconciles it either way.
-      platform: "TIKTOK",
-      showDate,
-      isUnrecognised: true,
-      buyer: "",
-    },
-    select: { id: true },
-  });
+  let created: { id: string };
+  try {
+    created = await prisma.package.create({
+      data: {
+        trackingNumber: tracking,
+        // Nothing anywhere says which marketplace it came from; the director
+        // reconciles it either way.
+        platform: "TIKTOK",
+        showDate,
+        isUnrecognised: true,
+        buyer: "",
+      },
+      select: { id: true },
+    });
+  } catch {
+    const already = await prisma.package.findUnique({
+      where: { trackingNumber: tracking },
+      select: SELECT,
+    });
+    if (!already) return { kind: "error", message: "That box could not be started. Try the scan again." };
+    const box = toBoxView(already as Row);
+    return box.status === "OPEN" ? { kind: "box", box } : { kind: "alreadyPacked", box };
+  }
 
   await prisma.scanEvent.create({
     data: {
@@ -925,7 +1000,15 @@ export function listUnrecognisedBoxes(showDate: Date): Promise<BoxSummary[]> {
  */
 export async function listOpenBoxes(showDate: Date): Promise<BoxSummary[]> {
   const boxes = await listBoxes({ showDate, status: "OPEN", isUnrecognised: false });
-  return boxes.sort((a, b) => a.tracking.localeCompare(b.tracking));
+  /*
+    Sorted on the first label, not on the cell.
+
+    A two-parcel order's cell begins with a bracket, which sorts before every
+    digit — so on 09/26 ninety of the day's 158 boxes would have been lifted out
+    of label order and piled at the top, which is the one thing this sort exists
+    to prevent.
+  */
+  return boxes.sort((a, b) => describeTracking(a.tracking).localeCompare(describeTracking(b.tracking)));
 }
 
 /** Every box one person closed on one day, newest first. */

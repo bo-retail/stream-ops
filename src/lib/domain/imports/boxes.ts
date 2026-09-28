@@ -18,7 +18,13 @@
 
 import type { DateISO } from "../types";
 import { isPlaceholderStock } from "./placeholders";
-import { findSuffixCollisions, normaliseStockNumber, trackingCarrier } from "./tracking";
+import {
+  findSharedLabels,
+  findSuffixCollisions,
+  normaliseStockNumber,
+  trackingCarrier,
+  trackingLabels,
+} from "./tracking";
 import type { ImportFlag, ImportPlatform, ShowKey, WatchSale } from "./types";
 
 export interface BoxItem {
@@ -201,6 +207,25 @@ export function checkIntegrity(sales: readonly WatchSale[], boxes: readonly Box[
     }
   }
 
+  /*
+    One label on two boxes.
+
+    Its own kind of collision, and invisible to the suffix check below, which
+    compares different numbers to each other and so never sees a number shared
+    outright. The scanner refuses such a label — it cannot know which parcel is
+    meant — so it is worth saying at upload rather than at the packing table.
+  */
+  const shared = findSharedLabels(boxes.map((b) => b.tracking));
+  if (shared.length > 0) {
+    flags.push({
+      severity: "warning",
+      message:
+        `${shared.length} label(s) appear on more than one box (e.g. ${shared[0].label} is on ` +
+        `${shared[0].owners.length}). A scan of those cannot say which parcel is meant and will be ` +
+        `refused — check them against the orders before packing.`,
+    });
+  }
+
   // Suffix matching is what lets a scanned label resolve without parsing its
   // routing prefix. It is only safe while no tracking number ends with another.
   const collisions = findSuffixCollisions(boxes.map((b) => b.tracking));
@@ -215,7 +240,21 @@ export function checkIntegrity(sales: readonly WatchSale[], boxes: readonly Box[
   // expect 22 digits throughout, and warned on every upload once TikTok began
   // sending small parcels with GOFO. A shape no carrier has used is most likely
   // a column that changed meaning, and worth checking before anybody packs.
-  const unfamiliar = boxes.filter((b) => trackingCarrier(b.tracking) === null);
+  /*
+    Per label, because a two-parcel order's cell holds two of them and the cell
+    as a whole is not a shape any carrier uses — see `trackingLabels`.
+
+    The cell around them is checked too. Reading labels out of it would
+    otherwise make the warning blind to the case it was written for: a column
+    that has changed meaning usually still has a recognisable number in it,
+    with something new alongside, and that is exactly what reading past the
+    surroundings would hide.
+  */
+  const unfamiliar = boxes.filter((b) => {
+    const labels = trackingLabels(b.tracking);
+    if (labels.length === 0 || labels.some((l) => trackingCarrier(l) === null)) return true;
+    return /[^\d\s(),]/i.test(b.tracking.replace(/GFUS/gi, ""));
+  });
   if (unfamiliar.length > 0) {
     flags.push({
       severity: "warning",

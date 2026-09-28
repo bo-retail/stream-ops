@@ -35,6 +35,51 @@ export function normaliseScan(raw: string): string {
   return raw.replace(/\D+/g, "");
 }
 
+/**
+ * The labels in one tracking cell. Usually one; sometimes two.
+ *
+ * An order that ships in two parcels gets two labels, and eBay writes both into
+ * the same cell:
+ *
+ *   (9434608106244595872438,9434608106245614277593)
+ *
+ * Stored whole, that is a label no parcel carries: the scan is 22 digits and
+ * the box is filed under 44 of them wrapped in punctuation, so neither label
+ * finds it. On 09/26 that was 90 of the day's 158 parcels — the floor scanning
+ * real labels and being told they were in no report at all.
+ *
+ * So a cell is read as the list it is. A shape nothing recognises is handed
+ * back whole rather than dropped, because being unable to match it is better
+ * than pretending there was no label.
+ */
+export function trackingLabels(raw: string): string[] {
+  /*
+    No upper bound on the digits.
+
+    A ceiling truncates rather than declines: capped at 34, a 35-digit value —
+    which is what an unrecognised box stores when a long scan is kept verbatim —
+    came back one digit short, and a number that is not its own label cannot
+    find its own box. What is left of it is a *prefix*, and the matching below
+    tests suffixes, so it matches nothing at all.
+  */
+  const found = raw.match(/GFUS\d{14}|\d{20,}/gi) ?? [];
+  if (found.length > 0) return found;
+  const trimmed = raw.trim();
+  return trimmed === "" ? [] : [trimmed];
+}
+
+/**
+ * What to show somebody holding the parcel.
+ *
+ * The raw cell of a two-parcel order is unreadable on a screen, and the packer
+ * only needs to recognise the one in her hand.
+ */
+export function describeTracking(raw: string): string {
+  const labels = trackingLabels(raw);
+  if (labels.length <= 1) return labels[0] ?? raw.trim();
+  return `${labels[0]} +${labels.length - 1} more`;
+}
+
 /** The carriers whose tracking numbers the exports have carried. */
 export type Carrier = "USPS" | "GOFO";
 
@@ -87,22 +132,66 @@ export function matchTracking(rawScan: string, known: Iterable<string>): Trackin
   const scan = normaliseScan(rawScan);
   if (scan === "") return { status: "unknown" };
 
-  const index = new Map<string, string>();
+  /*
+    Indexed by every label a cell holds, not by the cell.
+
+    A two-parcel order is one box wearing two labels, and whichever one is in
+    her hand has to find it. Two cells sharing a label would be a box that
+    cannot be told apart, so the index keeps every owner and the ambiguity is
+    reported rather than resolved by whichever was read last.
+  */
+  const index = new Map<string, Set<string>>();
   for (const original of known) {
-    index.set(normaliseScan(original), original);
+    for (const label of trackingLabels(original)) {
+      const digits = normaliseScan(label);
+      if (digits === "") continue;
+      const owners = index.get(digits) ?? new Set<string>();
+      owners.add(original);
+      index.set(digits, owners);
+    }
   }
+
+  const decide = (owners: Set<string>): TrackingMatch =>
+    owners.size === 1
+      ? { status: "matched", tracking: [...owners][0] }
+      : { status: "ambiguous", candidates: [...owners] };
 
   const exact = index.get(scan);
-  if (exact !== undefined) return { status: "matched", tracking: exact };
+  if (exact !== undefined) return decide(exact);
 
-  const candidates: string[] = [];
-  for (const [digits, original] of index) {
-    if (digits !== "" && scan.endsWith(digits)) candidates.push(original);
+  const candidates = new Set<string>();
+  for (const [digits, owners] of index) {
+    if (scan.endsWith(digits)) for (const owner of owners) candidates.add(owner);
   }
 
-  if (candidates.length === 1) return { status: "matched", tracking: candidates[0] };
-  if (candidates.length === 0) return { status: "unknown" };
-  return { status: "ambiguous", candidates };
+  if (candidates.size === 0) return { status: "unknown" };
+  return decide(candidates);
+}
+
+/**
+ * Labels that belong to more than one box.
+ *
+ * Its own kind of collision, and one that only exists now that a cell can hold
+ * several labels: the second parcel of a two-parcel order listed alone in an
+ * earlier report, or an order relabelled between two exports. A scan of that
+ * label cannot say which box is meant, so it is refused — and the packer is
+ * told to fetch somebody rather than left to guess. Worth knowing at import,
+ * before she is standing at the table with the parcel in her hand.
+ */
+export function findSharedLabels(known: Iterable<string>): { label: string; owners: string[] }[] {
+  const owners = new Map<string, Set<string>>();
+  for (const cell of known) {
+    for (const label of trackingLabels(cell)) {
+      const digits = normaliseScan(label);
+      if (digits === "") continue;
+      const set = owners.get(digits) ?? new Set<string>();
+      set.add(cell);
+      owners.set(digits, set);
+    }
+  }
+  return [...owners]
+    .filter(([, cells]) => cells.size > 1)
+    .map(([label, cells]) => ({ label, owners: [...cells] }));
 }
 
 /**
@@ -110,7 +199,8 @@ export function matchTracking(rawScan: string, known: Iterable<string>): Trackin
  * ambiguous. Run at import; expected to be empty forever.
  */
 export function findSuffixCollisions(known: Iterable<string>): [string, string][] {
-  const all = [...new Set([...known].map(normaliseScan))].filter((t) => t !== "");
+  const labels = [...known].flatMap(trackingLabels);
+  const all = [...new Set(labels.map(normaliseScan))].filter((t) => t !== "");
   const collisions: [string, string][] = [];
   for (const a of all) {
     for (const b of all) {

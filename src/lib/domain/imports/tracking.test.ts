@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  describeTracking,
+  findSharedLabels,
   findSuffixCollisions,
   looksLikeShippingLabel,
   matchTracking,
   normaliseScan,
   normaliseStockNumber,
   trackingCarrier,
+  trackingLabels,
 } from "./tracking";
 import { defaultShiftTag, parseMoney, parseShiftTag } from "./types";
 
@@ -186,5 +189,86 @@ describe("reading money as the exports write it", () => {
 
   it("returns zero rather than NaN on nonsense, so a total stays checkable", () => {
     expect(parseMoney("not a number")).toBe(0);
+  });
+});
+
+describe("an order that shipped in two parcels", () => {
+  /*
+    09/26: eBay wrote both labels into one cell for 90 of the day's 158
+    parcels, and neither label would open its box.
+  */
+  const cell = "(9434608106244595872438,9434608106245614277593)";
+
+  it("reads both labels out of the cell", () => {
+    expect(trackingLabels(cell)).toEqual([
+      "9434608106244595872438",
+      "9434608106245614277593",
+    ]);
+  });
+
+  it("leaves an ordinary cell alone", () => {
+    expect(trackingLabels("9434608106245591652376")).toEqual(["9434608106245591652376"]);
+    expect(trackingLabels("GFUS01073044073024")).toEqual(["GFUS01073044073024"]);
+    expect(trackingLabels("")).toEqual([]);
+  });
+
+  it("opens the box from either label", () => {
+    expect(matchTracking("9434608106244595872438", [cell])).toEqual({
+      status: "matched",
+      tracking: cell,
+    });
+    expect(matchTracking("9434608106245614277593", [cell])).toEqual({
+      status: "matched",
+      tracking: cell,
+    });
+  });
+
+  it("opens it from a scan carrying the routing prefix too", () => {
+    expect(matchTracking("4200104892034 9434608106245614277593", [cell])).toEqual({
+      status: "matched",
+      tracking: cell,
+    });
+  });
+
+  it("refuses when two orders somehow share a label", () => {
+    const other = "(9434608106245614277593,9434608106244595999999)";
+    const result = matchTracking("9434608106245614277593", [cell, other]);
+    expect(result.status).toBe("ambiguous");
+  });
+
+  it("counts both labels when looking for suffix collisions", () => {
+    // The short one is the tail of the long one, and both live inside cells.
+    const collisions = findSuffixCollisions(["(9434608106244595872438,12345678901234567890)", "7890"]);
+    expect(collisions).toContainEqual(["12345678901234567890", "7890"]);
+  });
+
+  it("shows the packer one label rather than the whole cell", () => {
+    expect(describeTracking(cell)).toBe("9434608106244595872438 +1 more");
+    expect(describeTracking("9434608106245591652376")).toBe("9434608106245591652376");
+  });
+});
+
+describe("a label that belongs to two boxes", () => {
+  it("is found at import, where the suffix check cannot see it", () => {
+    const shared = findSharedLabels([
+      "(9434608106244595872438,9434608106245614277593)",
+      "9434608106245614277593",
+    ]);
+    expect(shared).toHaveLength(1);
+    expect(shared[0].label).toBe("9434608106245614277593");
+    expect(shared[0].owners).toHaveLength(2);
+  });
+
+  it("says nothing about an ordinary day", () => {
+    expect(
+      findSharedLabels(["(9434608106244595872438,9434608106245614277593)", "9434608106245591652376"]),
+    ).toEqual([]);
+  });
+
+  it("keeps a long stored label whole, so it can find itself", () => {
+    // 35 digits: an unrecognised box keeps the whole scan, prefix and all.
+    const long = "42001048920349434608106245614277593";
+    expect(trackingLabels(long)).toEqual([long]);
+    expect(matchTracking(long, [long])).toEqual({ status: "matched", tracking: long });
   });
 });
