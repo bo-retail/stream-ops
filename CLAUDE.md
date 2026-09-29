@@ -15,9 +15,19 @@ The routine, every time:
 2. Hand the diff to a reviewer subagent: what the change is for, what it must
    not break, and where to look. Ask for real defects and failure scenarios,
    not style notes.
-3. Fix what it finds, or say plainly why not.
-4. Tell Samuel what it found and what you did about it, then give the push
-   steps.
+3. **Run the what-ifs.** The reviewer also lists the real situations the change
+   will meet on the floor — the ordinary day, and the awkward ones: a file
+   uploaded twice or corrected, a blank or mistyped value, Excel-damaged
+   numbers, two people at once, a scan that never came, a day with no shows,
+   the data already sitting in production. Each one is **run, not reasoned
+   about**: as a vitest case, or a step in a `scripts/check-*.mts` against the
+   development database. Write down, for each, what should happen and what did.
+   Any that fail get fixed, and every one stays in the tests so it runs on
+   every change after. For inventory, `C:\dev\inventory-demo\whatif.mjs` is
+   the list of situations to start from.
+4. Fix what the review and the what-ifs find, or say plainly why not.
+5. Tell Samuel what was found, which what-ifs were run and how each came out,
+   and what you did about it, then give the push steps.
 
 For something large or risky, `/code-review ultra` runs a deeper multi-agent
 review — but he has to start that one himself; suggest it, do not try to run it.

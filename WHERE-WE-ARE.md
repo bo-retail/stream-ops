@@ -131,8 +131,11 @@ Each of these cost a day or nearly did.
 2. Hand the diff to an independent reviewer subagent. **Every time** — it has
    found a real defect in every change so far, including two that would have
    stopped the floor.
-3. Fix what it finds, or say why not.
-4. Commit on `main` so there is one button for Samuel to press, tell him which
+3. Run the what-ifs: the real situations the change will meet, each actually
+   run as a test or check-script step, expected against actual, and kept in
+   the tests afterwards. See `CLAUDE.md` step 3.
+4. Fix what they find, or say why not.
+5. Commit on `main` so there is one button for Samuel to press, tell him which
    deployment title to watch for in Vercel, and whether the floor must refresh.
 
 **Never handle passwords or connection strings.** When a script needs production,
