@@ -166,7 +166,7 @@ check("one selling day", one.daysWithSales, 1);
 // a gap in the chart reads as a gap.
 const week = await getSalesInsights("2026-09-02", "2026-09-08");
 check("a week has seven points", week.daily.length, 7);
-check("six of them empty", week.daily.filter((d) => d.units === 0).length, 6);
+check("six of them empty", week.daily.filter((d) => d.watches + d.diamondPieces === 0).length, 6);
 check("but only one selling day counted", week.daysWithSales, 1);
 
 /* ------------------------------- the one that matters: a re-uploaded day */

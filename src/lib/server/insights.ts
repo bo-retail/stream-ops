@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { BUSINESS_SHORT } from "@/lib/domain/business";
+import type { Business } from "@/lib/domain/business";
 import { addDays, datesBetween, fromDbDate, toDbDate, todayISO } from "@/lib/domain/dates";
 import { change, hotThreshold, previousRange } from "@/lib/domain/insights";
 import type { Change } from "@/lib/domain/insights";
@@ -30,10 +31,20 @@ export interface Totals {
   discountCents: number;
 }
 
+/**
+ * One show day. Watches and diamonds are kept apart: a count that adds watches
+ * to diamond pieces is not a count of anything, and an average price over it
+ * describes neither (Flora, 09/28: 654 "watches" at $45.85, diamonds included).
+ * Only the revenue is also given together, for the chart of the whole business.
+ */
 export interface DayPoint {
   dateISO: DateISO;
+  /** Watches and diamonds together. */
   revenueCents: number;
-  units: number;
+  watchRevenueCents: number;
+  watches: number;
+  diamondRevenueCents: number;
+  diamondPieces: number;
 }
 
 export interface ShowBreakdown {
@@ -61,6 +72,7 @@ export interface SalesInsights {
   hasData: boolean;
   /** The most recent day anything has been loaded for, and its figures. */
   latestDay: DayPoint | null;
+  /** Watches only. Every "watches" and "average price" on the page reads this. */
   totals: Totals;
   changes: {
     revenue: Change;
@@ -68,6 +80,11 @@ export interface SalesInsights {
     avgPrice: Change;
     buyers: Change;
   };
+  /** Diamonds only, never folded into the watch figures above. */
+  diamonds: Totals;
+  diamondChanges: { revenue: Change; units: Change; avgPrice: Change };
+  /** Net revenue of both businesses together. */
+  revenueBothCents: number;
   daily: DayPoint[];
   byShow: ShowBreakdown[];
   byPlatform: ShowBreakdown[];
@@ -89,13 +106,21 @@ const EMPTY_TOTALS: Totals = {
   discountCents: 0,
 };
 
-/** Scalar totals for a set of uploads. */
-async function totalsFor(batchIds: string[]): Promise<Totals> {
-  if (batchIds.length === 0) return EMPTY_TOTALS;
+/**
+ * Scalar totals for a set of uploads, one set per business.
+ *
+ * Two queries whatever the number of businesses: the sums grouped by business,
+ * and the distinct buyers grouped by business and buyer.
+ */
+async function totalsByBusiness(batchIds: string[]): Promise<Record<Business, Totals>> {
+  const result: Record<Business, Totals> = { WATCH: EMPTY_TOTALS, DIAMOND: EMPTY_TOTALS };
+  if (batchIds.length === 0) return result;
+  const where = { batchId: { in: batchIds } };
 
   const [sums, buyers] = await Promise.all([
-    prisma.salesRecord.aggregate({
-      where: { batchId: { in: batchIds } },
+    prisma.salesRecord.groupBy({
+      by: ["business"],
+      where,
       _sum: {
         netItemPriceCents: true,
         shippingCents: true,
@@ -105,22 +130,23 @@ async function totalsFor(batchIds: string[]): Promise<Totals> {
         qty: true,
       },
     }),
-    prisma.salesRecord.groupBy({ by: ["buyer"], where: { batchId: { in: batchIds } } }),
+    prisma.salesRecord.groupBy({ by: ["business", "buyer"], where }),
   ]);
 
-  const revenueCents = sums._sum.netItemPriceCents ?? 0;
-  const units = sums._sum.qty ?? 0;
-
-  return {
-    revenueCents,
-    units,
-    buyers: buyers.length,
-    avgPriceCents: units === 0 ? 0 : Math.round(revenueCents / units),
-    shippingCents: sums._sum.shippingCents ?? 0,
-    collectedCents: sums._sum.orderTotalCents ?? 0,
-    discountCents:
-      (sums._sum.platformDiscountCents ?? 0) + (sums._sum.sellerDiscountCents ?? 0),
-  };
+  for (const row of sums) {
+    const revenueCents = row._sum.netItemPriceCents ?? 0;
+    const units = row._sum.qty ?? 0;
+    result[row.business] = {
+      revenueCents,
+      units,
+      buyers: buyers.filter((b) => b.business === row.business).length,
+      avgPriceCents: units === 0 ? 0 : Math.round(revenueCents / units),
+      shippingCents: row._sum.shippingCents ?? 0,
+      collectedCents: row._sum.orderTotalCents ?? 0,
+      discountCents: (row._sum.platformDiscountCents ?? 0) + (row._sum.sellerDiscountCents ?? 0),
+    };
+  }
+  return result;
 }
 
 function breakdown(
@@ -146,10 +172,19 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
     latestBatchIds(previous.from, previous.to),
   ]);
 
-  const [totals, previousTotals] = await Promise.all([
-    totalsFor(batchIds),
-    totalsFor(previousBatchIds),
+  const [current, previousAll] = await Promise.all([
+    totalsByBusiness(batchIds),
+    totalsByBusiness(previousBatchIds),
   ]);
+  const totals = current.WATCH;
+  const previousTotals = previousAll.WATCH;
+  const diamonds = current.DIAMOND;
+  const previousDiamonds = previousAll.DIAMOND;
+  const diamondChanges = {
+    revenue: change(diamonds.revenueCents, previousDiamonds.revenueCents),
+    units: change(diamonds.units, previousDiamonds.units),
+    avgPrice: change(diamonds.avgPriceCents, previousDiamonds.avgPriceCents),
+  };
 
   if (batchIds.length === 0) {
     return {
@@ -165,6 +200,9 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
         avgPrice: change(0, previousTotals.avgPriceCents),
         buyers: change(0, previousTotals.buyers),
       },
+      diamonds: EMPTY_TOTALS,
+      diamondChanges,
+      revenueBothCents: 0,
       daily: [],
       byShow: [],
       byPlatform: [],
@@ -179,7 +217,7 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
 
   const [byDate, byShowRows, byPlatformRows, byModel, allTimeModels] = await Promise.all([
     prisma.salesRecord.groupBy({
-      by: ["showDate"],
+      by: ["showDate", "business"],
       where,
       _sum: { netItemPriceCents: true, qty: true },
       orderBy: { showDate: "asc" },
@@ -194,9 +232,10 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
       where,
       _sum: { netItemPriceCents: true, qty: true },
     }),
+    // Best-selling watches. Diamond pieces are one-offs, not models to restock.
     prisma.salesRecord.groupBy({
       by: ["stockNumber"],
-      where,
+      where: { ...where, business: "WATCH" },
       _sum: { netItemPriceCents: true, qty: true },
       orderBy: { _sum: { qty: "desc" } },
       take: 12,
@@ -205,21 +244,42 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
     // because it had one good fortnight.
     prisma.salesRecord.groupBy({
       by: ["stockNumber"],
+      where: { business: "WATCH" },
       _sum: { qty: true },
     }),
   ]);
 
-  const daily: DayPoint[] = byDate.map((d) => ({
-    dateISO: fromDbDate(d.showDate),
-    revenueCents: d._sum.netItemPriceCents ?? 0,
-    units: d._sum.qty ?? 0,
-  }));
+  const emptyDay = (dateISO: DateISO): DayPoint => ({
+    dateISO,
+    revenueCents: 0,
+    watchRevenueCents: 0,
+    watches: 0,
+    diamondRevenueCents: 0,
+    diamondPieces: 0,
+  });
+  const salesByDate = new Map<DateISO, DayPoint>();
+  for (const d of byDate) {
+    const dateISO = fromDbDate(d.showDate);
+    const day = salesByDate.get(dateISO) ?? emptyDay(dateISO);
+    const revenue = d._sum.netItemPriceCents ?? 0;
+    const qty = d._sum.qty ?? 0;
+    day.revenueCents += revenue;
+    if (d.business === "DIAMOND") {
+      day.diamondRevenueCents += revenue;
+      day.diamondPieces += qty;
+    } else {
+      day.watchRevenueCents += revenue;
+      day.watches += qty;
+    }
+    salesByDate.set(dateISO, day);
+  }
+  const daily = [...salesByDate.values()].sort((a, b) => a.dateISO.localeCompare(b.dateISO));
 
   // Every day in the range, so a gap reads as a gap rather than closing up.
-  const salesByDate = new Map(daily.map((d) => [d.dateISO, d]));
   const filled: DayPoint[] = datesBetween(from, to).map(
-    (dateISO) => salesByDate.get(dateISO) ?? { dateISO, revenueCents: 0, units: 0 },
+    (dateISO) => salesByDate.get(dateISO) ?? emptyDay(dateISO),
   );
+  const revenueBothCents = totals.revenueCents + diamonds.revenueCents;
 
   /*
     Diamonds are never folded into a watch show's line.
@@ -237,7 +297,7 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
       revenueCents: r._sum.netItemPriceCents ?? 0,
       units: r._sum.qty ?? 0,
     })),
-    totals.revenueCents,
+    revenueBothCents,
   );
 
   const byPlatform = breakdown(
@@ -249,14 +309,16 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
         units: r._sum.qty ?? 0,
       };
     }),
-    totals.revenueCents,
+    revenueBothCents,
   );
 
   // Day against night, across both marketplaces. Read off the show name, which
-  // is where the AM/PM already lives.
+  // is where the AM/PM already lives. Diamonds get their own two lines, for the
+  // same reason as the shows above.
   const slots = new Map<string, { revenueCents: number; units: number }>();
   for (const row of byShowRows) {
-    const slot = row.show.trim().toUpperCase().endsWith("AM") ? "Day" : "Night";
+    const time = row.show.trim().toUpperCase().endsWith("AM") ? "Day" : "Night";
+    const slot = row.business === "WATCH" ? time : `${BUSINESS_SHORT[row.business]} ${time}`;
     const found = slots.get(slot) ?? { revenueCents: 0, units: 0 };
     found.revenueCents += row._sum.netItemPriceCents ?? 0;
     found.units += row._sum.qty ?? 0;
@@ -264,7 +326,7 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
   }
   const bySlot = breakdown(
     [...slots.entries()].map(([key, v]) => ({ key, ...v })),
-    totals.revenueCents,
+    revenueBothCents,
   );
 
   const allTime = new Map(allTimeModels.map((m) => [m.stockNumber, m._sum.qty ?? 0]));
@@ -299,6 +361,9 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
       avgPrice: change(totals.avgPriceCents, previousTotals.avgPriceCents),
       buyers: change(totals.buyers, previousTotals.buyers),
     },
+    diamonds,
+    diamondChanges,
+    revenueBothCents,
     daily: filled,
     byShow,
     byPlatform,
@@ -306,7 +371,7 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
     bestSellers,
     daysWithSales,
     revenuePerActiveDayCents:
-      daysWithSales === 0 ? 0 : Math.round(totals.revenueCents / daysWithSales),
+      daysWithSales === 0 ? 0 : Math.round(revenueBothCents / daysWithSales),
   };
 }
 
@@ -323,7 +388,9 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
 export interface SalesHeadline {
   from: DateISO;
   to: DateISO;
+  /** Watches and diamonds together. */
   revenueCents: number;
+  /** Watches only: a diamond piece is not a watch. */
   units: number;
   revenue: Change;
   unitsChange: Change;
@@ -342,14 +409,20 @@ export async function salesHeadline(days = 30): Promise<SalesHeadline> {
     latestBatchIds(from, to),
     latestBatchIds(previous.from, previous.to),
   ]);
-  const [now, before] = await Promise.all([totalsFor(ids), totalsFor(previousIds)]);
+  const [nowAll, beforeAll] = await Promise.all([totalsByBusiness(ids), totalsByBusiness(previousIds)]);
+  const now = nowAll.WATCH;
+  const before = beforeAll.WATCH;
+  const nowDiamonds = nowAll.DIAMOND;
+  const beforeDiamonds = beforeAll.DIAMOND;
+  const revenueNow = now.revenueCents + nowDiamonds.revenueCents;
+  const revenueBefore = before.revenueCents + beforeDiamonds.revenueCents;
 
   return {
     from,
     to,
-    revenueCents: now.revenueCents,
+    revenueCents: revenueNow,
     units: now.units,
-    revenue: change(now.revenueCents, before.revenueCents),
+    revenue: change(revenueNow, revenueBefore),
     unitsChange: change(now.units, before.units),
     hasData: ids.length > 0,
   };

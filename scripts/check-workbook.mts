@@ -101,23 +101,25 @@ const formulaAt = (address: string) => {
     : null;
 };
 
-check("watches sold is a formula, not a pasted number", formulaAt("B4")?.startsWith("COUNTIFS"), true);
-check("net revenue is a formula", formulaAt("G4")?.startsWith("SUMIFS"), true);
+check("a Watches section comes first", summary.getCell("A3").value, "Watches");
+check("watches sold is a formula, not a pasted number", formulaAt("B5")?.startsWith("COUNTIFS"), true);
+check("and it counts watches only", formulaAt("B5")?.includes("\"Watches\""), true);
+check("net revenue is a formula", formulaAt("G5")?.startsWith("SUMIFS"), true);
 
 // The earlier workbook rendered "87.000000000000043 buyers". Same formula,
 // rounded to what it is already counting.
-const buyers = formulaAt("C4");
+const buyers = formulaAt("C5");
 check("distinct buyers still uses SUMPRODUCT", buyers?.includes("SUMPRODUCT"), true);
 check("but rounded, so it cannot render as 87.000000000000043", buyers?.startsWith("ROUND("), true);
 
-const showNames = [4, 5, 6].map((r) => summary.getCell(`A${r}`).value);
+const showNames = [5, 6, 7].map((r) => summary.getCell(`A${r}`).value);
 check("one row per show", showNames, ["TikTok AM", "TikTok PM", "eBay PM"].sort());
-check("then an All shows row", summary.getCell("A7").value, "All shows");
-check("which sums the sheet rather than the rows above", formulaAt("G7")?.startsWith("SUM("), true);
+check("then an All watches row", summary.getCell("A8").value, "All watches");
+check("which sums the sheet rather than the rows above", formulaAt("G8")?.startsWith("SUMIFS("), true);
 
 const text = (row: number) => String(summary.getCell(`A${row}`).value ?? "");
 const commissionRow = [...Array(40).keys()]
-  .map((i) => i + 8)
+  .map((i) => i + 9)
   .find((r) => text(r).startsWith("Commission"));
 check("a commission table exists", commissionRow !== undefined, true);
 check(

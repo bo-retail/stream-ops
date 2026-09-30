@@ -181,7 +181,7 @@ export async function BossDashboard() {
         <Link href="/insights" className="mb-5 block">
           <div className="grid gap-3 sm:grid-cols-2">
             <Stat
-              label="Net revenue · last 30 days"
+              label="Net revenue, watches and diamonds · last 30 days"
               value={formatMoneyShort(sales.revenueCents)}
               tone={sales.revenue.direction === "up" ? "ok" : sales.revenue.direction === "down" ? "warn" : undefined}
               sub={`${formatChange(sales.revenue)} on the 30 days before`}

@@ -19,6 +19,9 @@ export const SERIES = {
   brand: "var(--color-brand-600, #3f49b8)",
   tiktok: "#0f172a",
   ebay: "#2563eb",
+  /** Diamonds, darker for the day show and TikTok, lighter for night and eBay. */
+  diamond: "#b45309",
+  diamondLight: "#f59e0b",
   muted: "var(--color-line-strong, #cbd2dd)",
 } as const;
 
@@ -193,6 +196,8 @@ export interface SplitSlice {
   value: number;
   units: number;
   color: string;
+  /** What one unit is called on this line. Watches unless said otherwise. */
+  unitWord?: { one: string; many: string };
 }
 
 /**
@@ -246,7 +251,7 @@ export function SplitBar({
               <span className="font-semibold text-ink">{format(s.value)}</span>
               <span className="text-ink-subtle">
                 {" "}
-                · {s.units} watch{s.units === 1 ? "" : "es"}
+                · {s.units} {s.units === 1 ? (s.unitWord?.one ?? "watch") : (s.unitWord?.many ?? "watches")}
               </span>
             </span>
           </li>

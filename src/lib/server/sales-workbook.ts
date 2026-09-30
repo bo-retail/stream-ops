@@ -19,6 +19,11 @@ import { latestBatchIds } from "./sales-data";
  * One day by default; `?from=&to=` gives a range, which adds a per-day table
  * beneath the main one — over a fortnight "which day was that" is the first
  * question anybody asks.
+ *
+ * Watches and diamonds are summed apart, never together. Both sell a "TikTok
+ * AM", so grouping by show name alone put a diamond show and a watch show on
+ * one row, and counted diamond pieces as watches. Every row on Sales says its
+ * business, and every figure on Summary filters on it.
  */
 
 const BRAND = "FF3F49B8";
@@ -26,6 +31,7 @@ const MONEY = '$#,##0.00;($#,##0.00);-';
 
 /** Sales sheet columns, in the order the earlier workbook used. */
 const SALES_COLUMNS: { header: string; width: number; money?: boolean }[] = [
+  { header: "Business", width: 10 },
   { header: "Platform", width: 10 },
   { header: "Show", width: 12 },
   { header: "Show Date", width: 12 },
@@ -55,18 +61,25 @@ const SALES_COLUMNS: { header: string; width: number; money?: boolean }[] = [
 
 /** Column letters on Sales, so the Summary formulas read as they did before. */
 const COL = {
-  show: "B",
-  buyer: "G",
-  unitPrice: "K",
-  platformDiscount: "L",
-  sellerDiscount: "M",
-  net: "N",
-  shipping: "O",
-  tax: "P",
-  total: "Q",
-  showDate: "C",
-  shiftTag: "D",
+  business: "A",
+  show: "C",
+  buyer: "H",
+  unitPrice: "L",
+  platformDiscount: "M",
+  sellerDiscount: "N",
+  net: "O",
+  shipping: "P",
+  tax: "Q",
+  total: "R",
+  showDate: "D",
+  shiftTag: "E",
 } as const;
+
+/** What the Business column says, and what one thing sold is called. */
+const BUSINESS_NAME = { WATCH: "Watches", DIAMOND: "Diamonds" } as const;
+const SOLD_HEADER = { WATCH: "Watches sold", DIAMOND: "Pieces sold" } as const;
+const NET_HEADER = { WATCH: "Watch net revenue", DIAMOND: "Diamond net revenue" } as const;
+type BusinessKey = keyof typeof BUSINESS_NAME;
 
 function styleHeader(row: ExcelJS.Row) {
   row.font = { name: "Arial", bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
@@ -80,7 +93,7 @@ const cents = (n: number) => Math.round(n) / 100;
 export interface SalesWorkbook {
   buffer: ArrayBuffer;
   filename: string;
-  /** How many paid watches went into it. */
+  /** How many paid sales rows went into it, watches and diamonds. */
   rows: number;
 }
 
@@ -141,6 +154,7 @@ export async function buildSalesWorkbook(
 
   for (const s of sales) {
     salesSheet.addRow([
+      BUSINESS_NAME[s.business],
       s.platform === "TIKTOK" ? "TikTok" : "eBay",
       s.show,
       fromDbDate(s.showDate),
@@ -196,10 +210,16 @@ export async function buildSalesWorkbook(
     "Paid orders only — unpaid and cancelled orders removed (see Exceptions). Every figure is a formula over the Sales sheet.";
   summary.getCell("A2").font = { name: "Arial", italic: true, size: 10, color: { argb: "FF5B6472" } };
 
-  const MAIN_HEADERS = [
-    "Show",
-    "Watches sold",
-    "Distinct buyers",
+  const MONEY_SUMS: [string, string][] = [
+    ["D", COL.unitPrice],
+    ["E", COL.platformDiscount],
+    ["F", COL.sellerDiscount],
+    ["G", COL.net],
+    ["H", COL.shipping],
+    ["I", COL.tax],
+    ["J", COL.total],
+  ];
+  const MONEY_HEADERS = [
     "Gross list price",
     "Platform discount",
     "Seller discount",
@@ -208,76 +228,96 @@ export async function buildSalesWorkbook(
     "Tax & fees collected",
     "Total collected from buyers",
   ];
-  summary.getRow(3).values = MAIN_HEADERS;
-  styleHeader(summary.getRow(3));
 
-  const shows = [...new Set(sales.map((s) => s.show))].sort();
+  /** A criteria pair for one business, for COUNTIFS and SUMIFS. */
+  const isBusiness = (b: BusinessKey) => `${range$(COL.business)},"${BUSINESS_NAME[b]}"`;
 
   /**
-   * One distinct buyer per show, as a formula.
+   * Distinct buyers, as a formula.
    *
    * The earlier workbook used the same SUMPRODUCT, which accumulates floating
    * point error and renders as `87.000000000000043 buyers`. The formula is the
-   * right shape; it just needs rounding to what it is already counting.
+   * right shape; it just needs rounding to what it is already counting. The
+   * conditions pick the rows to count; each buyer then counts once within them.
    */
-  const distinctBuyers = (showCell: string) =>
-    `ROUND(SUMPRODUCT((${range$(COL.show)}=${showCell})/COUNTIFS(${range$(COL.show)},${range$(COL.show)}&"",${range$(COL.buyer)},${range$(COL.buyer)}&"")),0)`;
-
-  let row = 4;
-  for (const show of shows) {
-    const r = row;
-    summary.getCell(`A${r}`).value = show;
-    summary.getCell(`B${r}`).value = { formula: `COUNTIFS(${range$(COL.show)},$A${r})` };
-    summary.getCell(`C${r}`).value = { formula: distinctBuyers(`$A${r}`) };
-    const sums: [string, string][] = [
-      ["D", COL.unitPrice],
-      ["E", COL.platformDiscount],
-      ["F", COL.sellerDiscount],
-      ["G", COL.net],
-      ["H", COL.shipping],
-      ["I", COL.tax],
-      ["J", COL.total],
-    ];
-    for (const [target, source] of sums) {
-      summary.getCell(`${target}${r}`).value = {
-        formula: `SUMIFS(${range$(source)},${range$(COL.show)},$A${r})`,
-      };
-      summary.getCell(`${target}${r}`).numFmt = MONEY;
-    }
-    row++;
-  }
-
-  // All shows: summed straight off the Sales sheet rather than off the rows
-  // above, so a show that somehow never made it into the list cannot be lost.
-  const totalRow = row;
-  summary.getCell(`A${totalRow}`).value = "All shows";
-  summary.getCell(`B${totalRow}`).value = { formula: `COUNTA(${range$(COL.show)})` };
-  /*
-    Distinct people, not the sum of the rows above it.
-
-    The per-show figures count a buyer once per show, which is right for a show
-    — and adding them up counts anybody who bought in two shows twice. On the
-    09/08 data that reads 235 against 219 real people. This counts the buyer
-    column alone, so the total means what the word means, and matches the
-    figure on Sales insights.
-  */
-  summary.getCell(`C${totalRow}`).value = {
-    formula: `ROUND(SUMPRODUCT((${range$(COL.buyer)}<>"")/COUNTIF(${range$(COL.buyer)},${range$(COL.buyer)}&"")),0)`,
+  const distinctBuyers = (conditions: { col: string; equals: string }[]) => {
+    const test = conditions.map((c) => `(${range$(c.col)}=${c.equals})`).join("*");
+    const same = conditions.map((c) => `${range$(c.col)},${range$(c.col)}&""`).join(",");
+    return `ROUND(SUMPRODUCT(${test ? test + "*" : ""}(${range$(COL.buyer)}<>"")/COUNTIFS(${same}${same ? "," : ""}${range$(COL.buyer)},${range$(COL.buyer)}&"")),0)`;
   };
-  for (const [target, source] of [
-    ["D", COL.unitPrice],
-    ["E", COL.platformDiscount],
-    ["F", COL.sellerDiscount],
-    ["G", COL.net],
-    ["H", COL.shipping],
-    ["I", COL.tax],
-    ["J", COL.total],
-  ] as [string, string][]) {
-    summary.getCell(`${target}${totalRow}`).value = { formula: `SUM(${range$(source)})` };
-    summary.getCell(`${target}${totalRow}`).numFmt = MONEY;
+
+  // A day whose every order was dropped still gets a watch section of zeros,
+  // as it always did, rather than a Summary with nothing on it.
+  const present = (["WATCH", "DIAMOND"] as const).filter((b) => sales.some((s) => s.business === b));
+  const businesses: BusinessKey[] = present.length > 0 ? [...present] : ["WATCH"];
+
+  let row = 3;
+  for (const b of businesses) {
+    const name = BUSINESS_NAME[b];
+    summary.getCell(`A${row}`).value = name;
+    summary.getCell(`A${row}`).font = { name: "Arial", bold: true, size: 12 };
+    row++;
+    summary.getRow(row).values = ["Show", SOLD_HEADER[b], "Distinct buyers", ...MONEY_HEADERS];
+    styleHeader(summary.getRow(row));
+    row++;
+
+    const shows = [...new Set(sales.filter((s) => s.business === b).map((s) => s.show))].sort();
+    for (const show of shows) {
+      const r = row;
+      summary.getCell(`A${r}`).value = show;
+      summary.getCell(`B${r}`).value = { formula: `COUNTIFS(${isBusiness(b)},${range$(COL.show)},$A${r})` };
+      summary.getCell(`C${r}`).value = {
+        formula: distinctBuyers([
+          { col: COL.business, equals: `"${name}"` },
+          { col: COL.show, equals: `$A${r}` },
+        ]),
+      };
+      for (const [target, source] of MONEY_SUMS) {
+        summary.getCell(`${target}${r}`).value = {
+          formula: `SUMIFS(${range$(source)},${isBusiness(b)},${range$(COL.show)},$A${r})`,
+        };
+        summary.getCell(`${target}${r}`).numFmt = MONEY;
+      }
+      row++;
+    }
+
+    // Summed straight off the Sales sheet rather than off the rows above, so a
+    // show that somehow never made it into the list cannot be lost. Distinct
+    // people, not the sum of the rows above: that counted anybody who bought
+    // in two shows twice (235 against 219 real people on 09/08).
+    const totalRow = row;
+    summary.getCell(`A${totalRow}`).value = `All ${name.toLowerCase()}`;
+    summary.getCell(`B${totalRow}`).value = { formula: `COUNTIFS(${isBusiness(b)})` };
+    summary.getCell(`C${totalRow}`).value = {
+      formula: distinctBuyers([{ col: COL.business, equals: `"${name}"` }]),
+    };
+    for (const [target, source] of MONEY_SUMS) {
+      summary.getCell(`${target}${totalRow}`).value = { formula: `SUMIFS(${range$(source)},${isBusiness(b)})` };
+      summary.getCell(`${target}${totalRow}`).numFmt = MONEY;
+    }
+    summary.getRow(totalRow).font = { name: "Arial", bold: true };
+    row = totalRow + 2;
   }
-  summary.getRow(totalRow).font = { name: "Arial", bold: true };
-  row = totalRow + 2;
+
+  // Money can be added across the two businesses; watches and pieces cannot,
+  // so the together row carries money and people only.
+  if (businesses.length > 1) {
+    summary.getCell(`A${row}`).value = "Both businesses together";
+    summary.getCell(`A${row}`).font = { name: "Arial", bold: true, size: 12 };
+    row++;
+    summary.getRow(row).values = ["", "", "Distinct buyers", ...MONEY_HEADERS];
+    styleHeader(summary.getRow(row));
+    row++;
+    summary.getCell(`A${row}`).value = "Watches and diamonds";
+    summary.getCell(`B${row}`).value = "not added";
+    summary.getCell(`C${row}`).value = { formula: distinctBuyers([]) };
+    for (const [target, source] of MONEY_SUMS) {
+      summary.getCell(`${target}${row}`).value = { formula: `SUM(${range$(source)})` };
+      summary.getCell(`${target}${row}`).numFmt = MONEY;
+    }
+    summary.getRow(row).font = { name: "Arial", bold: true };
+    row += 2;
+  }
 
   /* ------------------------------------------------- per day, for a range */
 
@@ -286,20 +326,25 @@ export async function buildSalesWorkbook(
     summary.getCell(`A${row}`).value = "By day";
     summary.getCell(`A${row}`).font = { name: "Arial", bold: true, size: 12 };
     row++;
-    summary.getRow(row).values = ["Show day", "Watches sold", "Net product revenue", "Total collected"];
+    const headers = ["Show day"];
+    for (const b of businesses) headers.push(SOLD_HEADER[b], NET_HEADER[b]);
+    headers.push("Total collected");
+    summary.getRow(row).values = headers;
     styleHeader(summary.getRow(row));
     row++;
     for (const day of days) {
       summary.getCell(`A${row}`).value = day;
-      summary.getCell(`B${row}`).value = { formula: `COUNTIFS(${range$(COL.showDate)},$A${row})` };
-      summary.getCell(`C${row}`).value = {
-        formula: `SUMIFS(${range$(COL.net)},${range$(COL.showDate)},$A${row})`,
-      };
-      summary.getCell(`D${row}`).value = {
-        formula: `SUMIFS(${range$(COL.total)},${range$(COL.showDate)},$A${row})`,
-      };
-      summary.getCell(`C${row}`).numFmt = MONEY;
-      summary.getCell(`D${row}`).numFmt = MONEY;
+      let col = 2;
+      for (const b of businesses) {
+        const count = summary.getCell(row, col++);
+        count.value = { formula: `COUNTIFS(${isBusiness(b)},${range$(COL.showDate)},$A${row})` };
+        const net = summary.getCell(row, col++);
+        net.value = { formula: `SUMIFS(${range$(COL.net)},${isBusiness(b)},${range$(COL.showDate)},$A${row})` };
+        net.numFmt = MONEY;
+      }
+      const total = summary.getCell(row, col);
+      total.value = { formula: `SUMIFS(${range$(COL.total)},${range$(COL.showDate)},$A${row})` };
+      total.numFmt = MONEY;
       row++;
     }
     row++;
@@ -315,22 +360,33 @@ export async function buildSalesWorkbook(
     "Commission — the Show column is who is paid; the Shift tag is which show the item was listed for";
   summary.getCell(`A${row}`).font = { name: "Arial", bold: true, size: 12 };
   row++;
-  summary.getRow(row).values = ["Show", "Shift tag on item", "Watches sold", "Net product revenue"];
+  summary.getRow(row).values = ["Show", "Shift tag on item", "Business", "Sold", "Net product revenue"];
   styleHeader(summary.getRow(row));
   row++;
 
-  const pairs = [...new Set(sales.map((s) => `${s.show} ${s.shiftTag}`))].sort();
-  for (const pair of pairs) {
-    const [show, tag] = pair.split(" ");
-    summary.getCell(`A${row}`).value = show;
-    summary.getCell(`B${row}`).value = tag;
-    summary.getCell(`C${row}`).value = {
-      formula: `COUNTIFS(${range$(COL.show)},$A${row},${range$(COL.shiftTag)},$B${row})`,
-    };
+  // Kept as three parts, never joined into one string and split again: show
+  // names have spaces in them ("TikTok AM"), and splitting on a space used to
+  // put "AM" in the shift tag column and zero in every count.
+  const groups = new Map<string, { show: string; tag: string; business: BusinessKey }>();
+  for (const s of sales) {
+    groups.set(JSON.stringify([s.business, s.show, s.shiftTag]), { show: s.show, tag: s.shiftTag, business: s.business });
+  }
+  // Watches first, as on the rest of Summary.
+  const rank = { WATCH: 0, DIAMOND: 1 } as const;
+  const ordered = [...groups.values()].sort(
+    (a, b) => rank[a.business] - rank[b.business] || a.show.localeCompare(b.show) || a.tag.localeCompare(b.tag),
+  );
+  for (const g of ordered) {
+    summary.getCell(`A${row}`).value = g.show;
+    summary.getCell(`B${row}`).value = g.tag;
+    summary.getCell(`C${row}`).value = BUSINESS_NAME[g.business];
     summary.getCell(`D${row}`).value = {
-      formula: `SUMIFS(${range$(COL.net)},${range$(COL.show)},$A${row},${range$(COL.shiftTag)},$B${row})`,
+      formula: `COUNTIFS(${range$(COL.business)},$C${row},${range$(COL.show)},$A${row},${range$(COL.shiftTag)},$B${row})`,
     };
-    summary.getCell(`D${row}`).numFmt = MONEY;
+    summary.getCell(`E${row}`).value = {
+      formula: `SUMIFS(${range$(COL.net)},${range$(COL.business)},$C${row},${range$(COL.show)},$A${row},${range$(COL.shiftTag)},$B${row})`,
+    };
+    summary.getCell(`E${row}`).numFmt = MONEY;
     row++;
   }
 

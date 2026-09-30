@@ -13,6 +13,7 @@ import {
 } from "@/components/ui";
 import { DailyBars, MiniBar, SERIES, SplitBar } from "@/components/charts";
 import { requireBoss } from "@/lib/auth/guards";
+import { ITEM_WORD } from "@/lib/domain/business";
 import { diffDays, formatDate, formatDateRange, isDateISO } from "@/lib/domain/dates";
 import { formatChange, formatMoney, formatMoneyShort } from "@/lib/domain/insights";
 import type { Change } from "@/lib/domain/insights";
@@ -122,22 +123,33 @@ export default async function InsightsPage({
   );
 
   const insights = await getSalesInsights(range.from, range.to);
-  const { totals, changes } = insights;
+  const { totals, changes, diamonds, diamondChanges } = insights;
+  // Diamonds are shown beside the watches, never added into them: a watch
+  // count with diamond pieces in it makes the average price describe neither.
+  const hasDiamonds =
+    diamonds.units > 0 || diamonds.revenueCents !== 0 || insights.daily.some((d) => d.diamondPieces > 0);
 
   const lengthDays = diffDays(range.from, range.to) + 1;
   const oneDay = lengthDays === 1;
 
+  /** A line in a split: diamond lines are named "Diamond …" (see insights.ts). */
+  const isDiamond = (key: string) => key.startsWith("Diamond");
   const colourFor = (key: string) =>
-    key.toLowerCase().startsWith("tiktok")
-      ? SERIES.tiktok
-      : key.toLowerCase().startsWith("ebay")
-        ? SERIES.ebay
-        : key === "Day"
-          ? SERIES.brand
-          : SERIES.tiktok;
+    isDiamond(key)
+      ? key.endsWith("Day") || key.toLowerCase().includes("tiktok")
+        ? SERIES.diamond
+        : SERIES.diamondLight
+      : key.toLowerCase().includes("tiktok")
+        ? SERIES.tiktok
+        : key.toLowerCase().includes("ebay")
+          ? SERIES.ebay
+          : key.endsWith("Day")
+            ? SERIES.brand
+            : SERIES.tiktok;
+  const unitWordFor = (key: string) => (isDiamond(key) ? ITEM_WORD.DIAMOND : ITEM_WORD.WATCH);
 
   const topUnits = insights.bestSellers[0]?.units ?? 0;
-  const topDay = Math.max(...insights.daily.map((d) => d.revenueCents), 0);
+  const topDay = Math.max(...insights.daily.map((d) => d.watchRevenueCents), 0);
 
   return (
     <>
@@ -243,7 +255,7 @@ export default async function InsightsPage({
           {/* ------------------------------------------------ 1. the headline */}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Headline
-              label="Net revenue"
+              label={hasDiamonds ? "Watch revenue" : "Net revenue"}
               value={formatMoneyShort(totals.revenueCents)}
               change={changes.revenue}
               format={formatMoneyShort}
@@ -255,26 +267,69 @@ export default async function InsightsPage({
               format={(n) => String(n)}
             />
             <Headline
-              label="Average price"
+              label="Average watch price"
               value={formatMoney(totals.avgPriceCents)}
               change={changes.avgPrice}
               format={formatMoney}
             />
             <Headline
-              label="Distinct buyers"
+              label={hasDiamonds ? "Watch buyers" : "Distinct buyers"}
               value={String(totals.buyers)}
               change={changes.buyers}
               format={(n) => String(n)}
             />
           </div>
 
+          {hasDiamonds ? (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Headline
+                label="Diamond revenue"
+                value={formatMoneyShort(diamonds.revenueCents)}
+                change={diamondChanges.revenue}
+                format={formatMoneyShort}
+              />
+              <Headline
+                label="Diamond pieces sold"
+                value={String(diamonds.units)}
+                change={diamondChanges.units}
+                format={(n) => String(n)}
+              />
+              <Headline
+                label="Average diamond price"
+                value={formatMoney(diamonds.avgPriceCents)}
+                change={diamondChanges.avgPrice}
+                format={formatMoney}
+              />
+              <Card className="p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-ink-subtle">
+                  Both businesses
+                </p>
+                <p className="tabular mt-1.5 text-3xl font-semibold tracking-tight text-ink">
+                  {formatMoneyShort(insights.revenueBothCents)}
+                </p>
+                <p className="mt-2.5 text-xs text-ink-subtle">Net revenue, watches and diamonds together</p>
+              </Card>
+            </div>
+          ) : null}
+
           {insights.latestDay ? (
             <div className="rounded-[var(--radius-card)] border border-line bg-surface px-4 py-3 text-sm text-ink-muted">
               <strong className="font-semibold text-ink">Most recent day loaded:</strong>{" "}
               {formatDate(insights.latestDay.dateISO, "long")} —{" "}
-              <span className="tabular">{formatMoney(insights.latestDay.revenueCents)}</span> from{" "}
-              <span className="tabular">{insights.latestDay.units}</span> watches. Sales arrive the
-              morning after a show, so today&rsquo;s are not in yet.
+              {insights.latestDay.watches > 0 || insights.latestDay.diamondPieces === 0 ? (
+                <>
+                  <span className="tabular">{formatMoney(insights.latestDay.watchRevenueCents)}</span> from{" "}
+                  <span className="tabular">{insights.latestDay.watches}</span> watches
+                </>
+              ) : null}
+              {insights.latestDay.watches > 0 && insights.latestDay.diamondPieces > 0 ? ", and " : null}
+              {insights.latestDay.diamondPieces > 0 ? (
+                <>
+                  <span className="tabular">{formatMoney(insights.latestDay.diamondRevenueCents)}</span> from{" "}
+                  <span className="tabular">{insights.latestDay.diamondPieces}</span> diamond pieces
+                </>
+              ) : null}
+              . Sales arrive the morning after a show, so today&rsquo;s are not in yet.
             </div>
           ) : null}
 
@@ -285,7 +340,7 @@ export default async function InsightsPage({
               <Card>
                 <CardHeader
                   title="Revenue by day"
-                  description={`${insights.daysWithSales} day${insights.daysWithSales === 1 ? "" : "s"} with sales · ${formatMoney(insights.revenuePerActiveDayCents)} on an average selling day`}
+                  description={`${hasDiamonds ? "Watches and diamonds together · " : ""}${insights.daysWithSales} day${insights.daysWithSales === 1 ? "" : "s"} with sales · ${formatMoney(insights.revenuePerActiveDayCents)} on an average selling day`}
                 />
                 <div className="p-4 pt-3">
                   <DailyBars
@@ -312,6 +367,7 @@ export default async function InsightsPage({
                     value: p.revenueCents,
                     units: p.units,
                     color: colourFor(p.key),
+                    unitWord: unitWordFor(p.key),
                   }))}
                   format={formatMoney}
                 />
@@ -321,7 +377,7 @@ export default async function InsightsPage({
             <Card>
               <CardHeader
                 title="Day against night"
-                description="Both marketplaces together. This is the one that moves people around a rota."
+                description={hasDiamonds ? "Both marketplaces together, diamonds on their own lines. This is the one that moves people around a rota." : "Both marketplaces together. This is the one that moves people around a rota."}
               />
               <div className="p-4 pt-3">
                 <SplitBar
@@ -329,7 +385,8 @@ export default async function InsightsPage({
                     label: `${s.key} shows`,
                     value: s.revenueCents,
                     units: s.units,
-                    color: s.key === "Day" ? SERIES.brand : SERIES.tiktok,
+                    color: colourFor(s.key),
+                    unitWord: unitWordFor(s.key),
                   }))}
                   format={formatMoney}
                 />
@@ -347,7 +404,7 @@ export default async function InsightsPage({
                 <tr>
                   <Th>Show</Th>
                   <Th>Net revenue</Th>
-                  <Th>Watches</Th>
+                  <Th>{hasDiamonds ? "Watches / pieces" : "Watches"}</Th>
                   <Th>Average price</Th>
                   <Th>Share</Th>
                 </tr>
@@ -356,7 +413,7 @@ export default async function InsightsPage({
                 {insights.byShow.map((s) => (
                   <tr key={s.key}>
                     <Td className="font-medium">
-                      <Badge tone={s.key.toLowerCase().startsWith("tiktok") ? "tiktok" : "ebay"}>
+                      <Badge tone={s.key.toLowerCase().includes("tiktok") ? "tiktok" : "ebay"}>
                         {s.key}
                       </Badge>
                     </Td>
@@ -385,7 +442,7 @@ export default async function InsightsPage({
           <SectionTitle>What sells</SectionTitle>
           <Card>
             <CardHeader
-              title="Best sellers"
+              title={hasDiamonds ? "Best-selling watches" : "Best sellers"}
               description="Most units in this period. 🔥 means it keeps selling — it is in the top tenth by units across everything ever loaded, so it is worth restocking."
             />
             {insights.bestSellers.length === 0 ? (
@@ -444,30 +501,50 @@ export default async function InsightsPage({
                   <thead>
                     <tr>
                       <Th>Show day</Th>
-                      <Th>Net revenue</Th>
+                      <Th>{hasDiamonds ? "Watch revenue" : "Net revenue"}</Th>
                       <Th>Watches</Th>
-                      <Th>Average price</Th>
+                      <Th>Average watch price</Th>
+                      {hasDiamonds ? (
+                        <>
+                          <Th>Diamond revenue</Th>
+                          <Th>Pieces</Th>
+                          <Th>Average diamond price</Th>
+                        </>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
                     {[...insights.daily]
                       .reverse()
-                      .filter((d) => d.units > 0)
+                      .filter((d) => d.watches + d.diamondPieces > 0)
                       .map((d) => (
                         <tr key={d.dateISO}>
                           <Td className="whitespace-nowrap font-medium">{formatDate(d.dateISO)}</Td>
                           <Td>
                             <span className="flex items-center gap-2.5">
                               <span className="tabular shrink-0 font-semibold">
-                                {formatMoney(d.revenueCents)}
+                                {formatMoney(d.watchRevenueCents)}
                               </span>
-                              <MiniBar value={d.revenueCents} max={topDay} />
+                              <MiniBar value={d.watchRevenueCents} max={topDay} />
                             </span>
                           </Td>
-                          <Td className="tabular">{d.units}</Td>
+                          <Td className="tabular">{d.watches}</Td>
                           <Td className="tabular text-ink-muted">
-                            {formatMoney(d.units === 0 ? 0 : Math.round(d.revenueCents / d.units))}
+                            {d.watches === 0 ? "—" : formatMoney(Math.round(d.watchRevenueCents / d.watches))}
                           </Td>
+                          {hasDiamonds ? (
+                            <>
+                              <Td className="tabular font-semibold">
+                                {d.diamondPieces === 0 ? "—" : formatMoney(d.diamondRevenueCents)}
+                              </Td>
+                              <Td className="tabular">{d.diamondPieces}</Td>
+                              <Td className="tabular text-ink-muted">
+                                {d.diamondPieces === 0
+                                  ? "—"
+                                  : formatMoney(Math.round(d.diamondRevenueCents / d.diamondPieces))}
+                              </Td>
+                            </>
+                          ) : null}
                         </tr>
                       ))}
                   </tbody>
@@ -479,7 +556,8 @@ export default async function InsightsPage({
           <p className="text-xs text-ink-subtle">
             Net revenue is the price after both discounts — the headline figure in the master
             specification. Shipping and tax are carried separately and are not in it. Where a day
-            was uploaded more than once, only the most recent upload counts.
+            was uploaded more than once, only the most recent upload counts. Watches and diamonds
+            are counted and averaged separately: a diamond piece is never counted as a watch.
           </p>
         </div>
       )}
