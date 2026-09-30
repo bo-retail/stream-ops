@@ -6,9 +6,77 @@ new session can pick this up without the conversation that produced it.
 Read `CLAUDE.md` first (how work is done here). `WHERE-WE-ARE.md` covers the rest
 of the project; this file is inventory only.
 
-**Status on 28 September 2026: nothing has been built yet.** Three rounds of
-questions have gone to Daniel, two are answered, the third is with him. The
-design below is settled enough to start steps 1–3 whenever he replies.
+**Status on 30 September 2026: nothing built yet; building starts 1 October.**
+Daniel has answered five rounds. Sections 1–8 below are the design as of 28
+September; **section 0 supersedes them where they differ.** The full working model
+of the design is the local demo at `C:\dev\inventory-demo` (`node serve.mjs`,
+localhost:4321): its `whatif.mjs` lists 119 situations and how each is handled.
+
+---
+
+## 0. What changed on 29–30 September, and the rules for building
+
+### Decisions since round three
+- **New models come from Daniel's offer.** Uploading an offer creates the models
+  he ordered (a quantity in `Dani`) that are not yet known, inactive. The shipping
+  directors (admins, Claudia, Andres) complete them on a product details sheet
+  (description, TP, TikTok weight and box, eBay profile, UPC). Gladys's count makes
+  them active. The shipping list is compared with the offer on price and quantity
+  ("still to come").
+- **Sold, then sent.** A paid report line makes the watch "sold, waiting to ship"
+  (no longer available, still in the building). The packing scan must match the
+  report's `model #`; a wrong watch is refused (the packer's mistake; stock does not
+  move). A match sends it, and only then does it leave stock. Orders unsent at the
+  end of the next day are a warning.
+- `model #` is the column name. Every random-pull line has it, and an in-app screen
+  is offered too (pending round 6).
+- Each watch runs at a **$1 start or a set price** (set price when TP > $120),
+  saved per show. Slow movers only count shows where the watch was run.
+- A slightly damaged return always goes to random pulls. No lending, only
+  giveaways. A platform only refunds once the watch is back. Gladys checks the
+  sample trays each morning. Non-watch items are counted. An unknown watch at a
+  count is flagged, with options. Bundles come later. UPC is yes.
+- The count sheet has **no cost**: cost lives in the master, and only shipments and
+  the cost correction template change it.
+- The count and the first real shipment come right before launch ("we are starting
+  fresh"). Still to receive: the "Correct eBay upload", "TT Upload" and "TT
+  Diamonds Upload" templates, and one real report with `model #`.
+- **Round 6** (`Downloads\Inventory - last decisions (round 6).docx`) holds
+  the last decisions, each with a recommended default. We build on those
+  defaults and change any that Daniel answers differently.
+
+### Build rules, from the first line of code
+1. **Stock history is append-only.** No hard deletes, and no `onDelete: Cascade`
+   into it from ImportBatch, Release, Show or anything else (the 09/22 incident).
+   Undo writes reversing entries. It is blocked, with the list shown, once a
+   dependent box has been sent.
+2. **No doubles.** One deduction per order line, enforced by a unique key. Each
+   scan carries its own id, so a retry does nothing twice. Uploads are locked per
+   (business, date, platform, slot). One shared function decides which upload is
+   current.
+3. **Watches only.** Every inventory query filters to watches. Diamond packing
+   (`packPlaceholder` is shared) behaves exactly as today, and
+   `check-placeholder-packing` stays green.
+4. **Scans never move stock on their own.** Reports sell. The packing scan sends,
+   and only when it matches. An unrecognised or "Pack it anyway" box is matched to
+   its sale by tracking number on upload. Note that `imports.ts` only updates
+   *open* boxes today, so a closed unrecognised box needs explicit matching.
+   "Mark day sent" refuses while there are unmatched boxes.
+5. **Time:** store instants in UTC. The business day comes from the business-zone
+   helper, never from UTC midnight.
+6. **A balance table updated in the same transaction as the ledger,** with a
+   nightly check that they agree. Snapshot the cost on every sale.
+7. **Per-person permissions:** stock changes by Gladys, Claudia and Daniel;
+   product details and the eBay selection by the shipping directors. Log
+   everything to AuditLog.
+8. **Test from the real files:** the 09.19 offer (427 lines, a duplicate
+   "Invicta Model" column, "Distriutor cost", #N/A), the 9.16 shipping list (PO is
+   free text), and a real report with `model #`. Plus what-if tests per the review
+   rule in `CLAUDE.md`.
+9. **Tolerate old rows:** boxes and sales from before launch behave as today.
+   Deploy outside packing and upload hours, and tell the floor to refresh.
+10. **Backups:** make a Neon branch at launch, and a daily export of balances and
+    the ledger after it.
 
 ---
 
