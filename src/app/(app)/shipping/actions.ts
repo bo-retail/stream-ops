@@ -11,6 +11,7 @@ import {
   overrideItem,
   packItem,
   sealBox,
+  undoAutoClose,
   unsealBox,
 } from "@/lib/server/packing";
 import type { ScanOutcome } from "@/lib/server/packing";
@@ -57,12 +58,29 @@ export async function startUnknownBox(rawScan: string): Promise<ScanOutcome> {
 }
 
 export async function scanItem(packageId: string, rawScan: string): Promise<ScanOutcome> {
+  let user;
   try {
-    const user = await requireShippingOrThrow();
-    return await packItem(user.id, packageId, rawScan);
+    user = await requireShippingOrThrow();
   } catch {
     return { kind: "error", message: NOT_SHIPPING };
   }
+  const outcome = await packItem(user.id, packageId, rawScan);
+  // A scan can close the box now, and every list of the day's boxes shows that.
+  if (outcome.kind === "box" && outcome.autoClosed) refresh();
+  return outcome;
+}
+
+/** The packer taking back a box that just closed itself. See `undoAutoClose`. */
+export async function undoClose(packageId: string): Promise<ScanOutcome> {
+  let user;
+  try {
+    user = await requireShippingOrThrow();
+  } catch {
+    return { kind: "error", message: NOT_SHIPPING };
+  }
+  const outcome = await undoAutoClose(user.id, packageId);
+  if (outcome.kind === "box") refresh();
+  return outcome;
 }
 
 export async function addAnyway(packageId: string, stockNumber: string): Promise<ScanOutcome> {

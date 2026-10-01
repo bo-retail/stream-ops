@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, PackageCheck, ScanLine, TriangleAlert, X } from "lucide-react";
+import { Check, PackageCheck, RotateCcw, ScanLine, TriangleAlert, X } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
 import { ITEM_WORD, items } from "@/lib/domain/business";
+import { normaliseStockNumber } from "@/lib/domain/imports/tracking";
 import { PLATFORM_SHORT } from "@/lib/domain/types";
-import { addAnyway, closeBox, scanItem, scanLabel, startUnknownBox } from "./actions";
+import { addAnyway, closeBox, scanItem, scanLabel, startUnknownBox, undoClose } from "./actions";
 import type { PackingBoxView, ScanOutcome } from "@/lib/server/packing";
 
 /**
@@ -47,6 +48,9 @@ function withTimeout<T>(work: Promise<T>): Promise<T> {
   return Promise.race([work, expiry]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
+/** How long a box that closed itself can be taken back from this screen. */
+const UNDO_MS = 3_000;
+
 const TONE_STYLES: Record<Tone, string> = {
   ok: "border-ok-200 bg-ok-50 text-ok-700",
   warn: "border-warn-200 bg-warn-50 text-warn-700",
@@ -78,8 +82,37 @@ export function ScanClient() {
   const boxRef = useRef<PackingBoxView | null>(null);
   function show(next: PackingBoxView | null) {
     boxRef.current = next;
+    if (next) justClosed.current = null;
     setBox(next);
   }
+
+  /*
+    The box that just closed itself, until the next box opens.
+
+    For one thing only: the scanner reading the last watch twice. That second
+    read is one of this box's own watches, so it is sent to this box and
+    answered "already in it" — rather than sent on as a shipping label and
+    refused as "not a label". Anything else after the close is what it always
+    was, the next label (or a stray scan to be told so), and goes as one.
+  */
+  const justClosed = useRef<PackingBoxView | null>(null);
+  const isOneOf = (closed: PackingBoxView, value: string) => {
+    const scanned = normaliseStockNumber(value);
+    return closed.items.some((i) => i.stockNumber === scanned || i.pieces.includes(scanned));
+  };
+
+  /*
+    Undo, offered for a few seconds after a box closes itself.
+
+    It never holds her up. The input stays live and the next label opens the
+    next box as usual; the offer simply goes away after `UNDO_MS`.
+  */
+  const [undo, setUndo] = useState<{ boxId: string; tracking: string } | null>(null);
+  useEffect(() => {
+    if (!undo) return;
+    const timer = setTimeout(() => setUndo(null), UNDO_MS);
+    return () => clearTimeout(timer);
+  }, [undo]);
 
   /*
     One scan at a time, in the order they were scanned, and none of them lost.
@@ -179,6 +212,20 @@ export function ScanClient() {
           go of here, and the confirmation says what was closed so nothing is
           lost by the card disappearing.
         */
+        if (outcome.box.status !== "OPEN" && outcome.autoClosed) {
+          show(null);
+          setUnknownLabel(null);
+          justClosed.current = outcome.box;
+          setUndo({ boxId: outcome.box.id, tracking: outcome.box.tracking });
+          setStatus({
+            tone: "ok",
+            text:
+              `${outcome.message ?? "Complete — closed."} ` +
+              `${items(outcome.box.business, outcome.box.totalScanned)} in ${outcome.box.tracking}. ` +
+              `Scan the next label.`,
+          });
+          break;
+        }
         if (outcome.box.status !== "OPEN") {
           show(null);
           setUnknownLabel(null);
@@ -214,6 +261,13 @@ export function ScanClient() {
         setStatus(outcome.message ? { tone: "ok", text: outcome.message } : null);
         break;
       case "alreadyPacked":
+        if (justClosed.current?.id === outcome.box.id) {
+          setStatus({
+            tone: "info",
+            text: `That is already in ${outcome.box.tracking}, which closed complete. Scan the next label.`,
+          });
+          break;
+        }
         show(null);
         setUnknownLabel(null);
         setStatus({
@@ -223,6 +277,7 @@ export function ScanClient() {
         break;
       case "unknownLabel":
         show(null);
+        justClosed.current = null;
         setUnknownLabel(outcome.tracking);
         setStatus({ tone: "warn", text: "That label is not in any uploaded report." });
         break;
@@ -259,7 +314,10 @@ export function ScanClient() {
     // ahead of it in the queue may be the label that opens the box it belongs in.
     enqueue(() => {
       const open = boxRef.current;
-      return open ? scanItem(open.id, value) : scanLabel(value);
+      if (open) return scanItem(open.id, value);
+      const closed = justClosed.current;
+      if (closed && isOneOf(closed, value)) return scanItem(closed.id, value);
+      return scanLabel(value);
     });
   }
 
@@ -403,6 +461,36 @@ export function ScanClient() {
                 </Button>
               </div>
             ) : null}
+          </div>
+        ) : null}
+
+        {undo ? (
+          <div className="mt-2 flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                const target = undo;
+                setUndo(null);
+                run(async () => {
+                  // Whatever she had opened since is put down, not lost: it
+                  // stays open and its label picks it up again.
+                  const putDown =
+                    boxRef.current && boxRef.current.id !== target.boxId ? boxRef.current.tracking : null;
+                  const outcome = await undoClose(target.boxId);
+                  return outcome.kind === "box" && putDown
+                    ? {
+                        ...outcome,
+                        message: `${outcome.message} ${putDown} was put down — scan its label to pick it up again.`,
+                      }
+                    : outcome;
+                });
+              }}
+            >
+              <RotateCcw className="h-4 w-4" aria-hidden />
+              Undo — reopen {undo.tracking.slice(-6)}
+            </Button>
           </div>
         ) : null}
 
@@ -566,7 +654,9 @@ export function ScanClient() {
                   <span className="text-xs text-ink-subtle">
                     {over
                       ? "Something was added that is not on the report."
-                      : `${box.totalExpected - box.totalScanned} still to go in.`}
+                      : box.isUnrecognised
+                        ? `${box.totalExpected - box.totalScanned} still to go in.`
+                        : `${box.totalExpected - box.totalScanned} still to go in — it closes by itself after the last one.`}
                   </span>
                 ) : null}
               </div>

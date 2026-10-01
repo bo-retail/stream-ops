@@ -33,7 +33,20 @@ import { toDbDate } from "../src/lib/domain/dates";
 import { ebayReport, tiktokReport } from "../src/lib/domain/imports/synthetic-exports";
 import type { TiktokOptions } from "../src/lib/domain/imports/synthetic-exports";
 import { runImport } from "../src/lib/server/imports";
-import { openBoxByScan, overrideItem, packItem } from "../src/lib/server/packing";
+import { openBoxByScan, overrideItem, packItem, undoAutoClose } from "../src/lib/server/packing";
+
+/*
+  Since 10/01 the scan that completes a box closes it, and a closed box is never
+  touched by an upload. The placeholder cases below are about a box that is
+  still open when the corrected report arrives, so after the last piece the
+  packer presses Undo — the one way a complete box is still open on the floor.
+*/
+async function keepOpen(userId: string, packageId: string) {
+  const undone = await undoAutoClose(userId, packageId);
+  if (undone.kind !== "box" || undone.box.status !== "OPEN") {
+    throw new Error("expected the box to have closed itself and be undoable");
+  }
+}
 
 assertDevDatabase("check-box-ownership.mts");
 
@@ -256,6 +269,7 @@ try {
   const pId = pBox.kind === "box" ? pBox.box.id : "";
   await packItem(boss.id, pId, "S69001");
   await packItem(boss.id, pId, "S69002");
+  await keepOpen(boss.id, pId);
   check("two pieces recorded against the placeholder", (await box(pLabel))?.items, [
     { stockNumber: lgd, expectedQty: 2, scannedQty: 2 },
   ]);
@@ -318,6 +332,7 @@ try {
     // The piece Dani will name last is the one packed first.
     await packItem(boss.id, id, "X71003");
     await packItem(boss.id, id, "S71001");
+    await keepOpen(boss.id, id);
     await upload([tiktok("day-2.csv", PH_ORDER, 2, "71000001", opts(["S71001", "Y71004"]))]);
     check("first correction: S carried, X left on the placeholder", (await box(label))?.items, [
       { stockNumber: "LGD - AS SEEN ON SCREEN", expectedQty: 0, scannedQty: 1 },
@@ -537,6 +552,7 @@ try {
     const opened = await openBoxByScan(boss.id, label);
     const id = opened.kind === "box" ? opened.box.id : "";
     await packItem(boss.id, id, "S82001");
+    await keepOpen(boss.id, id);
     await upload([tiktok("day-2.csv", PH_FLIP, 1, "82000001", opts(["S82001"]))]);
     check("renamed: carried", (await box(label))?.items, [{ stockNumber: "S82001", expectedQty: 1, scannedQty: 1 }]);
     await upload([tiktok("day-3.csv", PH_FLIP, 1, "82000001", opts([lgdName]))]);
@@ -557,6 +573,7 @@ try {
     const id = opened.kind === "box" ? opened.box.id : "";
     await packItem(boss.id, id, "S83001"); // lands on whichever listing is first outstanding
     await packItem(boss.id, id, "X83002");
+    await keepOpen(boss.id, id);
     await upload([tiktok("day-2.csv", PH_SWAP, 2, "83000001", opts(["X83002", "S83001"]))]);
     check("both carried, once each", (await box(label))?.items, [
       { stockNumber: "S83001", expectedQty: 1, scannedQty: 1 },
@@ -581,6 +598,7 @@ try {
     const id = opened.kind === "box" ? opened.box.id : "";
     await packItem(boss.id, id, "S84001"); // the piece, against the listing
     await packItem(boss.id, id, "R84009"); // the ordinary line
+    await keepOpen(boss.id, id);
     await overrideItem(boss.id, id, "R84009"); // a second R put in against the report
     await upload([tiktok("day-2.csv", PH_OVR, 2, "84000001", opts(["S84001", "R84009"]))]);
     const after = [

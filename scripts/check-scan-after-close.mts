@@ -89,15 +89,17 @@ try {
     },
   });
 
-  /* The ordinary run: label, watch, close. */
+  /* The ordinary run: label, watch — and the last watch closes the box. */
   const opened = await openBoxByScan(packer.id, LABEL_A);
   check("the label opens its box", opened.kind, "box");
 
   const packed = await packItem(packer.id, boxA.id, "70001");
   check("the watch goes in", packed.kind === "box" && packed.box.complete, true);
 
+  check("the last watch closes the box by itself", packed.kind === "box" && packed.box.status, "CLOSED_COMPLETE");
+  check("and says so", packed.kind === "box" && packed.autoClosed, true);
   const closed = await sealBox(packer.id, boxA.id, false);
-  check("the box closes", closed.kind === "box" && closed.box.status, "CLOSED_COMPLETE");
+  check("pressing Close afterwards changes nothing", closed.kind, "alreadyPacked");
 
   /* The scan this check exists for. */
   const next = await packItem(packer.id, boxA.id, LABEL_B);

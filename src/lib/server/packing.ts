@@ -225,7 +225,13 @@ export async function findBoxByScan(rawScan: string): Promise<PackingBoxView | n
 
 export type ScanOutcome =
   /** The box is open and this is its current state. */
-  | { kind: "box"; box: PackingBoxView; message?: string }
+  | {
+      kind: "box";
+      box: PackingBoxView;
+      message?: string;
+      /** The scan just made this box complete, so it closed itself. See `closeIfComplete`. */
+      autoClosed?: boolean;
+    }
   /** Scanned a label for a box that has already gone. Not an error. */
   | { kind: "alreadyPacked"; box: PackingBoxView }
   /** No uploaded order has this tracking number. Packable anyway. */
@@ -558,7 +564,124 @@ export async function packItem(
   await prisma.scanEvent.create({
     data: { packageId, userId, kind: "ITEM_ACCEPTED", stockNumber, rawScan },
   });
-  return reload(packageId);
+  return (await closeIfComplete(userId, packageId)) ?? reload(packageId);
+}
+
+/** The note on a box that closed itself, which is also how `undoAutoClose` knows one. */
+export const AUTO_CLOSE_NOTE = "Closed automatically: the last item was scanned.";
+
+/**
+ * How long after closing itself a box can be reopened by the packer it closed on.
+ *
+ * The screen offers Undo for 3 seconds. The server allows longer, so a tap made
+ * in time on a slow connection is not refused for arriving late.
+ */
+export const UNDO_GRACE_MS = 20_000;
+
+/**
+ * Closes the box if the scan just made it complete.
+ *
+ * The packer used to press Close on every box, after the last watch, every
+ * time. Nothing was decided by that press: a box with everything in it and
+ * nothing extra closes complete, and that is all the button could do. So the
+ * scan that completes it closes it — the same CLOSED_COMPLETE, the same log
+ * line, a note saying it closed itself — and she goes straight to the next
+ * label.
+ *
+ * Only that case. A box short, or with something added against the report,
+ * still needs a person to say "close it incomplete". A box in no report has no
+ * list to be complete against, so it is never closed for her.
+ *
+ * Conditional on the box still being open, so a packer at another scanner
+ * pressing Close at the same moment cannot close it twice.
+ */
+async function closeIfComplete(userId: string, packageId: string): Promise<ScanOutcome | null> {
+  const box = await getBoxById(packageId);
+  if (!box || box.status !== "OPEN" || box.isUnrecognised) return null;
+  const over = box.items.some((i) => i.scanned > i.expected);
+  if (!box.complete || over) return null;
+
+  const closed = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.package.updateMany({
+      where: { id: packageId, status: "OPEN" },
+      data: { status: "CLOSED_COMPLETE", closedById: userId, closedAt: new Date() },
+    });
+    if (count === 0) return false;
+    await tx.scanEvent.create({
+      data: { packageId, userId, kind: "CLOSE_COMPLETE", note: AUTO_CLOSE_NOTE },
+    });
+    return true;
+  });
+  if (!closed) return null;
+
+  const after = await getBoxById(packageId);
+  return after
+    ? { kind: "box", box: after, message: "Complete — closed.", autoClosed: true }
+    : null;
+}
+
+/**
+ * Takes back a box that just closed itself.
+ *
+ * For the packer who sees it close and knows something is still to go in —
+ * the report undercounted, or the watch in her hand belongs in it. Hers only,
+ * and only straight away: the box must still be closed the way it closed
+ * itself, by her, with nothing done to it since. Anything later is a reopen
+ * for the director, with a reason, as for any closed box.
+ */
+export async function undoAutoClose(userId: string, packageId: string): Promise<ScanOutcome> {
+  const last = await prisma.scanEvent.findFirst({
+    where: { packageId },
+    orderBy: { at: "desc" },
+    select: { kind: true, note: true, userId: true, at: true },
+  });
+  // The day marked sent since: every box on it is accounted for as gone, and
+  // reopening one would leave an open box on a day that has shipped.
+  const box = await prisma.package.findUnique({ where: { id: packageId }, select: { showDate: true } });
+  const sentSince =
+    last !== null && box !== null
+      ? await prisma.scanEvent.count({
+          where: { kind: "CLOSE_UNVERIFIED", at: { gte: last.at }, package: { showDate: box.showDate } },
+        })
+      : 0;
+  const undoable =
+    last !== null &&
+    last.kind === "CLOSE_COMPLETE" &&
+    last.note === AUTO_CLOSE_NOTE &&
+    last.userId === userId &&
+    Date.now() - last.at.getTime() <= UNDO_GRACE_MS &&
+    sentSince === 0;
+
+  if (!undoable) {
+    const view = await getBoxById(packageId);
+    return {
+      kind: "error",
+      message: view
+        ? `Too late to undo — ${view.tracking} is closed. Ask the director to reopen it.`
+        : "That box no longer exists.",
+    };
+  }
+
+  const reopened = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.package.updateMany({
+      where: { id: packageId, status: "CLOSED_COMPLETE" },
+      data: { status: "OPEN", closedById: null, closedAt: null },
+    });
+    if (count === 0) return false;
+    await tx.scanEvent.create({
+      data: {
+        packageId,
+        userId,
+        kind: "REOPEN",
+        note: "Undone by the packer straight after it closed automatically",
+      },
+    });
+    return true;
+  });
+
+  return reopened
+    ? reload(packageId, "Reopened — keep packing this box.")
+    : { kind: "error", message: "That box changed in the meantime. Ask the director to reopen it." };
 }
 
 /**
@@ -672,7 +795,11 @@ async function packPlaceholder(
       note: placeholderNote(decision.listing),
     },
   });
-  return reload(box.id, `${stockNumber} recorded as this customer's piece.`);
+  const message = `${stockNumber} recorded as this customer's piece.`;
+  const closed = await closeIfComplete(userId, box.id);
+  return closed && closed.kind === "box"
+    ? { ...closed, message: `${message} Complete — closed.` }
+    : reload(box.id, message);
 }
 
 /**
