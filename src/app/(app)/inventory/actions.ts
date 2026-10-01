@@ -5,7 +5,7 @@ import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
 import { PLACES, PLACE_LABEL, normaliseModel, parseQty } from "@/lib/domain/inventory";
 import type { CountedPlaces } from "@/lib/domain/inventory";
 import type { SheetRows } from "@/lib/domain/inventory-sheets";
-import { getModel, importMaster, readCountSheet, saveCount } from "@/lib/server/inventory";
+import { getModel, importMaster, readCountSheet, removePhoto, saveCount, savePhoto, setImageUrl } from "@/lib/server/inventory";
 import type { Balances } from "@/lib/server/inventory";
 
 /**
@@ -61,6 +61,8 @@ export interface FormState {
   error?: string;
   ok?: string;
   details?: string[];
+  /** The model just added, so the page can offer to add its photo. */
+  model?: string;
 }
 
 /** A watch on the shelf that is not on the list: added, flagged for its details, and counted. */
@@ -86,7 +88,7 @@ export async function addAndCount(_prev: FormState, formData: FormData): Promise
   refresh();
   return existing
     ? { ok: `${model} was already on the list, so this is saved as its count (what is there now). Its description was not changed.` }
-    : { ok: `${model} added and counted. It is flagged until somebody fills in its details.` };
+    : { ok: `${model} added and counted. It is flagged until somebody fills in its details.`, model };
 }
 
 async function fileFrom(formData: FormData): Promise<{ file: File; buffer: ArrayBuffer } | { error: string }> {
@@ -166,4 +168,55 @@ export async function uploadMasterRows(fileName: string, sheets: SheetRows): Pro
     ok: `Catalogue loaded: ${r.added} added, ${r.updated} updated, ${r.unchanged} unchanged.`,
     details: details.length > 0 ? details : undefined,
   };
+}
+
+/* ------------------------------------------------------------------ pictures */
+
+export interface PictureState {
+  error?: string;
+  ok?: string;
+}
+
+/** A photo of the model, already shrunk by the page. Replaces any photo it had. */
+export async function uploadPhoto(model: string, formData: FormData): Promise<PictureState> {
+  let user;
+  try {
+    user = await requireShippingDirectorOrThrow();
+  } catch {
+    return { error: NOT_ALLOWED };
+  }
+  const file = formData.get("photo");
+  if (!(file instanceof File) || file.size === 0) return { error: "Choose or take a photo first." };
+  const r = await savePhoto(user.id, model, new Uint8Array(await file.arrayBuffer()));
+  if (!r.ok) return { error: r.problem };
+  refresh();
+  return { ok: "Photo saved." };
+}
+
+/** Back to the master's link. */
+export async function deletePhoto(model: string): Promise<PictureState> {
+  let user;
+  try {
+    user = await requireShippingDirectorOrThrow();
+  } catch {
+    return { error: NOT_ALLOWED };
+  }
+  const r = await removePhoto(user.id, model);
+  if (!r.ok) return { error: r.problem };
+  refresh();
+  return { ok: "Photo removed." };
+}
+
+/** The picture link, typed or pasted. Blank clears it. */
+export async function savePictureLink(model: string, link: string): Promise<PictureState> {
+  let user;
+  try {
+    user = await requireShippingDirectorOrThrow();
+  } catch {
+    return { error: NOT_ALLOWED };
+  }
+  const r = await setImageUrl(user.id, model, String(link ?? "").slice(0, 2000));
+  if (!r.ok) return { error: r.problem };
+  refresh();
+  return { ok: link.trim() ? "Link saved." : "Link cleared." };
 }

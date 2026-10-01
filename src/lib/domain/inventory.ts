@@ -9,6 +9,7 @@
  * place's stock is the sum of them. A count says "there are N here", so it
  * writes the difference between N and what the app thought.
  */
+import { storableLink } from "./watch-images";
 
 /** Where a watch physically is, in the order the team reads them. */
 export const PLACES = ["SELLABLE", "SAMPLE_EBAY", "SAMPLE_TIKTOK", "RANDOM_PULLS", "DAMAGED"] as const;
@@ -121,7 +122,9 @@ export function detailsFromMasterRow(row: Record<string, unknown>): ProductDetai
     series: text(get("Series")),
     gender: text(get("Gender")),
     description: text(get("Description")),
-    imageUrl: text(get("URL", "Image URL", "Small Main Image")),
+    // Anything that is not a web address (#N/A, a note) counts as blank, so it
+    // never replaces a good picture already there.
+    imageUrl: storableLink(text(get("URL", "Image URL", "Small Main Image"))),
     // The master writes 0 where it has no figure (TP is a formula of a cost of 0),
     // so 0 is read as "not given", never as a price of nothing.
     costCents: positive(parseMoney(get("Cost"))),

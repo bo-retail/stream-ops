@@ -28,6 +28,14 @@ localhost:4321): its `whatif.mjs` lists 119 situations and how each is handled.
   model*. The offer's brand, collection, gender and picture are copied in only to
   fill blanks on a model it creates. They never overwrite anything, and the
   product details sheet (or its in-app form) always wins.
+- **Pictures** (Samuel, 1 October): every model shows its picture on the stock
+  list, the model page and the count screen, from the master's `URL` column.
+  **Wherever a new product is entered there must be a place to upload its
+  picture** — the model page has it now (take or choose a photo, or paste a
+  link), and the product details form for offer-created models (step 2) must
+  reuse the same picture box. An uploaded photo always wins over the link, so
+  a new master never replaces it; it is shrunk in the browser to about 60 KB
+  and kept in the database (`ProductPhoto`), no outside storage.
 - **Sold, then sent.** A paid report line makes the watch "sold, waiting to ship"
   (no longer available, still in the building). The packing scan must match the
   report's `model #`; a wrong watch is refused (the packer's mistake; stock does not
@@ -112,7 +120,11 @@ localhost:4321): its `whatif.mjs` lists 119 situations and how each is handled.
    Deploy outside packing and upload hours, and tell the floor to refresh.
 10. **Backups:** make a Neon branch at launch, and a daily export of balances and
     the ledger after it.
-11. **Every template can also be typed in on the website, and that is the main
+11. **Migration names must sort after `20261003000000`.** Step 1 and the
+    photos migration are dated ahead (2 and 3 October), so one made today by
+    `prisma migrate dev` would sort before them and run before `Product` exists
+    on Neon. Rename every new inventory migration by hand to sort after them.
+12. **Every template can also be typed in on the website, and that is the main
     way** (Samuel, 1 October). Each template-based job (full count, spot count,
     shipment count, returns and cancellations, adjustments, moves, cost
     correction, product details) has an in-app form with the same columns, a
@@ -295,7 +307,7 @@ Nothing here stops steps 1–3 except question 1.
 |---|---|---|
 | 0 | **The count.** `Opening stock count sheet.xlsx` is ready: 727 models pre-filled with description, collection and cost, a column per location, and a second tab for models not in the master file. | — |
 | 1 | **Catalogue and stock.** 727 models with cost; the count loaded as the opening balance; stock visible per model. | the count |
-| 2 | **Receiving.** Gladys enters what she counted against a shipment; cost captured; differences flagged. | 1 |
+| 2 | **Receiving.** Gladys enters what she counted against a shipment; cost captured; differences flagged. The product details form for new models includes the picture upload. | 1 |
 | 3 | **Deduction.** Paid orders come off from the reports already uploaded. This is what ends Andres's xlookup. | 1, 2 |
 | 4 | **Movements.** Samples pulled, sample → random pulls at zero (ask Gladys first, do not move it silently), returns, damaged, write-offs. | 3 |
 | 5 | **The eBay selection.** Choose under the 750 cap, rest to TikTok, export both listing files. | 3 |

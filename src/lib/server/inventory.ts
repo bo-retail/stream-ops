@@ -15,6 +15,7 @@ import {
 import type { CountedPlaces, Place, ProductDetails } from "@/lib/domain/inventory";
 import { sheetRows } from "@/lib/domain/inventory-sheets";
 import type { SheetRows } from "@/lib/domain/inventory-sheets";
+import { MAX_PHOTO_BYTES, photoType, pictureFor, storableLink } from "@/lib/domain/watch-images";
 
 /**
  * Inventory, step 1: the catalogue, counts, and what is in stock.
@@ -157,6 +158,8 @@ export interface StockRow {
   model: string;
   description: string;
   collection: string;
+  /** What to show as its picture: the uploaded photo, else the master's link, else "". */
+  picture: string;
   costCents: number | null;
   needsDetails: boolean;
   /** When it was last counted, in any place, or null if never. */
@@ -185,7 +188,7 @@ export async function listStock(search = ""): Promise<StockRow[]> {
         }
       : undefined,
     orderBy: { model: "asc" },
-    select: { id: true, model: true, description: true, collection: true, costCents: true, needsDetails: true },
+    select: { id: true, model: true, description: true, collection: true, imageUrl: true, costCents: true, needsDetails: true, photo: { select: { updatedAt: true } } },
   });
   const ids = q ? products.map((p) => p.id) : undefined;
   const balances = await balancesFor(prisma, ids);
@@ -205,6 +208,7 @@ export async function listStock(search = ""): Promise<StockRow[]> {
       model: p.model,
       description: p.description,
       collection: p.collection,
+      picture: pictureFor(p.model, p.imageUrl, p.photo?.updatedAt),
       costCents: p.costCents,
       needsDetails: p.needsDetails,
       lastCountedAt: (() => {
@@ -227,6 +231,7 @@ export async function getModel(model: string) {
   const product = await prisma.product.findUnique({
     where: { model: normaliseModel(model) },
     include: {
+      photo: { select: { updatedAt: true } },
       moves: {
         orderBy: { at: "desc" },
         take: 500,
@@ -468,4 +473,91 @@ export async function countSheet(today: string): Promise<ArrayBuffer> {
   extra.getColumn(1).numFmt = "@";
 
   return (await wb.xlsx.writeBuffer()) as ArrayBuffer;
+}
+
+/* ------------------------------------------------------------------ pictures */
+
+export type PictureResult = { ok: true } | { ok: false; problem: string };
+
+/**
+ * Save a photo of a model, replacing any it had. The bytes must really be a
+ * JPEG, PNG or WebP (read from the bytes, not the name) and already small: the
+ * page shrinks a phone photo before sending it.
+ */
+export async function savePhoto(userId: string, model: string, bytes: Uint8Array): Promise<PictureResult> {
+  const type = photoType(bytes);
+  if (!type) return { ok: false, problem: "That is not a photo the app can show. Use a JPEG, PNG or WebP picture." };
+  if (bytes.length > MAX_PHOTO_BYTES) return { ok: false, problem: "That photo is too big. Try again; the page shrinks it first." };
+  const product = await prisma.product.findUnique({ where: { model: normaliseModel(model) }, select: { id: true, model: true } });
+  if (!product) return { ok: false, problem: `${model} is not in the catalogue.` };
+  const data = Uint8Array.from(bytes);
+  await prisma.$transaction([
+    prisma.productPhoto.upsert({
+      where: { productId: product.id },
+      create: { productId: product.id, data, contentType: type },
+      update: { data, contentType: type },
+    }),
+    prisma.auditLog.create({
+      data: {
+        entityType: "Product",
+        entityId: product.id,
+        action: "PHOTO_SAVED",
+        actorId: userId,
+        summary: `Uploaded a photo of ${product.model} (${Math.round(bytes.length / 1024)} KB).`,
+      },
+    }),
+  ]);
+  return { ok: true };
+}
+
+/** Take a model's uploaded photo away, so it shows its link from the master again. */
+export async function removePhoto(userId: string, model: string): Promise<PictureResult> {
+  const product = await prisma.product.findUnique({ where: { model: normaliseModel(model) }, select: { id: true, model: true } });
+  if (!product) return { ok: false, problem: `${model} is not in the catalogue.` };
+  // The removal and its record are one step: never a photo gone with no trace.
+  await prisma.$transaction(async (tx) => {
+    const { count } = await tx.productPhoto.deleteMany({ where: { productId: product.id } });
+    if (count > 0) {
+      await tx.auditLog.create({
+        data: { entityType: "Product", entityId: product.id, action: "PHOTO_REMOVED", actorId: userId, summary: `Removed the photo of ${product.model}.` },
+      });
+    }
+  });
+  return { ok: true };
+}
+
+/** Set or clear a model's picture link by hand. Blank clears it; anything else must be a web address. */
+export async function setImageUrl(userId: string, model: string, raw: string): Promise<PictureResult> {
+  const text = raw.trim();
+  const imageUrl = storableLink(text);
+  if (text !== "" && imageUrl === "") {
+    return { ok: false, problem: "That is not a web address. Paste the whole link, starting https://" };
+  }
+  const product = await prisma.product.findUnique({ where: { model: normaliseModel(model) }, select: { id: true, model: true, imageUrl: true } });
+  if (!product) return { ok: false, problem: `${model} is not in the catalogue.` };
+  if (imageUrl === product.imageUrl) return { ok: true };
+  await prisma.$transaction([
+    prisma.product.update({ where: { id: product.id }, data: { imageUrl } }),
+    prisma.auditLog.create({
+      data: {
+        entityType: "Product",
+        entityId: product.id,
+        action: "IMAGE_URL_SET",
+        actorId: userId,
+        summary: imageUrl ? `Set the picture link of ${product.model}.` : `Cleared the picture link of ${product.model}.`,
+        before: { imageUrl: product.imageUrl },
+        after: { imageUrl },
+      },
+    }),
+  ]);
+  return { ok: true };
+}
+
+/** A model's uploaded photo, for the picture route. */
+export async function readPhoto(model: string): Promise<{ data: Uint8Array; contentType: string } | null> {
+  const photo = await prisma.productPhoto.findFirst({
+    where: { product: { model: normaliseModel(model) } },
+    select: { data: true, contentType: true },
+  });
+  return photo ? { data: photo.data, contentType: photo.contentType } : null;
 }

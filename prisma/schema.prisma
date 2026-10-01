@@ -934,6 +934,19 @@ model Product {
   updatedAt DateTime @updatedAt
 
   moves StockMove[]
+  photo ProductPhoto?
+}
+
+/// A photo of a model taken or chosen in the app, shrunk in the browser first.
+/// Shown instead of the master's link whenever there is one, so a new master
+/// never replaces it. Kept apart from Product so the stock list never loads it.
+model ProductPhoto {
+  productId   String   @id
+  data        Bytes
+  contentType String
+  updatedAt   DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 }
 
 /// Where a watch physically is.

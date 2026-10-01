@@ -32,7 +32,8 @@ import ExcelJS from "exceljs";
 import { assertDevDatabase } from "./dev-only.mjs";
 import { prisma } from "../src/lib/db";
 import { isMasterColumn, isMasterHeading, sheetRows } from "../src/lib/domain/inventory-sheets";
-import { countSheet, getModel, importMaster, listStock, readCountSheet, saveCount } from "../src/lib/server/inventory";
+import { countSheet, getModel, importMaster, listStock, readCountSheet, readPhoto, removePhoto, saveCount, savePhoto, setImageUrl } from "../src/lib/server/inventory";
+import { MAX_PHOTO_BYTES } from "../src/lib/domain/watch-images";
 
 assertDevDatabase("check-inventory.mts");
 
@@ -49,6 +50,7 @@ async function cleanUp() {
   const ids = (await prisma.product.findMany({ where: { model: { startsWith: P } }, select: { id: true } })).map((p) => p.id);
   // Only a test may remove stock history, and only its own.
   await prisma.stockMove.deleteMany({ where: { productId: { in: ids } } });
+  await prisma.auditLog.deleteMany({ where: { entityType: "Product", entityId: { in: ids } } });
   await prisma.product.deleteMany({ where: { id: { in: ids } } });
 }
 
@@ -298,6 +300,56 @@ try {
   ]);
   check("both are saved", both.map((r) => r.ok), [true, true]);
   check("and the stock is what they counted, not double", (await stock(`${P}28684`)).RANDOM_PULLS, 7);
+
+  /* ------------------------------------------------------- pictures */
+
+  console.log("\nPictures: an uploaded photo, the master's link, and a link typed in.");
+  const pic = `${P}PIC1`;
+  const link1 = "https://trade.invictawatch.com/cdn/media/202309/448200_46307.jpg";
+  const link2 = "https://cdn.invictawatch.com/products/main/500x500-p/202601/49888.jpg";
+  await importMaster(boss.id, "pictures.xlsx", await masterFile([{ "Invicta Model": pic, Description: "Picture test", URL: link1 }]));
+  const pictureOf = async (model: string) => (await listStock(model)).find((r) => r.model === model)?.picture;
+  check("a new model shows the master's link", await pictureOf(pic), link1);
+
+  const jpeg = (n: number, fill = 7) => { const b = new Uint8Array(n).fill(fill); b.set([0xff, 0xd8, 0xff, 0xe0]); return b; };
+  check("a photo is saved", await savePhoto(boss.id, pic, jpeg(40_000)), { ok: true });
+  const withPhoto = await pictureOf(pic);
+  check("then the photo is shown instead of the link", withPhoto?.startsWith(`/api/inventory/photo/${pic}?v=`), true);
+  check("and the photo can be read back whole", (await readPhoto(pic))?.data.length, 40_000);
+
+  await new Promise((res) => setTimeout(res, 5));
+  check("a second photo replaces the first", await savePhoto(boss.id, pic, jpeg(30_000, 9)), { ok: true });
+  check("  one photo per model, the new one", [await prisma.productPhoto.count({ where: { product: { model: pic } } }), (await readPhoto(pic))?.data[10]], [1, 9]);
+  check("  at a new address, so nobody sees the old one from their browser's memory", (await pictureOf(pic)) !== withPhoto, true);
+
+  await importMaster(boss.id, "pictures-again.xlsx", await masterFile([{ "Invicta Model": pic, Description: "Picture test", URL: link2 }]));
+  check("a new master changes the link but leaves the photo showing", [(await product(pic)).imageUrl, (await pictureOf(pic))?.startsWith("/api/")], [link2, true]);
+
+  check("a web page dressed as a photo is refused", (await savePhoto(boss.id, pic, new TextEncoder().encode("<html>"))).ok, false);
+  check("an empty file is refused", (await savePhoto(boss.id, pic, new Uint8Array())).ok, false);
+  check("a photo over the limit is refused", (await savePhoto(boss.id, pic, jpeg(MAX_PHOTO_BYTES + 1))).ok, false);
+  check("  and the photo already there is untouched", (await readPhoto(pic))?.data.length, 30_000);
+  check("a photo for a model that is not in the catalogue is refused", (await savePhoto(boss.id, `${P}NOPE`, jpeg(100))).ok, false);
+  check("a model typed in lower case with spaces finds its photo", (await readPhoto(` ${pic.toLowerCase()} `))?.data.length, 30_000);
+
+  const [a, b] = await Promise.all([savePhoto(boss.id, pic, jpeg(1000, 1)), savePhoto(boss.id, pic, jpeg(2000, 2))]);
+  check("two people uploading at once: both are answered, and one photo is kept", [a.ok, b.ok, await prisma.productPhoto.count({ where: { product: { model: pic } } })], [true, true, 1]);
+
+  check("removing the photo goes back to the link", [(await removePhoto(boss.id, pic)).ok, await pictureOf(pic)], [true, link2]);
+  check("removing it twice is harmless", (await removePhoto(boss.id, pic)).ok, true);
+
+  check("a typed link that is not a web address is refused", (await setImageUrl(boss.id, pic, "#N/A")).ok, false);
+  check("  as is the app's own photo address", (await setImageUrl(boss.id, pic, "/api/inventory/photo/X")).ok, false);
+  check("  and the link is unchanged", (await product(pic)).imageUrl, link2);
+  check("a typed link is saved, trimmed", [(await setImageUrl(boss.id, pic, `  ${link1} `)).ok, (await product(pic)).imageUrl], [true, link1]);
+  check("a blank clears it, and the model shows no picture", [(await setImageUrl(boss.id, pic, "  ")).ok, await pictureOf(pic)], [true, ""]);
+  const logged = await prisma.auditLog.findMany({
+    where: { entityId: (await product(pic)).id, action: { in: ["PHOTO_SAVED", "PHOTO_REMOVED", "IMAGE_URL_SET"] } },
+    select: { action: true },
+  });
+  check("every change of picture is in the audit log (4 photos, 1 removal, 2 links)", logged.map((l) => l.action).sort(), [
+    "IMAGE_URL_SET", "IMAGE_URL_SET", "PHOTO_REMOVED", "PHOTO_SAVED", "PHOTO_SAVED", "PHOTO_SAVED", "PHOTO_SAVED",
+  ]);
 
   /* --------------------------------------- history cannot be deleted */
 

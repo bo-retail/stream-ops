@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Badge, Card, CardHeader, LinkButton, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
+import { WatchImage } from "@/components/watch-image";
+import { pictureFor } from "@/lib/domain/watch-images";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { PLACES, PLACE_LABEL } from "@/lib/domain/inventory";
 import { getModel } from "@/lib/server/inventory";
+import { PictureEditor } from "./picture-editor";
 
 export const metadata: Metadata = { title: "Inventory" };
 
@@ -20,7 +23,8 @@ const when = new Intl.DateTimeFormat("en-US", {
 export default async function ModelPage({ params }: { params: Promise<{ model: string }> }) {
   await requireShippingDirector();
   const { model } = await params;
-  const found = await getModel(decodeURIComponent(model));
+  // Next has already decoded it; decoding again would break a model with a "%".
+  const found = await getModel(model);
   if (!found) notFound();
   const { product: p, balances } = found;
   const total = PLACES.reduce((n, place) => n + balances[place], 0);
@@ -55,6 +59,10 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
       <div className="grid gap-5 lg:grid-cols-3">
         <Card>
           <CardHeader title="Details" />
+          <div className="flex justify-center border-b border-line p-4">
+            <WatchImage url={pictureFor(p.model, p.imageUrl, p.photo?.updatedAt)} model={p.model} size={256} priority />
+          </div>
+          <PictureEditor key={p.imageUrl} model={p.model} hasPhoto={p.photo !== null} imageUrl={p.imageUrl} />
           <dl className="grid grid-cols-2 gap-x-3 gap-y-2 p-4 text-sm">
             {[
               ["Brand", p.brand],

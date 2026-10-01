@@ -2,7 +2,8 @@
 
 import { useActionState, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Alert, Button, Card, CardHeader, Input } from "@/components/ui";
+import { Alert, Button, Card, CardHeader, Input, LinkButton } from "@/components/ui";
+import { WatchImage } from "@/components/watch-image";
 import { PLACES, PLACE_LABEL } from "@/lib/domain/inventory";
 import type { Place } from "@/lib/domain/inventory";
 import { addAndCount, countOne } from "../actions";
@@ -11,6 +12,7 @@ import type { FormState } from "../actions";
 interface Model {
   model: string;
   description: string;
+  picture: string;
   countedToday: boolean;
   balances: Record<Place, number>;
 }
@@ -101,6 +103,8 @@ function CountRow({ model, onSaved }: { model: Model; onSaved: (b: Record<Place,
   return (
     <li className="px-4 py-3">
       <form onSubmit={save} className="flex flex-wrap items-end gap-3">
+        {/* Big enough to tell the watch in hand from its neighbours on the list. */}
+        <WatchImage url={model.picture} model={model.model} size={64} />
         <div className="w-44 min-w-0">
           <p className="tabular font-semibold text-ink">{model.model}</p>
           <p className="truncate text-xs text-ink-muted">{model.description || "—"}</p>
@@ -174,6 +178,11 @@ export function AddModel() {
       {state.ok ? (
         <div className="px-4 pb-4">
           <Alert tone="ok">{state.ok}</Alert>
+          {state.model ? (
+            <LinkButton href={`/inventory/${encodeURIComponent(state.model)}`} className="mt-2">
+              Add its photo
+            </LinkButton>
+          ) : null}
         </div>
       ) : null}
     </Card>

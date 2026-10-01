@@ -37,6 +37,7 @@ export default async function CountPage({ searchParams }: { searchParams: Promis
           models={rows.map((r) => ({
             model: r.model,
             description: r.description,
+            picture: r.picture,
             // Every place counted today, not just one spot-checked.
             countedToday: r.fullyCountedAt !== null && dayOf(r.fullyCountedAt) === today,
             balances: r.balances,

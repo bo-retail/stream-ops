@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Badge, Card, EmptyState, Input, LinkButton, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
+import { WatchImage } from "@/components/watch-image";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { PLACES, PLACE_LABEL } from "@/lib/domain/inventory";
 import { listStock } from "@/lib/server/inventory";
@@ -88,6 +89,9 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
           <Table>
             <thead>
               <tr>
+                <Th className="w-16">
+                  <span className="sr-only">Picture</span>
+                </Th>
                 <Th>Model</Th>
                 <Th>Description</Th>
                 {PLACES.map((p) => (
@@ -101,6 +105,11 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
             <tbody>
               {rows.map((r) => (
                 <tr key={r.model}>
+                  <Td className="py-1.5">
+                    <Link href={`/inventory/${encodeURIComponent(r.model)}`} tabIndex={-1}>
+                      <WatchImage url={r.picture} model={r.model} size={48} />
+                    </Link>
+                  </Td>
                   <Td>
                     <Link href={`/inventory/${encodeURIComponent(r.model)}`} className="tabular font-medium text-brand-700 underline">
                       {r.model}

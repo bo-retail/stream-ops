@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { IMAGE_HOSTS } from "./src/lib/domain/watch-images";
 
 /**
  * Headers every response carries.
@@ -35,6 +36,21 @@ const nextConfig: NextConfig = {
      * failing with nothing useful on screen.
      */
     serverActions: { bodySizeLimit: "16mb" },
+  },
+  /**
+   * The watch pictures come from Invicta's servers at up to a few megabytes
+   * each; the resizer turns them into small thumbnails and keeps them a month,
+   * so each one is fetched and shrunk once rather than on every page.
+   */
+  images: {
+    remotePatterns: IMAGE_HOSTS.flatMap((host) => [
+      { protocol: "https" as const, hostname: host },
+      { protocol: "https" as const, hostname: `**.${host}` },
+    ]),
+    minimumCacheTTL: 60 * 60 * 24 * 31,
+    // Few sizes, so the stock list (48 px) and the count screen (64 px) share
+    // the same shrunk copies: 64 and 128 for both, 256 and 640 for the model page.
+    imageSizes: [64, 128, 256],
   },
   async headers() {
     return [{ source: "/:path*", headers: SECURITY_HEADERS }];
