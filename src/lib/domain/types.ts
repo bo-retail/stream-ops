@@ -63,7 +63,10 @@ export type TimeHM = string;
  */
 export interface BusinessSettings {
   timezone: string;
-  /** What a streamer is paid an hour, in whole cents. */
+  /**
+   * A watch streamer's hour, in whole cents. Only the fallback now: what is paid
+   * is read per kind of show from BusinessSettings, and kept equal to this.
+   */
   streamerHourlyCents: number;
   /** What somebody on shipping is paid an hour, in whole cents. */
   shippingHourlyCents: number;

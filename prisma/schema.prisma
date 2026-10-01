@@ -440,12 +440,11 @@ model DismissedReport {
 /// quietly moving what the other pays. The timezone stays on `Settings`: it is
 /// one company in one place, and two timezones would be a bug.
 ///
-/// No hourly rates here, deliberately. Packers handle both piles off the same
-/// table and never clock against a show, so there is nothing to attribute their
-/// hours to. And a streamer works one kind of show, so a diamond streamer paid
-/// differently is given her own rate on her row — splitting the hourly rate by
-/// business as well would mean dividing one person's shift across two rates,
-/// which nothing in the business actually does. Both stay in `Settings`.
+/// The streamer's hourly rate is here too: a diamond streamer and a watch
+/// streamer can be paid differently, and a streamer's hours are always on one
+/// show or the other. The shipping rate is not — packers handle both piles off
+/// the same table and never clock against a show, so there is nothing to
+/// attribute their hours to. It stays on `Settings`.
 ///
 /// Keyed by the business itself, so there is no id to get wrong and no way to
 /// end up with two rows for one side.
@@ -459,6 +458,10 @@ model BusinessSettings {
   /// piece against roughly $100 for a watch, so the same percentage is a very
   /// different amount of money.
   streamerCommissionBps Int @default(100)
+
+  /// What a streamer is paid an hour on this kind of show, in whole cents.
+  /// Streamer hours with no show attached are paid the watch rate.
+  streamerHourlyCents Int @default(0)
 
   updatedAt DateTime @updatedAt
 }

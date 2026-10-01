@@ -208,6 +208,7 @@ CREATE TABLE "DismissedReport" (
 CREATE TABLE "BusinessSettings" (
     "business" "Business" NOT NULL,
     "streamerCommissionBps" INTEGER NOT NULL DEFAULT 100,
+    "streamerHourlyCents" INTEGER NOT NULL DEFAULT 0,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "BusinessSettings_pkey" PRIMARY KEY ("business")
@@ -695,7 +696,8 @@ ALTER TABLE "User"
 
 -- The same guarantee for each kind of show's own rate.
 ALTER TABLE "BusinessSettings"
-  ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0);
+  ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
+  ADD CONSTRAINT "BusinessSettings_streamerHourlyCents_not_negative" CHECK ("streamerHourlyCents" >= 0);
 
 -- A database standing up from nothing still needs both rows to exist. The
 -- migration seeds watches by copying the singleton; from empty there is nothing

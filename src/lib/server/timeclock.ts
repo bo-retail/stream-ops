@@ -38,6 +38,11 @@ export interface TimeEntryView {
 
   /** The show this was measured against, if any. */
   shift: { label: string; startHM: string; endHM: string } | null;
+  /**
+   * Whose show the hours were on — watches or diamonds — and null when there
+   * was no show. Payroll pays a streamer's diamond hours at the diamond rate.
+   */
+  business: "WATCH" | "DIAMOND" | null;
   lateMinutes: number;
   leftEarlyMinutes: number;
   /** Clocked time that falls outside the shift and is not paid. */
@@ -93,7 +98,15 @@ const ROW_SELECT = {
   version: true,
   user: { select: { name: true, team: true } },
   show: {
-    select: { date: true, platform: true, slot: true, startsAt: true, endsAt: true, status: true },
+    select: {
+      date: true,
+      business: true,
+      platform: true,
+      slot: true,
+      startsAt: true,
+      endsAt: true,
+      status: true,
+    },
   },
 } as const;
 
@@ -108,6 +121,7 @@ type Row = {
   user: { name: string; team: "STREAMING" | "SHIPPING" };
   show: {
     date: Date;
+    business: "WATCH" | "DIAMOND";
     platform: "TIKTOK" | "EBAY";
     slot: "DAY" | "NIGHT";
     startsAt: Date;
@@ -177,6 +191,7 @@ function toView(row: Row, timezone: string): TimeEntryView {
           endHM: clock.format(row.show.endsAt),
         }
       : null,
+    business: row.show?.business ?? null,
     lateMinutes: paid.lateMinutes,
     leftEarlyMinutes: paid.leftEarlyMinutes,
     unpaidMinutes: paid.unpaidMinutes,

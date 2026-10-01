@@ -14,6 +14,7 @@ import type { Rates } from "./payroll";
 
 const RATES: Rates = {
   streamerHourlyCents: 1800,
+  diamondStreamerHourlyCents: 2200,
   shippingHourlyCents: 1600,
   streamerCommissionBps: 100,
 };
@@ -191,6 +192,7 @@ describe("one person's pay", () => {
       team: "STREAMING",
       position: "Streamer",
       minutes: 360,
+      diamondMinutes: 0,
       openShifts: 0,
       override: null,
       rates: RATES,
@@ -209,6 +211,7 @@ describe("one person's pay", () => {
       team: "SHIPPING",
       position: "Shipping & packer",
       minutes: 480,
+      diamondMinutes: 0,
       openShifts: 0,
       override: null,
       rates: RATES,
@@ -230,6 +233,7 @@ describe("one person's pay", () => {
         team: "STREAMING",
         position: "Streamer",
         minutes: 0,
+        diamondMinutes: 0,
         openShifts: 0,
         override: null,
         rates: RATES,
@@ -247,6 +251,7 @@ describe("one person's pay", () => {
       team: "STREAMING",
       position: "Streamer",
       minutes: 0,
+      diamondMinutes: 0,
       openShifts: 0,
       override: null,
       rates: RATES,
@@ -264,6 +269,7 @@ describe("one person's pay", () => {
       team: "STREAMING",
       position: "Streamer",
       minutes: 0,
+      diamondMinutes: 0,
       openShifts: 0,
       override: { hourlyRateCents: null, commissionBps: 200 },
       rates: RATES,
@@ -282,6 +288,7 @@ describe("one person's pay", () => {
       team: "STREAMING",
       position: "Streamer",
       minutes: 360,
+      diamondMinutes: 0,
       openShifts: 0,
       override: null,
       rates: { ...RATES, streamerHourlyCents: 0 },
@@ -299,6 +306,7 @@ describe("one person's pay", () => {
       team: "STREAMING",
       position: "Streamer",
       minutes: 0,
+      diamondMinutes: 0,
       openShifts: 0,
       override: null,
       rates: { ...RATES, streamerHourlyCents: 0 },
@@ -306,5 +314,132 @@ describe("one person's pay", () => {
     });
 
     expect(pay.unrated).toBe(false);
+  });
+});
+
+describe("watch streamers and diamond streamers are paid their own hourly", () => {
+  const person = (over: Partial<Parameters<typeof payFor>[0]>) =>
+    payFor({
+      userId: "u1",
+      name: "Maya",
+      team: "STREAMING",
+      position: "Streamer",
+      minutes: 0,
+      diamondMinutes: 0,
+      openShifts: 0,
+      override: null,
+      rates: RATES,
+      shows: [],
+      ...over,
+    });
+
+  it("picks the rate by the kind of show", () => {
+    expect(hourlyRateFor("STREAMING", null, RATES, "WATCH")).toBe(1800);
+    expect(hourlyRateFor("STREAMING", null, RATES, "DIAMOND")).toBe(2200);
+    // Shipping are not split: one rate whatever they pack.
+    expect(hourlyRateFor("SHIPPING", null, RATES, "DIAMOND")).toBe(1600);
+    // No business given means a watch hour, which is what it always was.
+    expect(hourlyRateFor("STREAMING", null, RATES)).toBe(1800);
+  });
+
+  it("pays a diamond-only streamer the diamond rate", () => {
+    const pay = person({ minutes: 240, diamondMinutes: 240 });
+    expect(pay.hourlyPayCents).toBe(8800); // 4h at $22
+    expect(pay.hourlyRateCents).toBe(2200);
+    expect(pay.hourly).toEqual([{ business: "DIAMOND", minutes: 240, rateCents: 2200, payCents: 8800 }]);
+  });
+
+  it("splits a streamer who worked both by the hours on each", () => {
+    // 6h on watches, 4h on diamonds.
+    const pay = person({ minutes: 600, diamondMinutes: 240 });
+    expect(pay.hourly).toEqual([
+      { business: "WATCH", minutes: 360, rateCents: 1800, payCents: 10_800 },
+      { business: "DIAMOND", minutes: 240, rateCents: 2200, payCents: 8800 },
+    ]);
+    expect(pay.hourlyPayCents).toBe(19_600);
+    expect(pay.minutes).toBe(600);
+  });
+
+  it("rounds the total once, so equal rates pay what one rate always did", () => {
+    // Half an hour of each at $18.01: 900.5c twice. Rounded apart that is
+    // 901 + 901 = $18.02 for an hour paid $18.01 before the rates were split.
+    const pay = person({
+      minutes: 60,
+      diamondMinutes: 30,
+      rates: { ...RATES, streamerHourlyCents: 1801, diamondStreamerHourlyCents: 1801 },
+    });
+    expect(pay.hourlyPayCents).toBe(hourlyPayCents(60, 1801));
+    expect(pay.hourlyPayCents).toBe(1801);
+  });
+
+  it("keeps the lines adding up to the total", () => {
+    const pay = person({
+      minutes: 60,
+      diamondMinutes: 30,
+      rates: { ...RATES, streamerHourlyCents: 1801, diamondStreamerHourlyCents: 1801 },
+    });
+    expect(pay.hourly.map((l) => l.payCents)).toEqual([901, 900]);
+    expect(pay.hourly.reduce((n, l) => n + l.payCents, 0)).toBe(pay.hourlyPayCents);
+  });
+
+  it("rounds an uneven split once, to the nearest cent of the exact figure", () => {
+    // 25 minutes at $17.35 = 722.92c, 35 minutes at $22.15 = 1292.08c; 2015c exactly.
+    const pay = person({
+      minutes: 60,
+      diamondMinutes: 35,
+      rates: { ...RATES, streamerHourlyCents: 1735, diamondStreamerHourlyCents: 2215 },
+    });
+    expect(pay.hourlyPayCents).toBe(2015);
+    expect(pay.hourly.map((l) => l.payCents)).toEqual([723, 1292]);
+  });
+
+  it("lets a person's own rate beat both", () => {
+    const pay = person({
+      minutes: 600,
+      diamondMinutes: 240,
+      override: { hourlyRateCents: 2500, commissionBps: null },
+    });
+    expect(pay.hourly.map((l) => l.rateCents)).toEqual([2500, 2500]);
+    expect(pay.hourlyPayCents).toBe(25_000);
+  });
+
+  it("keeps a deliberate $0 own rate at zero on diamond hours too", () => {
+    const pay = person({
+      minutes: 120,
+      diamondMinutes: 120,
+      override: { hourlyRateCents: 0, commissionBps: null },
+    });
+    expect(pay.hourlyPayCents).toBe(0);
+  });
+
+  it("pays shipping one rate even if minutes are marked diamond", () => {
+    const pay = person({ team: "SHIPPING", minutes: 480, diamondMinutes: 480 });
+    expect(pay.hourlyPayCents).toBe(12_800);
+    expect(pay.hourly).toEqual([{ business: "WATCH", minutes: 480, rateCents: 1600, payCents: 12_800 }]);
+  });
+
+  it("never turns more diamond minutes than minutes into negative watch pay", () => {
+    const pay = person({ minutes: 60, diamondMinutes: 90 });
+    expect(pay.hourly).toEqual([{ business: "DIAMOND", minutes: 60, rateCents: 2200, payCents: 2200 }]);
+  });
+
+  it("flags diamond hours with no diamond rate set, even when watch hours were paid", () => {
+    const pay = person({
+      minutes: 600,
+      diamondMinutes: 240,
+      rates: { ...RATES, diamondStreamerHourlyCents: 0 },
+    });
+    expect(pay.hourlyPayCents).toBe(10_800);
+    expect(pay.unrated).toBe(true);
+  });
+
+  it("does not flag a missing diamond rate for somebody who only did watches", () => {
+    const pay = person({ minutes: 360, rates: { ...RATES, diamondStreamerHourlyCents: 0 } });
+    expect(pay.unrated).toBe(false);
+  });
+
+  it("shows no hourly lines for somebody who only earned commission", () => {
+    expect(person({}).hourly).toEqual([]);
+    expect(person({}).hourlyRateCents).toBe(1800);
   });
 });

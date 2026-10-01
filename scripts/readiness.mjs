@@ -162,7 +162,15 @@ if (settingsRows.length === 0) {
   console.log("\nPay rates");
 
   const money = (c) => `$${(c / 100).toFixed(2)}`;
-  console.log(`           streamers   ${money(s.streamerHourlyCents)}/hour`);
+  // What streamers are actually paid is per kind of show. Read with select *
+  // so this still runs on a database the migration has not reached yet.
+  const { rows: businessRows } = await db.query(`select * from "BusinessSettings"`);
+  const streamerRate = (business) => {
+    const row = businessRows.find((r) => r.business === business);
+    return row && row.streamerHourlyCents !== undefined ? row.streamerHourlyCents : s.streamerHourlyCents;
+  };
+  console.log(`           watch streamers    ${money(streamerRate("WATCH"))}/hour`);
+  console.log(`           diamond streamers  ${money(streamerRate("DIAMOND"))}/hour`);
   console.log(`           shipping    ${money(s.shippingHourlyCents)}/hour`);
   console.log(
     `           commission  ${s.streamerCommissionBps / 100}% of a show's sales, to each person on it`,
@@ -170,10 +178,15 @@ if (settingsRows.length === 0) {
 
   // Hours at nothing an hour come out as a total of nothing, which reads
   // exactly like a real answer on a payroll export.
-  if (s.streamerHourlyCents === 0 && streamers.length > 0) {
-    fail("streamers have no hourly rate", "their pay will export as $0.00");
+  if (streamerRate("WATCH") === 0 && streamers.length > 0) {
+    fail("watch streamers have no hourly rate", "their pay will export as $0.00");
   } else if (streamers.length > 0) {
-    ok("streamers have an hourly rate");
+    ok("watch streamers have an hourly rate");
+  }
+  if (streamerRate("DIAMOND") === 0 && streamers.length > 0) {
+    fail("diamond streamers have no hourly rate", "their diamond hours will export as $0.00");
+  } else if (streamers.length > 0) {
+    ok("diamond streamers have an hourly rate");
   }
   if (s.shippingHourlyCents === 0 && shipping.length + directors.length > 0) {
     fail("shipping has no hourly rate", "their pay will export as $0.00");

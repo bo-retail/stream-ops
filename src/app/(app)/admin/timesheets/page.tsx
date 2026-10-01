@@ -180,6 +180,11 @@ export default async function TimesheetsPage({
             position: p.position,
             minutes: p.minutes,
             hourlyRateCents: p.hourlyRateCents,
+            hourly: p.hourly.map((l) => ({
+              business: l.business,
+              minutes: l.minutes,
+              rateCents: l.rateCents,
+            })),
             hourlyPayCents: p.hourlyPayCents,
             commissionBps: p.commissionBps,
             commissionCents: p.commissionCents,
@@ -197,6 +202,7 @@ export default async function TimesheetsPage({
         <div className="grid gap-5 lg:grid-cols-2">
           <RatesPanel
             streamerHourlyCents={payroll.rates.streamerHourlyCents}
+            diamondStreamerHourlyCents={payroll.rates.diamondStreamerHourlyCents}
             shippingHourlyCents={payroll.rates.shippingHourlyCents}
             commissionBps={payroll.commissionByBusiness.WATCH}
             diamondCommissionBps={payroll.commissionByBusiness.DIAMOND}

@@ -47,6 +47,13 @@ Plus whichever `scripts/check-*.mts` covers what was touched. They need a
 NODE_OPTIONS=--conditions=react-server npx tsx scripts/check-<thing>.mts
 ```
 
+Test files named `*.db.test.ts` also write to the development database and skip
+unless asked:
+
+```
+STREAMOPS_DB_TESTS=1 npx vitest run db.test
+```
+
 ## How the code goes out
 
 Samuel pushes from GitHub Desktop, signed in as the boss — see the memory note

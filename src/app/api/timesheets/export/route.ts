@@ -4,6 +4,7 @@ import type { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { formatDate, isDateISO } from "@/lib/domain/dates";
 import { formatBps } from "@/lib/domain/payroll";
+import type { PersonPay } from "@/lib/domain/payroll";
 import { formatPeriod, periodFor } from "@/lib/domain/periods";
 import { getPayrollPeriod } from "@/lib/server/payroll";
 import {
@@ -54,6 +55,11 @@ function styleHeader(row: ExcelJS.Row) {
 }
 
 /** Minutes as decimal hours, to two places: 450 -> 7.5. */
+/** True when somebody's hours were paid at two different rates. */
+function twoRates(pay: PersonPay | undefined): boolean {
+  return !!pay && new Set(pay.hourly.map((l) => l.rateCents)).size > 1;
+}
+
 function decimalHours(minutes: number): number {
   return Math.round((minutes / 60) * 100) / 100;
 }
@@ -123,9 +129,12 @@ export async function GET(request: NextRequest) {
 
   summary.mergeCells("A2:I2");
   summary.getCell("A2").value =
-    `${period.start} to ${period.end} · streamers ${money(payroll.rates.streamerHourlyCents)}/h, ` +
-    `shipping ${money(payroll.rates.shippingHourlyCents)}/h, commission ${formatBps(payroll.rates.streamerCommissionBps)} ` +
-    `to each person on a show · generated ${new Date().toLocaleString("en-US")}`;
+    `${period.start} to ${period.end} · watch streamers ${money(payroll.rates.streamerHourlyCents)}/h, ` +
+    `diamond streamers ${money(payroll.rates.diamondStreamerHourlyCents)}/h, ` +
+    `shipping ${money(payroll.rates.shippingHourlyCents)}/h, commission ` +
+    `${formatBps(payroll.commissionByBusiness.WATCH)} a watch show and ` +
+    `${formatBps(payroll.commissionByBusiness.DIAMOND)} a diamond show ` +
+    `to each person on it · generated ${new Date().toLocaleString("en-US")}`;
   summary.getCell("A2").font = { italic: true, size: 10, color: { argb: "FF5B6472" } };
 
   const notes: string[] = [];
@@ -157,7 +166,7 @@ export async function GET(request: NextRequest) {
     { key: "position", width: 18 },
     { key: "shifts", width: 8 },
     { key: "hours", width: 9 },
-    { key: "rate", width: 10 },
+    { key: "rate", width: 14 },
     { key: "hourlyPay", width: 13 },
     { key: "commission", width: 13 },
     { key: "total", width: 13 },
@@ -185,7 +194,13 @@ export async function GET(request: NextRequest) {
       position: pay?.position ?? POSITION[person.team],
       shifts: person.entries - person.openEntries,
       hours: decimalHours(person.minutes),
-      rate: cash(pay?.hourlyRateCents ?? 0),
+      // Somebody paid at two different rates gets both, in words: one number
+      // in this column would be wrong for half their hours. Two equal rates
+      // are one rate, and stay a number.
+      rate:
+        pay && twoRates(pay)
+        ? pay.hourly.map((l) => `${money(l.rateCents)} ${l.business.toLowerCase()}`).join(" / ")
+        : cash(pay?.hourlyRateCents ?? 0),
       hourlyPay: cash(pay?.hourlyPayCents ?? 0),
       commission: cash(pay?.commissionCents ?? 0),
       total: cash(pay?.totalCents ?? 0),
@@ -198,6 +213,7 @@ export async function GET(request: NextRequest) {
     row.getCell("total").font = { bold: true };
     if (person.openEntries > 0) row.getCell("open").font = { color: { argb: "FFB42318" } };
     if (pay?.unrated) row.getCell("rate").font = { bold: true, color: { argb: "FFB42318" } };
+    if (twoRates(pay)) row.getCell("rate").alignment = { wrapText: true };
   }
 
   const totalRow = summary.addRow({
@@ -225,6 +241,8 @@ export async function GET(request: NextRequest) {
     { header: "Employee", key: "name", width: 24 },
     { header: "Position", key: "position", width: 12 },
     { header: "Date", key: "date", width: 16 },
+    // Which show the hours were on, and so which hourly rate paid them.
+    { header: "Show", key: "show", width: 22 },
     { header: "Clock in", key: "in", width: 10 },
     { header: "Clock out", key: "out", width: 10 },
     { header: "Hours", key: "hours", width: 10 },
@@ -239,6 +257,9 @@ export async function GET(request: NextRequest) {
       name: entry.userName,
       position: POSITION[entry.team],
       date: formatDate(entry.dateISO),
+      show: entry.shift
+        ? `${entry.business === "DIAMOND" ? "Diamond " : ""}${entry.shift.label}`
+        : "",
       in: entry.startHM,
       out: entry.endHM ?? "NOT CLOCKED OUT",
       hours: entry.paidMinutes === null ? "" : decimalHours(entry.paidMinutes),

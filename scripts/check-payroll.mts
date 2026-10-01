@@ -63,6 +63,9 @@ const settingsBefore = await prisma.settings.findUniqueOrThrow({ where: { id: "s
 const watchRatesBefore = await prisma.businessSettings.findUniqueOrThrow({
   where: { business: "WATCH" },
 });
+const diamondRatesBefore = await prisma.businessSettings.findUniqueOrThrow({
+  where: { business: "DIAMOND" },
+});
 
 await prisma.settings.update({
   where: { id: "singleton" },
@@ -72,9 +75,14 @@ await prisma.settings.update({
     streamerCommissionBps: 100, // 1%
   },
 });
+// The streamer hourly is per kind of show too, and read from here.
 await prisma.businessSettings.update({
   where: { business: "WATCH" },
-  data: { streamerCommissionBps: 100 }, // 1%
+  data: { streamerCommissionBps: 100, streamerHourlyCents: 1800 }, // 1%, $18.00
+});
+await prisma.businessSettings.update({
+  where: { business: "DIAMOND" },
+  data: { streamerCommissionBps: 100, streamerHourlyCents: 2200 }, // 1%, $22.00
 });
 
 /* ------------------------------------------------------------- the people */
@@ -99,12 +107,15 @@ async function makeShow(
   platform: "TIKTOK" | "EBAY",
   slot: "DAY" | "NIGHT",
   people: { id: string }[],
+  business: "WATCH" | "DIAMOND" = "WATCH",
+  status: "SCHEDULED" | "CANCELLED" = "SCHEDULED",
 ) {
   const startsAt = new Date(`${DAY}T${slot === "DAY" ? "17" : "23"}:00:00.000Z`);
   const endsAt = new Date(startsAt.getTime() + 6 * 3_600_000);
   const release = await prisma.release.create({
     data: {
-      name: `${FIXTURE} ${platform} ${slot}`,
+      name: `${FIXTURE} ${business} ${platform} ${slot}`,
+      business,
       startDate: toDbDate(DAY),
       endDate: toDbDate(DAY),
       status: "CLOSED",
@@ -112,6 +123,8 @@ async function makeShow(
       shows: {
         create: {
           date: toDbDate(DAY),
+          business,
+          status,
           platform,
           slot,
           startsAt,
@@ -194,14 +207,22 @@ console.log(`Built two shows and five sales on ${DAY}.\n`);
 
 /* --------------------------------------------------------------- the hours */
 
-async function hours(userId: string, showId: string | null, startsAt: Date, hoursWorked: number) {
+async function hours(
+  userId: string,
+  showId: string | null,
+  startsAt: Date,
+  hoursWorked: number | null,
+  source?: "SELF" | "ADMIN" | "SCHEDULE",
+) {
   await prisma.timeEntry.create({
     data: {
       userId,
       showId,
       clockInAt: startsAt,
-      clockOutAt: new Date(startsAt.getTime() + hoursWorked * 3_600_000),
-      source: showId ? "SCHEDULE" : "SELF",
+      // Null is somebody who never clocked out.
+      clockOutAt:
+        hoursWorked === null ? null : new Date(startsAt.getTime() + hoursWorked * 3_600_000),
+      source: source ?? (showId ? "SCHEDULE" : "SELF"),
       version: 1,
     },
   });
@@ -372,6 +393,150 @@ check(
   10_800,
 );
 
+/* ---------------------------- watch streamers and diamond streamers apart */
+
+console.log("\nDiamond streamers on their own hourly.");
+await prisma.businessSettings.update({
+  where: { business: "WATCH" },
+  data: { streamerCommissionBps: 100 },
+});
+
+const dina = await prisma.user.create({
+  data: {
+    name: "Dina Diamond",
+    team: "STREAMING",
+    role: "EMPLOYEE",
+    email: `p9${DOMAIN}`,
+    passwordHash: "x",
+  },
+  select: { id: true, name: true },
+});
+// A diamond TikTok Night on the same date as the watch TikTok Night — the
+// same platform and slot, told apart only by the business.
+const diamondNight = await makeShow("TIKTOK", "NIGHT", [dina, maya], "DIAMOND");
+// A diamond eBay Day that was called off, with an hour an admin entered anyway.
+const diamondCancelled = await makeShow("EBAY", "DAY", [dina], "DIAMOND", "CANCELLED");
+
+const before = await getPayrollPeriod(period.start, period.end);
+const devonBefore = before.people.find((p) => p.name === "Devon Day")?.totalCents;
+
+await hours(dina.id, diamondNight.id, diamondNight.startsAt, 4);
+await hours(maya.id, diamondNight.id, diamondNight.startsAt, 4);
+await hours(dina.id, diamondCancelled.id, diamondCancelled.startsAt, 1, "ADMIN");
+// Ana works two hours off the schedule: no show, so the watch rate.
+await hours(ana.id, null, new Date(`${DAY}T12:00:00.000Z`), 2);
+
+const split = await getPayrollPeriod(period.start, period.end);
+const get = (name: string) => split.people.find((p) => p.name === name);
+
+check("the diamond rate is read from its own row", split.rates.diamondStreamerHourlyCents, 2200);
+check("the watch rate is read from its own row", split.rates.streamerHourlyCents, 1800);
+check(
+  "a diamond-only streamer is paid the diamond rate on every hour",
+  get("Dina Diamond")?.hourly.map((l) => [l.business, l.rateCents]),
+  [["DIAMOND", 2200]],
+);
+check(
+  "including the hour on a cancelled diamond show",
+  get("Dina Diamond")?.hourly[0]?.minutes,
+  get("Dina Diamond")?.minutes,
+);
+check("which is five hours in all", get("Dina Diamond")?.minutes, 300);
+check(
+  "a streamer on both is paid each rate on its own hours",
+  get("Maya Day")?.hourly.map((l) => [l.business, l.minutes, l.payCents]),
+  [
+    ["WATCH", 360, 10_800],
+    ["DIAMOND", 240, 8800],
+  ],
+);
+check("and her hourly pay is the two added", get("Maya Day")?.hourlyPayCents, 19_600);
+check(
+  "hours with no show are paid the watch rate",
+  get("Ana Night")?.hourly.map((l) => [l.business, l.minutes, l.rateCents]),
+  [["WATCH", 480, 1800]],
+);
+check("shipping still have one rate", get("Pat Packer")?.hourlyPayCents, 12_800);
+check("a watch-only streamer did not move", get("Devon Day")?.totalCents, devonBefore);
+check(
+  "a diamond show sharing a watch show's slot does not pay the watch pair",
+  get("Ana Night")?.shows.length,
+  1,
+);
+check(
+  "the totals are still the people added up",
+  split.totals.hourlyPayCents,
+  split.people.reduce((n, p) => n + p.hourlyPayCents, 0),
+);
+
+// A shift never clocked out is not paid, diamond or not.
+await hours(
+  dina.id,
+  diamondNight.id,
+  // Mid-afternoon in New York, so it is on the same day as the rest.
+  new Date(`${DAY}T20:00:00.000Z`),
+  null,
+  "SELF",
+);
+const withOpen = await getPayrollPeriod(period.start, period.end);
+check(
+  "an open diamond shift adds nothing",
+  withOpen.people.find((p) => p.name === "Dina Diamond")?.hourlyPayCents,
+  get("Dina Diamond")?.hourlyPayCents,
+);
+check(
+  "but is counted as open",
+  withOpen.people.find((p) => p.name === "Dina Diamond")?.openShifts,
+  1,
+);
+
+// Her own rate beats the diamond rate, as it beats the watch rate.
+await prisma.user.update({ where: { id: dina.id }, data: { hourlyRateCents: 3000 } });
+const dinaOwn = await getPayrollPeriod(period.start, period.end);
+check(
+  "a personal hourly beats the diamond rate",
+  dinaOwn.people.find((p) => p.name === "Dina Diamond")?.hourlyPayCents,
+  15_000, // 5h at $30
+);
+await prisma.user.update({ where: { id: dina.id }, data: { hourlyRateCents: null } });
+
+// Raising the diamond rate moves diamond hours and nothing else.
+await prisma.businessSettings.update({
+  where: { business: "DIAMOND" },
+  data: { streamerHourlyCents: 2500 },
+});
+const raised = await getPayrollPeriod(period.start, period.end);
+check(
+  "raising the diamond rate moves only diamond hours",
+  raised.people.find((p) => p.name === "Maya Day")?.hourly.map((l) => l.payCents),
+  [10_800, 10_000],
+);
+check(
+  "and no watch-only streamer",
+  raised.people.find((p) => p.name === "Devon Day")?.totalCents,
+  devonBefore,
+);
+
+// Diamond rate never set: diamond hours are flagged even where watch hours were paid.
+await prisma.businessSettings.update({
+  where: { business: "DIAMOND" },
+  data: { streamerHourlyCents: 0 },
+});
+const noDiamondRate = await getPayrollPeriod(period.start, period.end);
+check(
+  "a missing diamond rate flags everyone with diamond hours",
+  noDiamondRate.people
+    .filter((p) => p.unrated)
+    .map((p) => p.name)
+    .sort(),
+  ["Dina Diamond", "Maya Day"],
+);
+check(
+  "while their watch hours are still paid",
+  noDiamondRate.people.find((p) => p.name === "Maya Day")?.hourlyPayCents,
+  10_800,
+);
+
 /* ------------------------------------------------ nobody has a rate at all */
 
 await prisma.settings.update({
@@ -380,10 +545,10 @@ await prisma.settings.update({
 });
 await prisma.businessSettings.update({
   where: { business: "WATCH" },
-  data: { streamerCommissionBps: 100 },
+  data: { streamerCommissionBps: 100, streamerHourlyCents: 0 },
 });
 const unpaid = await getPayrollPeriod(period.start, period.end);
-check("somebody who worked with no rate is flagged", unpaid.totals.unrated, 4);
+check("somebody who worked with no rate is flagged", unpaid.totals.unrated, 5);
 check(
   "and their hourly pay is honestly zero",
   unpaid.people.find((p) => p.name === "Pat Packer")?.totalCents,
@@ -403,7 +568,17 @@ await prisma.settings.update({
 });
 await prisma.businessSettings.update({
   where: { business: "WATCH" },
-  data: { streamerCommissionBps: watchRatesBefore.streamerCommissionBps },
+  data: {
+    streamerCommissionBps: watchRatesBefore.streamerCommissionBps,
+    streamerHourlyCents: watchRatesBefore.streamerHourlyCents,
+  },
+});
+await prisma.businessSettings.update({
+  where: { business: "DIAMOND" },
+  data: {
+    streamerCommissionBps: diamondRatesBefore.streamerCommissionBps,
+    streamerHourlyCents: diamondRatesBefore.streamerHourlyCents,
+  },
 });
 await clearFixtures();
 console.log(

@@ -48,11 +48,9 @@ export interface PayrollPeriod {
   /**
    * What each kind of show pays each of its pair, in basis points.
    *
-   * Separate from `rates` because it is the one figure that genuinely differs
-   * between watches and diamonds — a piece is worth several times a watch, so
-   * the same percentage is a very different amount of money. The hourly rates
-   * are not split this way: a streamer works one kind of show, so anyone paid
-   * differently gets their own rate on their row.
+   * A piece is worth several times a watch, so the same percentage is a very
+   * different amount of money and the two are set apart. The streamer hourly
+   * rate is set apart the same way, and is in `rates`.
    */
   commissionByBusiness: Record<Business, number>;
   people: PersonPay[];
@@ -135,27 +133,33 @@ async function salesByShow(from: DateISO, to: DateISO): Promise<Map<string, Show
 
 export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<PayrollPeriod> {
   const settings = await getSettings();
-  const rates: Rates = {
-    streamerHourlyCents: settings.streamerHourlyCents,
-    shippingHourlyCents: settings.shippingHourlyCents,
-    streamerCommissionBps: settings.streamerCommissionBps,
-  };
 
   /*
-    The commission each kind of show pays.
+    What each kind of show pays: its commission, and its streamers' hourly rate.
 
     Read once for the whole run rather than per show. A business with no row —
-    which cannot happen, since the migration seeds both — falls back to the
+    which cannot happen, since the migrations seed both — falls back to the
     shared rate rather than paying nothing, because a silent zero is the one
     failure this file exists to avoid.
   */
   const businessRates = new Map(
-    (await prisma.businessSettings.findMany({ select: { business: true, streamerCommissionBps: true } })).map(
-      (r) => [r.business, r.streamerCommissionBps] as const,
-    ),
+    (
+      await prisma.businessSettings.findMany({
+        select: { business: true, streamerCommissionBps: true, streamerHourlyCents: true },
+      })
+    ).map((r) => [r.business, r] as const),
   );
   const bpsFor = (business: Business): number =>
-    businessRates.get(business) ?? settings.streamerCommissionBps;
+    businessRates.get(business)?.streamerCommissionBps ?? settings.streamerCommissionBps;
+  const streamerHourlyFor = (business: Business): number =>
+    businessRates.get(business)?.streamerHourlyCents ?? settings.streamerHourlyCents;
+
+  const rates: Rates = {
+    streamerHourlyCents: streamerHourlyFor("WATCH"),
+    diamondStreamerHourlyCents: streamerHourlyFor("DIAMOND"),
+    shippingHourlyCents: settings.shippingHourlyCents,
+    streamerCommissionBps: bpsFor("WATCH"),
+  };
 
   const [entries, sales, rota, staff] = await Promise.all([
     getEntriesInRange({ from, to }),
@@ -226,6 +230,21 @@ export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<Payr
   }
 
   const hours = new Map(totalsByPerson(entries).map((t) => [t.userId, t]));
+
+  /*
+    How much of each person's paid time was on a diamond show.
+
+    The entry's show decides it, cancelled or not: hours printed for a diamond
+    show are diamond hours. An entry with no show — somebody clocked in off the
+    schedule — is paid the watch rate, which is what every streamer hour was
+    paid before the two were set apart. Open entries are not paid at all, and
+    are left out here exactly as `totalsByPerson` leaves them out.
+  */
+  const diamondMinutes = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.business !== "DIAMOND" || entry.paidMinutes === null) continue;
+    diamondMinutes.set(entry.userId, (diamondMinutes.get(entry.userId) ?? 0) + entry.paidMinutes);
+  }
   const byId = new Map(staff.map((s) => [s.id, s]));
 
   // Everybody who either worked or earned. Somebody with neither is not on a
@@ -245,6 +264,7 @@ export async function getPayrollPeriod(from: DateISO, to: DateISO): Promise<Payr
         team: person.team,
         position: positionName(fieldsToPosition(person.role, person.team)),
         minutes: worked?.minutes ?? 0,
+        diamondMinutes: diamondMinutes.get(id) ?? 0,
         openShifts: worked?.openEntries ?? 0,
         override: {
           hourlyRateCents: person.hourlyRateCents,

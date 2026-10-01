@@ -11,7 +11,9 @@
  *
  *   Hours       Everyone. Minutes come from the timesheet, which is already the
  *               authority on what counts: a streamer's hours are printed from
- *               the published schedule, shipping clock in and out.
+ *               the published schedule, shipping clock in and out. A streamer's
+ *               hours on a diamond show are paid at the diamond rate, every
+ *               other streamer hour at the watch rate.
  *
  *   Commission  Streamers only, on the sales of the shows they were on. Both
  *               people on a show earn it separately, so a show at 1% pays out
@@ -24,7 +26,13 @@ import type { DateISO, Platform, Slot } from "./types";
 
 /** The business-wide rates. Whole cents, and basis points for the percentage. */
 export interface Rates {
+  /**
+   * A watch streamer's hour — and any streamer hour that is not on a diamond
+   * show, such as off-schedule work clocked with no show attached.
+   */
   streamerHourlyCents: number;
+  /** A streamer's hour on a diamond show. */
+  diamondStreamerHourlyCents: number;
   shippingHourlyCents: number;
   /** 100 = 1.00%. */
   streamerCommissionBps: number;
@@ -42,16 +50,23 @@ export type Team = "STREAMING" | "SHIPPING";
  * The hourly rate that applies to one person.
  *
  * Their own if they have one — including a deliberate zero, which is why this
- * tests for null rather than for falsiness. Somebody set to £0/hour on purpose
+ * tests for null rather than for falsiness. Somebody set to $0/hour on purpose
  * must not silently fall back to the team rate.
+ *
+ * A person's own rate covers every hour they work, watch or diamond: it is set
+ * on somebody because they are paid differently from everyone else, not
+ * differently per show. Without one, a streamer is paid the rate of the kind
+ * of show the hours were on. Shipping have one rate whatever they pack.
  */
 export function hourlyRateFor(
   team: Team,
   override: PersonRateOverride | null | undefined,
   rates: Rates,
+  business: Business = "WATCH",
 ): number {
   if (override && override.hourlyRateCents !== null) return override.hourlyRateCents;
-  return team === "SHIPPING" ? rates.shippingHourlyCents : rates.streamerHourlyCents;
+  if (team === "SHIPPING") return rates.shippingHourlyCents;
+  return business === "DIAMOND" ? rates.diamondStreamerHourlyCents : rates.streamerHourlyCents;
 }
 
 /** The same, for commission. Shipping earn none, whatever is set against them. */
@@ -167,6 +182,14 @@ export interface ShowEarning {
   commissionCents: number;
 }
 
+/** Hours at one rate. A streamer on both kinds of show has two of these. */
+export interface HourlyLine {
+  business: Business;
+  minutes: number;
+  rateCents: number;
+  payCents: number;
+}
+
 export interface PersonPay {
   userId: string;
   name: string;
@@ -174,7 +197,14 @@ export interface PersonPay {
   position: string;
 
   minutes: number;
+  /**
+   * The one rate to print beside the person. When their hours were paid at two
+   * different rates there is no honest single figure: this is then the watch
+   * rate, and `hourly` is where the real breakdown is.
+   */
   hourlyRateCents: number;
+  /** Their hours split by the rate each was paid at. Empty when they worked none. */
+  hourly: HourlyLine[];
   hourlyPayCents: number;
 
   commissionBps: number;
@@ -200,7 +230,13 @@ export function payFor(input: {
   name: string;
   team: Team;
   position: string;
+  /** Every paid minute, watch and diamond together. */
   minutes: number;
+  /**
+   * How many of those minutes were on a diamond show. The rest are paid at the
+   * watch rate. Ignored for shipping, who have one rate.
+   */
+  diamondMinutes: number;
   openShifts: number;
   override: PersonRateOverride | null;
   rates: Rates;
@@ -215,9 +251,40 @@ export function payFor(input: {
    */
   shows: { key: ShowKey; label: string; netRevenueCents: number; bps: number }[];
 }): PersonPay {
-  const rate = hourlyRateFor(input.team, input.override, input.rates);
+  /*
+    Hours, split by the rate they are paid at.
 
-  const hourly = hourlyPayCents(input.minutes, rate);
+    The total is rounded once, from the exact sum, so somebody whose two rates
+    happen to be equal is paid to the cent what one rate would have paid them —
+    rounding each part separately can add a cent that nobody earned. Each line
+    is rounded for the breakdown and the last one takes the leftover cent, so
+    the lines still add up to the total.
+
+    Diamond minutes are capped at the total: more diamond hours than hours is a
+    caller's mistake, and must not turn into negative watch hours paid as a
+    deduction.
+  */
+  const diamond =
+    input.team === "SHIPPING" ? 0 : Math.min(Math.max(input.diamondMinutes, 0), input.minutes);
+  const parts: { business: Business; minutes: number }[] = [
+    { business: "WATCH", minutes: input.minutes - diamond },
+    { business: "DIAMOND", minutes: diamond },
+  ];
+  const lines: HourlyLine[] = parts
+    .filter((p) => p.minutes > 0)
+    .map((p) => {
+      const rateCents = hourlyRateFor(input.team, input.override, input.rates, p.business);
+      return { ...p, rateCents, payCents: hourlyPayCents(p.minutes, rateCents) };
+    });
+  const exact = lines.reduce((n, l) => n + l.minutes * Math.max(l.rateCents, 0), 0);
+  const hourly = Math.round(exact / 60);
+  if (lines.length > 0) {
+    lines[lines.length - 1].payCents += hourly - lines.reduce((n, l) => n + l.payCents, 0);
+  }
+  // Only diamond hours: their rate is the one that applied. Otherwise the watch
+  // rate, which is also what anyone with no hours at all is shown.
+  const rate =
+    lines.length === 1 ? lines[0].rateCents : hourlyRateFor(input.team, input.override, input.rates);
 
   const shows: ShowEarning[] = input.shows.map((s) => {
     // A rate set on the person beats the business's, exactly as it did before.
@@ -253,6 +320,7 @@ export function payFor(input: {
     position: input.position,
     minutes: input.minutes,
     hourlyRateCents: rate,
+    hourly: lines,
     hourlyPayCents: hourly,
     commissionBps: bps,
     shows,
@@ -261,6 +329,8 @@ export function payFor(input: {
     openShifts: input.openShifts,
     // Somebody with hours but no rate is the failure this is here to make
     // visible: their pay comes out as zero, which looks like a real answer.
-    unrated: rate === 0 && input.minutes > 0,
+    // Checked per line, so diamond hours with no diamond rate are caught even
+    // when the same person's watch hours were paid.
+    unrated: lines.some((l) => l.rateCents === 0),
   };
 }

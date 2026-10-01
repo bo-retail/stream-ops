@@ -23,6 +23,8 @@ function money(cents: number): string {
 
 const dollars = (cents: number) => (cents / 100).toFixed(2);
 
+const BUSINESS_WORD = { WATCH: "watch", DIAMOND: "diamond" } as const;
+
 export interface PayRow {
   userId: string;
   name: string;
@@ -30,6 +32,8 @@ export interface PayRow {
   position: string;
   minutes: number;
   hourlyRateCents: number;
+  /** Hours by the rate they were paid at; two lines for somebody on both kinds of show. */
+  hourly: { business: "WATCH" | "DIAMOND"; minutes: number; rateCents: number }[];
   hourlyPayCents: number;
   commissionBps: number;
   commissionCents: number;
@@ -41,11 +45,15 @@ export interface PayRow {
 
 export function RatesPanel({
   streamerHourlyCents,
+  diamondStreamerHourlyCents,
   shippingHourlyCents,
   commissionBps,
   diamondCommissionBps,
 }: {
+  /** A watch streamer's hour, and any streamer hour with no show attached. */
   streamerHourlyCents: number;
+  /** A streamer's hour on a diamond show. */
+  diamondStreamerHourlyCents: number;
   shippingHourlyCents: number;
   /** What a watch show pays each of its pair. */
   commissionBps: number;
@@ -53,6 +61,22 @@ export function RatesPanel({
   diamondCommissionBps: number;
 }) {
   const [state, action, pending] = useActionState(setRates, {});
+  /*
+    What was last typed, so a refused save does not wipe it.
+
+    React resets a form to its default values once its action finishes. With
+    the saved rates as the defaults, one mistyped box sent every other figure
+    the boss had just typed back to what it was. Remembering the submission and
+    using it as the default makes the reset put back what they typed.
+
+    Only while the save is refused. Once it goes through, the boxes show the
+    saved rates again — otherwise this tab would keep showing what it typed
+    after somebody else changed a rate, and its next save would quietly put
+    their change back.
+  */
+  const [typed, setTyped] = useState<Record<string, string> | null>(null);
+  const shown = (name: string, saved: string) =>
+    (state.error ? typed?.[name] : undefined) ?? saved;
 
   return (
     <Card>
@@ -60,49 +84,90 @@ export function RatesPanel({
         title="What people are paid"
         description="Everyone earns hourly. A streamer earns their share of each show they were on, on top."
       />
-      <form action={action} className="space-y-3 p-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <form
+        action={action}
+        onSubmit={(e) => {
+          const values: Record<string, string> = {};
+          new FormData(e.currentTarget).forEach((v, k) => {
+            if (typeof v === "string") values[k] = v;
+          });
+          setTyped(values);
+        }}
+        className="space-y-3 p-4"
+      >
+        {/*
+          One block per kind of person, because that is how the question is
+          asked: "what does a diamond streamer get?" is both its numbers side by
+          side, not one from each of two lists.
+        */}
+        <fieldset className="space-y-2">
+          <legend className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+            Watch streamer
+          </legend>
+          <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-ink">Streamer, per hour</span>
+            <span className="mb-1.5 block text-sm font-medium text-ink">Per hour</span>
             <Input
               name="streamerHourly"
-              defaultValue={dollars(streamerHourlyCents)}
+              defaultValue={shown("streamerHourly", dollars(streamerHourlyCents))}
               inputMode="decimal"
-              aria-label="Streamer hourly rate in dollars"
+              aria-label="Watch streamer hourly rate in dollars"
             />
           </label>
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-ink">Shipping, per hour</span>
-            <Input
-              name="shippingHourly"
-              defaultValue={dollars(shippingHourlyCents)}
-              inputMode="decimal"
-              aria-label="Shipping hourly rate in dollars"
-            />
-          </label>
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-ink">
-              Commission, watch show
-            </span>
+            <span className="mb-1.5 block text-sm font-medium text-ink">Commission, watch show</span>
             <Input
               name="commissionPercent"
-              defaultValue={String(commissionBps / 100)}
+              defaultValue={shown("commissionPercent", String(commissionBps / 100))}
               inputMode="decimal"
               aria-label="Watch show commission percentage"
             />
           </label>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-2">
+          <legend className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+            Diamond streamer
+          </legend>
+          <div className="grid gap-3 sm:grid-cols-2">
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-ink">
-              Commission, diamond show
-            </span>
+            <span className="mb-1.5 block text-sm font-medium text-ink">Per hour</span>
+            <Input
+              name="diamondStreamerHourly"
+              defaultValue={shown("diamondStreamerHourly", dollars(diamondStreamerHourlyCents))}
+              inputMode="decimal"
+              aria-label="Diamond streamer hourly rate in dollars"
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-ink">Commission, diamond show</span>
             <Input
               name="diamondCommissionPercent"
-              defaultValue={String(diamondCommissionBps / 100)}
+              defaultValue={shown("diamondCommissionPercent", String(diamondCommissionBps / 100))}
               inputMode="decimal"
               aria-label="Diamond show commission percentage"
             />
           </label>
-        </div>
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-2">
+          <legend className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+            Shipping
+          </legend>
+          <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium text-ink">Per hour</span>
+            <Input
+              name="shippingHourly"
+              defaultValue={shown("shippingHourly", dollars(shippingHourlyCents))}
+              inputMode="decimal"
+              aria-label="Shipping hourly rate in dollars"
+            />
+          </label>
+          </div>
+        </fieldset>
 
         <p className="text-xs text-ink-muted">
           Commission is a percentage of what that show sold, and <strong>both people on a show
@@ -114,8 +179,10 @@ export function RatesPanel({
         </p>
 
         <p className="text-xs text-ink-muted">
-          The hourly rates are not split by show. A streamer works one kind of show, so anyone paid
-          differently is given their own rate in the table below.
+          A streamer&apos;s hours on a diamond show are paid the diamond rate; every other streamer
+          hour — a watch show, or time clocked with no show — is paid the watch rate. Shipping have
+          one rate whatever they pack. Somebody given their own hourly under Individual rates is
+          paid it on both kinds of show.
         </p>
 
         {state.error ? <p className="text-sm font-medium text-danger-600">{state.error}</p> : null}
@@ -301,8 +368,28 @@ export function PayTable({ rows }: { rows: PayRow[] }) {
                     </span>
                   ) : null}
                 </Td>
-                <Td className="tabular">{formatMinutes(r.minutes)}</Td>
-                <Td className="tabular text-ink-muted">{money(r.hourlyRateCents)}/h</Td>
+                <Td className="tabular">
+                  {formatMinutes(r.minutes)}
+                  {r.hourly.length > 1 || r.hourly[0]?.business === "DIAMOND"
+                    ? r.hourly.map((l) => (
+                        <span key={l.business} className="block text-xs text-ink-subtle">
+                          {formatMinutes(l.minutes)} {BUSINESS_WORD[l.business]}
+                        </span>
+                      ))
+                    : null}
+                </Td>
+                <Td className="tabular text-ink-muted">
+                  {new Set(r.hourly.map((l) => l.rateCents)).size > 1 ? (
+                    r.hourly.map((l) => (
+                      <span key={l.business} className="block">
+                        {money(l.rateCents)}/h
+                        <span className="ml-1 text-xs text-ink-subtle">{BUSINESS_WORD[l.business]}</span>
+                      </span>
+                    ))
+                  ) : (
+                    <>{money(r.hourlyRateCents)}/h</>
+                  )}
+                </Td>
                 <Td className="tabular">{money(r.hourlyPayCents)}</Td>
                 <Td className="tabular">
                   {r.shows.length === 0 ? (
