@@ -5,6 +5,8 @@ import { Badge, Card, CardHeader, EmptyState, PageHeader, Table, Td, Th } from "
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { formatDate } from "@/lib/domain/dates";
 import { PLATFORM_SHORT } from "@/lib/domain/types";
+import { WatchImage } from "@/components/watch-image";
+import { picturesFor } from "@/lib/server/inventory";
 import { getBoxById, getBoxScans } from "@/lib/server/packing";
 import { getSettings } from "@/lib/server/settings";
 
@@ -50,6 +52,14 @@ export default async function BoxPage({ params }: { params: Promise<{ id: string
     getSettings(),
   ]);
   if (!box) notFound();
+  // Watches only: a diamond piece has no catalogue picture.
+  const watchBox = box.business === "WATCH";
+  const pictures = watchBox
+    ? await picturesFor([
+        ...box.items.flatMap((i) => [i.stockNumber, ...i.pieces]),
+        ...scans.flatMap((s) => (s.stockNumber ? [s.stockNumber] : [])),
+      ])
+    : new Map<string, string>();
 
   const stamp = new Intl.DateTimeFormat("en-GB", {
     timeZone: settings.timezone,
@@ -101,6 +111,15 @@ export default async function BoxPage({ params }: { params: Promise<{ id: string
                 {box.items.map((i) => (
                   <tr key={i.stockNumber}>
                     <Td className="tabular font-medium">
+                      {watchBox ? (
+                        // A placeholder line shows the piece actually scanned for it.
+                        <WatchImage
+                          url={pictures.get(i.placeholder ? (i.pieces[0] ?? "") : i.stockNumber)}
+                          model={i.placeholder ? (i.pieces[0] ?? i.stockNumber) : i.stockNumber}
+                          size={48}
+                          className="mb-1 block"
+                        />
+                      ) : null}
                       {i.stockNumber}
                       {/* The report only said "a piece". Which piece it was is
                           the one thing a dispute about this box turns on. */}
@@ -155,7 +174,16 @@ export default async function BoxPage({ params }: { params: Promise<{ id: string
                       <Td>
                         <Badge tone={label.tone}>{label.text}</Badge>
                       </Td>
-                      <Td className="tabular font-medium">{s.stockNumber ?? "—"}</Td>
+                      <Td className="tabular font-medium">
+                        {watchBox && s.stockNumber ? (
+                          <span className="flex items-center gap-2">
+                            <WatchImage url={pictures.get(s.stockNumber)} model={s.stockNumber} size={40} />
+                            {s.stockNumber}
+                          </span>
+                        ) : (
+                          (s.stockNumber ?? "—")
+                        )}
+                      </Td>
                       <Td className="text-ink-muted">{s.byName}</Td>
                       <Td className="text-ink-muted">{s.note ?? "—"}</Td>
                     </tr>

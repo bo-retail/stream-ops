@@ -36,6 +36,14 @@ localhost:4321): its `whatif.mjs` lists 119 situations and how each is handled.
   reuse the same picture box. An uploaded photo always wins over the link, so
   a new master never replaces it; it is shrunk in the browser to about 60 KB
   and kept in the database (`ProductPhoto`), no outside storage.
+- **The real picture wherever a watch is shown** (Samuel, 1 October): every
+  place the demo draws its coloured watch icon beside a model — offers,
+  receiving, the show run, slow movers, the morning numbers, every table of
+  models — uses the model's real picture instead (`WatchImage`, with
+  `picturesFor` for lists keyed by stock number). Already on the inventory
+  screens, Sales insights' best sellers, the box log and the packing screen
+  (packers see pictures only, fetched beside the scans, never in their way). A placeholder
+  listing shows the piece scanned for it where known; diamonds show none.
 - **Sold, then sent.** A paid report line makes the watch "sold, waiting to ship"
   (no longer available, still in the building). The packing scan must match the
   report's `model #`; a wrong watch is refused (the packer's mistake; stock does not

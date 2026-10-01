@@ -553,6 +553,33 @@ export async function setImageUrl(userId: string, model: string, raw: string): P
   return { ok: true };
 }
 
+/**
+ * The picture of each of these models, for any screen that lists watches by
+ * stock number (sales insights, the box log). Keyed by the stock number as
+ * given; a stock number that is no model in the catalogue — a placeholder
+ * listing, a typo — gets "" and shows the plain outline.
+ *
+ * Never fails the screen it is on: if the catalogue cannot be read (a deploy
+ * that went out before its migration, a database hiccup), every watch simply
+ * shows no picture and sales insights or the box log work as before.
+ */
+export async function picturesFor(stockNumbers: string[]): Promise<Map<string, string>> {
+  const wanted = [...new Set(stockNumbers.map(normaliseModel).filter((m) => m !== ""))];
+  let products: { model: string; imageUrl: string; photo: { updatedAt: Date } | null }[] = [];
+  if (wanted.length > 0) {
+    try {
+      products = await prisma.product.findMany({
+        where: { model: { in: wanted } },
+        select: { model: true, imageUrl: true, photo: { select: { updatedAt: true } } },
+      });
+    } catch (e) {
+      console.error("picturesFor: no pictures this time", e);
+    }
+  }
+  const byModel = new Map(products.map((p) => [p.model, pictureFor(p.model, p.imageUrl, p.photo?.updatedAt)]));
+  return new Map(stockNumbers.map((s) => [s, byModel.get(normaliseModel(s)) ?? ""]));
+}
+
 /** A model's uploaded photo, for the picture route. */
 export async function readPhoto(model: string): Promise<{ data: Uint8Array; contentType: string } | null> {
   const photo = await prisma.productPhoto.findFirst({

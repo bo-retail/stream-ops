@@ -12,6 +12,7 @@ import {
   Th,
 } from "@/components/ui";
 import { DailyBars, MiniBar, SERIES, SplitBar } from "@/components/charts";
+import { WatchImage } from "@/components/watch-image";
 import { requireBoss } from "@/lib/auth/guards";
 import { ITEM_WORD } from "@/lib/domain/business";
 import { diffDays, formatDate, formatDateRange, isDateISO } from "@/lib/domain/dates";
@@ -463,6 +464,7 @@ export default async function InsightsPage({
                     <tr key={m.stockNumber}>
                       <Td className="font-medium">
                         <span className="flex items-center gap-1.5">
+                          <WatchImage url={m.picture} model={m.stockNumber} size={48} className="mr-1" />
                           <span className="w-4 shrink-0" aria-hidden>
                             {m.hot ? "🔥" : null}
                           </span>

@@ -6,6 +6,7 @@ import { addDays, datesBetween, fromDbDate, toDbDate, todayISO } from "@/lib/dom
 import { change, hotThreshold, previousRange } from "@/lib/domain/insights";
 import type { Change } from "@/lib/domain/insights";
 import type { DateISO } from "@/lib/domain/types";
+import { picturesFor } from "./inventory";
 import { latestBatchIds, loadedSpan } from "./sales-data";
 import { getSettings } from "./settings";
 
@@ -63,6 +64,8 @@ export interface BestSeller {
   avgPriceCents: number;
   allTimeUnits: number;
   hot: boolean;
+  /** The watch's picture from the catalogue, or "" for none. */
+  picture: string;
 }
 
 export interface SalesInsights {
@@ -332,6 +335,7 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
   const allTime = new Map(allTimeModels.map((m) => [m.stockNumber, m._sum.qty ?? 0]));
   const threshold = hotThreshold([...allTime.values()]);
 
+  const pictures = await picturesFor(byModel.map((m) => m.stockNumber));
   const bestSellers: BestSeller[] = byModel.map((m) => {
     const units = m._sum.qty ?? 0;
     const revenueCents = m._sum.netItemPriceCents ?? 0;
@@ -343,6 +347,7 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
       avgPriceCents: units === 0 ? 0 : Math.round(revenueCents / units),
       allTimeUnits,
       hot: allTimeUnits >= threshold,
+      picture: pictures.get(m.stockNumber) ?? "",
     };
   });
 

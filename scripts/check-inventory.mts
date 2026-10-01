@@ -32,7 +32,7 @@ import ExcelJS from "exceljs";
 import { assertDevDatabase } from "./dev-only.mjs";
 import { prisma } from "../src/lib/db";
 import { isMasterColumn, isMasterHeading, sheetRows } from "../src/lib/domain/inventory-sheets";
-import { countSheet, getModel, importMaster, listStock, readCountSheet, readPhoto, removePhoto, saveCount, savePhoto, setImageUrl } from "../src/lib/server/inventory";
+import { countSheet, getModel, importMaster, listStock, picturesFor, readCountSheet, readPhoto, removePhoto, saveCount, savePhoto, setImageUrl } from "../src/lib/server/inventory";
 import { MAX_PHOTO_BYTES } from "../src/lib/domain/watch-images";
 
 assertDevDatabase("check-inventory.mts");
@@ -350,6 +350,17 @@ try {
   check("every change of picture is in the audit log (4 photos, 1 removal, 2 links)", logged.map((l) => l.action).sort(), [
     "IMAGE_URL_SET", "IMAGE_URL_SET", "PHOTO_REMOVED", "PHOTO_SAVED", "PHOTO_SAVED", "PHOTO_SAVED", "PHOTO_SAVED",
   ]);
+
+  console.log("\nPictures on other screens (sales insights, the box log), by stock number.");
+  const pic2 = `${P}PIC2`;
+  await importMaster(boss.id, "pictures-3.xlsx", await masterFile([{ "Invicta Model": pic2, Description: "Picture test 2", URL: link1 }]));
+  await savePhoto(boss.id, pic, jpeg(500));
+  const messy = ` ${pic2.toLowerCase()} `;
+  const looked = await picturesFor([pic2, messy, pic, "#300 - Invicta Random Pulls", "", pic2]);
+  check("a model shows its link, however the report wrote its stock number", [looked.get(pic2), looked.get(messy)], [link1, link1]);
+  check("a model with a photo shows the photo", looked.get(pic)?.startsWith("/api/inventory/photo/"), true);
+  check("a placeholder listing or a blank gets no picture, not an error", [looked.get("#300 - Invicta Random Pulls"), looked.get("")], ["", ""]);
+  check("nothing to look up is fine", (await picturesFor([])).size, 0);
 
   /* --------------------------------------- history cannot be deleted */
 

@@ -3,11 +3,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, PackageCheck, RotateCcw, ScanLine, TriangleAlert, X } from "lucide-react";
 import { Badge, Button, Card } from "@/components/ui";
+import { WatchImage } from "@/components/watch-image";
 import { ITEM_WORD, items } from "@/lib/domain/business";
 import { normaliseStockNumber } from "@/lib/domain/imports/tracking";
 import { PLATFORM_SHORT } from "@/lib/domain/types";
 import { addAnyway, closeBox, scanItem, scanLabel, startUnknownBox, undoClose } from "./actions";
 import type { PackingBoxView, ScanOutcome } from "@/lib/server/packing";
+import { useBoxPictures } from "./use-box-pictures";
 
 /**
  * The packing screen.
@@ -67,6 +69,8 @@ export function ScanClient() {
   /** How many scans are still with the server. Never a reason to refuse one. */
   const [inFlight, setInFlight] = useState(0);
   const busy = inFlight > 0;
+  // The watches' pictures, so she can see she has the right one in her hand.
+  const pictures = useBoxPictures(box);
 
   const input = useRef<HTMLInputElement>(null);
   const focus = () => input.current?.focus();
@@ -541,40 +545,47 @@ export function ScanClient() {
               {box.items.map((item) => {
                 const done = item.outstanding === 0;
                 const extra = item.scanned > item.expected;
+                // A placeholder line has no watch until its piece is scanned; then it shows that piece.
+                const pictureOf = item.placeholder ? item.pieces[item.pieces.length - 1] : item.stockNumber;
                 return (
                   <li
                     key={item.stockNumber}
                     className={`flex items-center justify-between gap-3 px-4 py-2.5 ${done && !extra ? "bg-ok-50/40" : ""}`}
                   >
-                    {item.placeholder ? (
-                      /*
-                        A placeholder listing: the report only says "a piece".
-                        Its title is printed on nothing, so the instruction is
-                        the useful part and the title is shown small beneath it.
-                      */
-                      <span className="min-w-0">
-                        <span className={`block text-sm font-medium ${done ? "text-ink-muted" : "text-ink"}`}>
-                          {done ? (
-                            <>Piece recorded: <span className="tabular">{item.pieces.join(", ")}</span></>
-                          ) : (
-                            <>Scan the tag on the piece</>
-                          )}
-                        </span>
-                        <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-subtle">
-                          <Badge tone="neutral">Placeholder listing</Badge>
-                          <span className="truncate">{item.stockNumber}</span>
-                        </span>
-                        {!done && item.pieces.length > 0 ? (
-                          <span className="mt-0.5 block text-xs text-ink-muted">
-                            So far: <span className="tabular">{item.pieces.join(", ")}</span>
+                    <span className="flex min-w-0 items-center gap-3">
+                      {box.business === "WATCH" && pictureOf ? (
+                        <WatchImage url={pictures.get(pictureOf)} model={pictureOf} size={48} className={done ? "opacity-60" : ""} />
+                      ) : null}
+                      {item.placeholder ? (
+                        /*
+                          A placeholder listing: the report only says "a piece".
+                          Its title is printed on nothing, so the instruction is
+                          the useful part and the title is shown small beneath it.
+                        */
+                        <span className="min-w-0">
+                          <span className={`block text-sm font-medium ${done ? "text-ink-muted" : "text-ink"}`}>
+                            {done ? (
+                              <>Piece recorded: <span className="tabular">{item.pieces.join(", ")}</span></>
+                            ) : (
+                              <>Scan the tag on the piece</>
+                            )}
                           </span>
-                        ) : null}
-                      </span>
-                    ) : (
-                      <span className={`tabular text-sm font-medium ${done ? "text-ink-muted line-through" : "text-ink"}`}>
-                        {item.stockNumber}
-                      </span>
-                    )}
+                          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-subtle">
+                            <Badge tone="neutral">Placeholder listing</Badge>
+                            <span className="truncate">{item.stockNumber}</span>
+                          </span>
+                          {!done && item.pieces.length > 0 ? (
+                            <span className="mt-0.5 block text-xs text-ink-muted">
+                              So far: <span className="tabular">{item.pieces.join(", ")}</span>
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <span className={`tabular text-sm font-medium ${done ? "text-ink-muted line-through" : "text-ink"}`}>
+                          {item.stockNumber}
+                        </span>
+                      )}
+                    </span>
                     <span className="tabular shrink-0 text-sm">
                       {extra ? (
                         <span className="font-semibold text-warn-700">

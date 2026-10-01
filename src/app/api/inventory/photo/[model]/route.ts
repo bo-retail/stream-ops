@@ -7,13 +7,13 @@ import { readPhoto } from "@/lib/server/inventory";
  *
  * The address carries the time it was saved (`?v=`), so a new photo is a new
  * address and the browser can keep each one for good. Private, because only
- * the people who see inventory see these.
+ * the shipping team (directors, and packers on the packing screen) and the
+ * admins see these.
  */
 export async function GET(_req: Request, { params }: { params: Promise<{ model: string }> }) {
   const user = await getCurrentUser();
   if (!user) return new NextResponse("Not signed in.", { status: 401 });
-  const allowed = user.role === "BOSS" || (user.role === "MANAGER" && user.team === "SHIPPING");
-  if (!allowed) return new NextResponse("Not allowed.", { status: 403 });
+  if (user.role !== "BOSS" && user.team !== "SHIPPING") return new NextResponse("Not allowed.", { status: 403 });
 
   const { model } = await params;
   // Next has already decoded it; decoding again would break a model with a "%".
