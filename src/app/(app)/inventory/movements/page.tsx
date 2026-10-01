@@ -6,6 +6,7 @@ import { WatchImage } from "@/components/watch-image";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { PLACES, PLACE_LABEL } from "@/lib/domain/inventory";
 import { ADJUST_REASONS, MOVE_REASONS, RETURN_PLACES, RETURN_TYPES } from "@/lib/domain/movements";
+import { bringStockUpToDateQuietly } from "@/lib/server/deduction";
 import { getPrompts, recentEntries } from "@/lib/server/movements";
 import { PromptButton, RowsForm, UndoButton, UploadTemplate } from "./forms";
 import type { Field } from "./forms";
@@ -35,8 +36,8 @@ const RETURN_FIELDS: Field[] = [
   { name: "Model #", label: "Model (the watch in hand)", width: "w-40" },
   { name: "Quantity", label: "How many", width: "w-20", numeric: true },
   { name: "Type", label: "Type", width: "w-40", options: RETURN_TYPES },
-  { name: "Goes to", label: "Goes to", width: "w-36", options: RETURN_PLACES },
-  { name: "Order #", label: "Order #", width: "w-36" },
+  { name: "Goes to", label: "Goes to (back in stock)", width: "w-40", options: RETURN_PLACES },
+  { name: "Order #", label: "TikTok order ID / eBay sales record # (always, for a cancellation)", width: "w-72" },
   { name: "Condition / note", label: "Condition / note", width: "w-56" },
 ];
 
@@ -60,7 +61,9 @@ const KIND_LABEL: Record<string, string> = { MOVES: "Moves", ADJUSTMENTS: "Adjus
  * every recent save at the bottom, each with an undo.
  */
 export default async function MovementsPage() {
-  await requireShippingDirector();
+  const user = await requireShippingDirector();
+  // Today's sales and packing first, so the prompts and the returns see stock as it is.
+  await bringStockUpToDateQuietly(user.id, { ifChanged: true });
   const [suggestions, entries] = await Promise.all([getPrompts(), recentEntries()]);
 
   return (

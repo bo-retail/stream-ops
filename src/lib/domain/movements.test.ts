@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Place } from "./inventory";
-import { isBlankRow, prompts, readAdjustment, readMove, readPlace, readReturn } from "./movements";
+import { isBlankRow, prompts, readAdjustment, readMove, readOrder, readPlace, readReturn } from "./movements";
 
 const stock = (over: Partial<Record<Place, number>> = {}): Record<Place, number> => ({
   SELLABLE: 0, SAMPLE_EBAY: 0, SAMPLE_TIKTOK: 0, RANDOM_PULLS: 0, DAMAGED: 0, ...over,
@@ -83,10 +83,39 @@ describe("what Gladys is asked", () => {
     expect(prompts([{ model: "49888", balances: stock({ SELLABLE: 10, SAMPLE_EBAY: 1, SAMPLE_TIKTOK: 1 }), firstReceived: recent }], now)).toEqual([]);
   });
   it("the shelf ran out with samples on the tables: move them to random pulls?", () => {
-    const p = prompts([{ model: "49888", balances: stock({ SAMPLE_EBAY: 1, SAMPLE_TIKTOK: 1 }), firstReceived: null }], now);
+    const p = prompts([{ model: "49888", balances: stock({ SAMPLE_EBAY: 1, SAMPLE_TIKTOK: 1 }), firstReceived: null, lastShelfSale: recent }], now);
     expect([p[0].kind, p[0].moves.map((m) => [m.from, m.to, m.qty])]).toEqual(["samples to random pulls", [["SAMPLE_EBAY", "RANDOM_PULLS", 1], ["SAMPLE_TIKTOK", "RANDOM_PULLS", 1]]]);
   });
   it("nothing on the shelf and no samples: nothing to ask", () => {
     expect(prompts([{ model: "49888", balances: stock({ RANDOM_PULLS: 2 }), firstReceived: null }], now)).toEqual([]);
+  });
+});
+
+describe("after the review", () => {
+  it("an order number as people type or paste it", () => {
+    expect([readOrder("#577301"), readOrder("# 5773 01 "), readOrder(577301), readOrder("577301.0"), readOrder(null)]).toEqual([
+      { ok: true, order: "577301" }, { ok: true, order: "577301" }, { ok: true, order: "577301" }, { ok: true, order: "577301" }, { ok: true, order: "" },
+    ]);
+  });
+  it("an order number Excel already rounded is refused, not matched to the wrong order", () => {
+    expect(readOrder(576997123456789012).ok).toBe(false);
+    expect(readOrder("5.76997E+17").ok).toBe(false);
+  });
+  it("a cancellation needs its order number; a plain return does not", () => {
+    const row = { "Model #": "49888", Quantity: 1, "Goes to": "Sellable" };
+    expect(readReturn({ ...row, Type: "Cancelled" }).ok).toBe(false);
+    expect(readReturn({ ...row, Type: "Back in stock" }).ok).toBe(true);
+    expect(readReturn({ ...row, Type: "Cancelled", "Order #": 577301 }).ok).toBe(true);
+  });
+  it("written off / credited clears Damaged, and can only take away", () => {
+    expect(readAdjustment({ "Model #": "49888", Action: "Subtract", Quantity: 1, Place: "Damaged", Reason: "Written off / credited" }).ok).toBe(true);
+    expect(readAdjustment({ "Model #": "49888", Action: "Add", Quantity: 1, Place: "Damaged", Reason: "Written off / credited" }).ok).toBe(false);
+  });
+  it("a shelf at zero is only asked about if it ran out by selling lately — not after the opening count", () => {
+    const now = new Date("2026-10-08T12:00:00Z");
+    const base = { model: "49888", balances: stock({ SAMPLE_EBAY: 1 }), firstReceived: null };
+    expect(prompts([base], now)).toEqual([]);
+    expect(prompts([{ ...base, lastShelfSale: new Date("2026-08-01") }], now)).toEqual([]);
+    expect(prompts([{ ...base, lastShelfSale: new Date("2026-10-07") }], now)).toHaveLength(1);
   });
 });

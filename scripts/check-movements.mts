@@ -34,7 +34,7 @@ import { readAdjustment, readMove, readReturn } from "../src/lib/domain/movement
 import type { Row } from "../src/lib/domain/movements";
 import { bringStockUpToDate, getStartDate, setStartDate } from "../src/lib/server/deduction";
 import { getModel, saveCount } from "../src/lib/server/inventory";
-import { getPrompts, readTemplate, saveAdjustments, saveMoves, saveReturns, templateSheet, undoEntry } from "../src/lib/server/movements";
+import { getPrompts, readTemplate, saveAdjustments, saveMoves, saveReturns, snoozePrompt, templateSheet, undoEntry } from "../src/lib/server/movements";
 import { getSettings } from "../src/lib/server/settings";
 
 assertDevDatabase("check-movements.mts");
@@ -65,7 +65,7 @@ async function cleanUp() {
   await prisma.stockSale.deleteMany({ where: { id: { in: sales } } });
   await prisma.stockEntry.deleteMany({ where: { id: { in: entries } } });
   await prisma.importBatch.deleteMany({ where: { files: { equals: [{ name: "ZZTEST" }] } } });
-  await prisma.auditLog.deleteMany({ where: { entityId: { in: [...products, ...entries] } } });
+  await prisma.auditLog.deleteMany({ where: { OR: [{ entityId: { in: [...products, ...entries] } }, { action: "PROMPT_NOT_YET", entityId: { startsWith: P } }] } });
   await prisma.product.deleteMany({ where: { id: { in: products } } });
 }
 const stock = async (model: string) => {
@@ -129,6 +129,11 @@ try {
   check("a giveaway gone, a damaged one to Damaged, a found one in random pulls", [a1.ok, await stock(M1)], [true, { S: 2, E: 1, T: 0, R: 1, D: 1, W: 0 }]);
   const dmg = await prisma.stockMove.findFirstOrThrow({ where: { product: { model: M1 }, kind: "ADJUST", place: "DAMAGED" } });
   check("  the damaged one keeps its cost", dmg.unitCostCents, 2500);
+  const dmgOff = await saveAdjustments(boss.id, [
+    adj({ "Model #": M2, Action: "Subtract", Quantity: 1, Place: "Damaged", Reason: "Written off / credited" }),
+    adj({ "Model #": M2, Action: "Subtract", Quantity: 1, Place: "Sellable", Reason: "Damaged" }),
+  ], "check");
+  check("damaged, then written off, in one save (whatever the row order): works", [dmgOff.ok, (await stock(M2)).D, (await stock(M2)).S], [true, 0, 2]);
   check("taking away more than there is: refused", (await saveAdjustments(boss.id, [adj({ "Model #": M1, Action: "Subtract", Quantity: 7, Place: "Sellable", Reason: "Lost" })], "check")).ok, false);
 
   console.log("\nReturns and cancellations.");
@@ -137,15 +142,31 @@ try {
   check("  (two sold: one waiting, one shipped)", await stock(M1), { S: 0, E: 1, T: 0, R: 1, D: 1, W: 1 });
   const c1 = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Back in stock", "Goes to": "Inventory", "Order #": "ZZ-R1" })], "check");
   check("cancelled before it shipped: out of waiting, back on the shelf, the sale marked cancelled", [c1.ok, await stock(M1), (await prisma.stockSale.findUniqueOrThrow({ where: { id: waiting } })).status], [true, { S: 1, E: 1, T: 0, R: 1, D: 1, W: 0 }, "CANCELLED"]);
+  await sale("R4", M3, "SOLD", 1500);
+  const typoModel = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Cancelled", "Goes to": "Sellable", "Order #": "ZZ-R4" })], "check");
+  check("a cancellation with the wrong model typed: refused — that order is waiting to ship another watch", [typoModel.ok, typoModel.problems[0]?.includes("waiting to ship"), (await stock(M3)).W], [false, true, 1]);
+  await saveReturns(boss.id, [ret({ "Model #": M3, Quantity: 1, Type: "Cancelled", "Goes to": "Sellable", "Order #": "ZZ-R4" })], "check");
+  await saveAdjustments(boss.id, [adj({ "Model #": M3, Action: "Subtract", Quantity: 1, Place: "Sellable", Reason: "Miscount" })], "check");
   const again = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Back in stock", "Goes to": "Inventory", "Order #": "ZZ-R1" })], "check");
   check("the same cancellation twice: refused, nothing moves", [again.ok, again.problems[0]?.includes("already put back"), (await stock(M1)).S], [false, true, 1]);
   const r2 = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Back in stock", "Goes to": "Random pulls", "Order #": "ZZ-R2", "Condition / note": "scratched" })], "check");
   const back = await prisma.stockMove.findFirstOrThrow({ where: { saleId: shipped, kind: "RETURN" } });
   check("a return after shipping, slightly damaged: to random pulls, at the cost it left with", [r2.ok, (await stock(M1)).R, back.unitCostCents, (await prisma.stockSale.findUniqueOrThrow({ where: { id: shipped } })).status], [true, 2, 2300, "RETURNED"]);
-  const before = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Back in stock", "Goes to": "Inventory", "Order #": "123456" })], "check");
-  check("a return with no sale (sold before launch): back at the model's cost, and says so", [before.ok, (await stock(M1)).S, before.done[0]?.includes("before launch")], [true, 2, true]);
+  const typo = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Back in stock", "Goes to": "Sellable", "Order #": "123456" })], "check");
+  check("an order number in no report (a typo, the eBay order no.): refused, nothing counted twice", [typo.ok, typo.problems[0]?.includes("in no report"), (await stock(M1)).S], [false, true, 1]);
+  const before = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Back in stock", "Goes to": "Sellable" })], "check");
+  check("a return with no order (sold before StreamOps): back at the model's cost, and says so", [before.ok, (await stock(M1)).S, before.done[0]?.includes("no order given")], [true, 2, true]);
+  await sale("R3", M2, "SENT", 2000);
+  const other = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Back in stock", "Goes to": "Damaged", "Order #": "ZZ-R3" })], "check");
+  check("a different watch came back than was sold: the one in hand goes back, with a note; broken to Damaged", [other.ok, (await stock(M1)).D, other.done[0]?.includes("a different watch came back")], [true, 2, true]);
   const ex = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Exchange / reship" }), ret({ "Model #": M1, Quantity: 1, Type: "Refund only" })], "check");
   check("an exchange takes one off the shelf; a refund only moves nothing", [ex.ok, (await stock(M1)).S], [true, 1]);
+  await saveAdjustments(boss.id, [adj({ "Model #": M1, Action: "Subtract", Quantity: 1, Place: "Sellable", Reason: "Lost" })], "check");
+  const swap = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Exchange / reship" }), ret({ "Model #": M1, Quantity: 1, Type: "Back in stock", "Goes to": "Sellable" })], "check");
+  check("a swap with the shelf at zero (the customer's watch back, a replacement out): works", [swap.ok, (await stock(M1)).S], [true, 0]);
+  const noReplacement = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Exchange / reship" })], "check");
+  check("an exchange takes the replacement from a sample, never the returned watch sitting in random pulls", [noReplacement.ok, (await stock(M1)).R, (await stock(M1)).E], [true, 2, 0]);
+  await saveAdjustments(boss.id, [adj({ "Model #": M1, Action: "Add", Quantity: 1, Place: "Sellable", Reason: "Found" })], "check");
 
   // The report still lists the cancelled order; the next upload must not take it off again.
   const realSales = await prisma.salesRecord.count({ where: { showDate: { gte: toDbDate(addDays(today, -15)) }, NOT: { orderRef: { startsWith: "ZZ-" } } } });
@@ -159,6 +180,29 @@ try {
     await setStartDate(boss.id, addDays(today, -1));
     await bringStockUpToDate(boss.id);
     check("the report still listing the cancelled order: not taken off again", [(await prisma.stockSale.findUniqueOrThrow({ where: { id: waiting } })).status, (await stock(M1)).W], ["CANCELLED", 0]);
+    // …and then its box is packed and sent anyway.
+    await prisma.importBatch.create({
+      data: {
+        business: "WATCH", showDate: toDbDate(addDays(today, -1)), status: "OK", platform: "TIKTOK", slot: "NIGHT", files: [{ name: "ZZTEST" }], flags: [],
+        uploadedAt: new Date(Date.now() + 5000),
+        sales: { create: [{ platform: "TIKTOK", show: "TikTok PM", showDate: toDbDate(addDays(today, -1)), shiftTag: "", rawShiftTag: "", orderRef: "ZZ-R1", lineRef: "1", buyer: "t", stockNumber: M1, tracking: "ZZTR1", sourceFile: "ZZTEST" }] },
+      },
+    });
+    await prisma.package.create({ data: { trackingNumber: "ZZTR1", platform: "TIKTOK", showDate: toDbDate(addDays(today, -1)), status: "CLOSED_COMPLETE", items: { create: [{ stockNumber: M1, expectedQty: 1, scannedQty: 1 }] } } });
+    await bringStockUpToDate(boss.id);
+    const packed = await prisma.stockSale.findUniqueOrThrow({ where: { id: waiting } });
+    check("a cancelled order packed and sent anyway: flagged for a person, stock not touched", [packed.status, packed.flag.startsWith("Cancelled, but its box was packed"), (await stock(M1)).W], ["CANCELLED", true, 0]);
+    // A sale in a report since launch that has not come off stock yet.
+    await prisma.importBatch.create({
+      data: {
+        business: "WATCH", showDate: toDbDate(today), status: "OK", platform: "TIKTOK", slot: "DAY", files: [{ name: "ZZTEST" }], flags: [],
+        sales: { create: [{ platform: "TIKTOK", show: "TikTok AM", showDate: toDbDate(today), shiftTag: "", rawShiftTag: "", orderRef: "ZZ-R9", lineRef: "1", buyer: "t", stockNumber: M1, tracking: "", sourceFile: "ZZTEST" }] },
+      },
+    });
+    const early = await saveReturns(boss.id, [ret({ "Model #": M1, Quantity: 1, Type: "Cancelled", "Goes to": "Sellable", "Order #": "ZZ-R9" })], "check");
+    check("cancelling an order that has not come off stock yet: refused, try again in a minute", [early.ok, early.problems[0]?.includes("not come off stock yet")], [false, true]);
+    await prisma.packageItem.deleteMany({ where: { package: { trackingNumber: "ZZTR1" } } });
+    await prisma.package.delete({ where: { trackingNumber: "ZZTR1" } });
     await setStartDate(boss.id, startBefore);
   } else console.log(`SKIP  the upload-after-cancellation step: ${realSales} real sale(s) in the dev database.`);
 
@@ -167,6 +211,11 @@ try {
   const u = await undoEntry(boss.id, entry.id);
   check("undo a cancellation: back in waiting, the sale waiting again", [u.ok, (await stock(M1)).W, (await prisma.stockSale.findUniqueOrThrow({ where: { id: waiting } })).status], [true, 1, "SOLD"]);
   check("undo twice: refused", (await undoEntry(boss.id, entry.id)).ok, false);
+  const pulled = await saveMoves(boss.id, [move({ "Model #": M2, Quantity: 1, From: "Sellable", To: "Damaged", Reason: "Sample damaged" })], "check");
+  const pulledEntry = await prisma.stockEntry.findFirstOrThrow({ where: { kind: "MOVES" }, orderBy: { at: "desc" } });
+  await saveAdjustments(boss.id, [adj({ "Model #": M2, Action: "Subtract", Quantity: 1, Place: "Sellable", Reason: "Written off / credited" }).place === "SELLABLE" ? { model: M2, qty: -1, place: "DAMAGED", reason: "Written off / credited", note: "" } : (() => { throw new Error(); })()], "check");
+  const blocked = await undoEntry(boss.id, pulledEntry.id);
+  check("undo after the pieces moved on (the damaged one written off): refused, never below zero", [pulled.ok, blocked.ok, blocked.problem?.includes("below zero"), (await stock(M2)).D], [true, false, true, 0]);
 
   console.log("\nWhat Gladys is asked.");
   const p2 = await prisma.product.findUniqueOrThrow({ where: { model: M2 } });
@@ -174,12 +223,21 @@ try {
   // A received line of 0 is not an arrival; one of 1 is.
   await prisma.stockMove.create({ data: { productId: p2.id, place: "SELLABLE", qty: 1, kind: "RECEIVED", note: "check: first arrival", entryId: "check-received" } });
   const asks = (await getPrompts()).filter((x) => x.model.startsWith(P));
-  // M100's shelf is at 0 here (the undo above took its cancelled watch back to waiting) with its eBay sample out.
-  check("a new model: pull its samples; a model out on the shelf: samples to random pulls", asks.map((x) => `${x.model}:${x.kind}`).sort(), [`${M1}:samples to random pulls`, `${M2}:pull samples`, `${M3}:samples to random pulls`].sort());
-  for (const a of asks) await saveMoves(boss.id, a.moves.map((m) => ({ ...m, note: "" })), "prompt");
-  check("said yes: samples on both tables; samples in random pulls; nothing more to ask", [
-    await stock(M2), await stock(M3), (await getPrompts()).filter((x) => x.model.startsWith(P)).length,
-  ], [{ S: 2, E: 1, T: 1, R: 0, D: 0, W: 0 }, { S: 0, E: 0, T: 0, R: 2, D: 0, W: 0 }, 0]);
+  // M300 sold off its shelf in this test (order R4) and has only its samples left; M100 has no samples left
+  // (its eBay one went out on the exchange). A model that never sold off its shelf is never asked about (unit test).
+  check("a new model: pull its samples; a model that sold out: samples to random pulls", asks.map((x) => `${x.model}:${x.kind}`).sort(), [`${M2}:pull samples`, `${M3}:samples to random pulls`].sort());
+  await snoozePrompt(boss.id, M3, "samples to random pulls");
+  check("\"Not yet\": not asked again today", (await getPrompts()).some((x) => x.model === M3), false);
+  const pull = asks.find((a) => a.model === M2)!;
+  const twice = await Promise.all([
+    saveMoves(boss.id, pull.moves.map((m) => ({ ...m, note: "" })), "prompt a", { onlyIntoEmpty: true }),
+    saveMoves(boss.id, pull.moves.map((m) => ({ ...m, note: "" })), "prompt b", { onlyIntoEmpty: true }),
+  ]);
+  // One piece on the shelf: one sample (eBay), and only once.
+  check("two people say yes to the same prompt: one pull, not two", [twice.map((t) => t.ok).sort(), await stock(M2)], [[false, true], { S: 0, E: 1, T: 0, R: 0, D: 0, W: 0 }]);
+  // M200 sold off its shelf in this test (order R3) and now has only its samples, so the next question is fair.
+  check("once answered, its samples prompt is gone; the shelf now empty asks the next question", (await getPrompts()).filter((x) => x.model === M2).map((x) => x.kind), ["samples to random pulls"]);
+  await saveAdjustments(boss.id, [adj({ "Model #": M2, Action: "Add", Quantity: 2, Place: "Sellable", Reason: "Found" })], "check");
 
   console.log("\nTemplates.");
   const wb = new ExcelJS.Workbook();

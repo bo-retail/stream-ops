@@ -25,8 +25,8 @@ export const MOVE_REASONS = [
 ] as const;
 
 /** Daniel's list. Damaged moves the pieces to Damaged; the rest add or take away. */
-export const ADJUST_REASONS = ["Damaged", "Owner gift", "Content", "Giveaway", "Lost", "Direct sale", "Miscount", "Found"] as const;
-const SUBTRACT_ONLY = new Set<string>(["Damaged", "Owner gift", "Content", "Giveaway", "Lost", "Direct sale"]);
+export const ADJUST_REASONS = ["Damaged", "Owner gift", "Content", "Giveaway", "Lost", "Direct sale", "Miscount", "Found", "Written off / credited"] as const;
+const SUBTRACT_ONLY = new Set<string>(["Damaged", "Owner gift", "Content", "Giveaway", "Lost", "Direct sale", "Written off / credited"]);
 const ADD_ONLY = new Set<string>(["Found"]);
 
 export const RETURN_TYPES = ["Back in stock", "Exchange / reship", "Refund only"] as const;
@@ -37,9 +37,27 @@ const RETURN_ALIASES: Record<string, ReturnType> = {
   "cancelled before shipping": "Back in stock", "not shipped": "Back in stock", exchange: "Exchange / reship", reship: "Exchange / reship",
   refund: "Refund only",
 };
+/** Words that say "cancelled": those need the order, so the right waiting watch comes back. */
+const CANCEL_WORDS = new Set(["cancelled", "canceled", "cancelled before shipping", "not shipped"]);
 /** Where a watch back in stock goes: the shelf, random pulls (slightly damaged — always, Daniel round 5), or damaged. */
-export const RETURN_PLACES = ["Inventory", "Random pulls", "Damaged"] as const;
+export const RETURN_PLACES = ["Sellable", "Random pulls", "Damaged"] as const;
 const RETURN_TO: Record<string, Place> = { inventory: "SELLABLE", sellable: "SELLABLE", "random pulls": "RANDOM_PULLS", damaged: "DAMAGED" };
+
+/**
+ * An order number as typed or pasted: "#", spaces and a stray ".0" gone. A
+ * number Excel has already rounded (a TikTok order id is 18 digits; Excel keeps
+ * 15) is refused rather than matched to the wrong order.
+ */
+export function readOrder(raw: string | number | null | undefined): { ok: true; order: string } | { ok: false; why: string } {
+  if (raw === null || raw === undefined) return { ok: true, order: "" };
+  if (typeof raw === "number") {
+    if (!Number.isSafeInteger(raw)) return { ok: false, why: `the order number ${raw} was changed by Excel — type it in a text cell, or copy it again` };
+    return { ok: true, order: String(raw) };
+  }
+  const t = raw.trim().replace(/^#\s*/, "").replace(/\s+/g, "").replace(/\.0+$/, "");
+  if (/e\+?\d+$/i.test(t)) return { ok: false, why: `the order number "${raw.trim()}" was changed by Excel — type it in a text cell` };
+  return { ok: true, order: t };
+}
 
 /** The template columns, in order. */
 export const MOVE_COLUMNS = ["Model #", "Quantity", "From", "To", "Reason", "Note"] as const;
@@ -158,7 +176,13 @@ export function readReturn(row: Row): { ok: true; ret: ReturnRow } | { ok: false
   const goesTo = cell(row, "Goes to");
   const to = type === "Back in stock" ? (RETURN_TO[goesTo.trim().toLowerCase()] ?? null) : null;
   if (type === "Back in stock" && !to) return { ok: false, why: `${model}: Goes to must be one of ${RETURN_PLACES.join(", ")} — where Gladys put it` };
-  return { ok: true, ret: { model, qty: q.qty, type, to, order: cell(row, "Order #", "Order").replace(/^#/, ""), note: cell(row, "Condition / note", "Note").slice(0, 500) } };
+  const orderKey = Object.keys(row).find((h) => ["order #", "order"].includes(h.trim().toLowerCase()));
+  const order = readOrder(orderKey === undefined ? null : (row[orderKey] ?? null));
+  if (!order.ok) return { ok: false, why: `${model}: ${order.why}` };
+  if (CANCEL_WORDS.has(typed.trim().toLowerCase()) && order.order === "") {
+    return { ok: false, why: `${model}: a cancellation needs its order number, so the right waiting watch comes back` };
+  }
+  return { ok: true, ret: { model, qty: q.qty, type, to, order: order.order, note: cell(row, "Condition / note", "Note").slice(0, 500) } };
 }
 
 /* -------------------------------------------------------- what Gladys is asked */
@@ -168,6 +192,8 @@ export interface ModelState {
   balances: Record<Place, number>;
   /** When it first came in on a shipment, if it did. */
   firstReceived: Date | null;
+  /** When a sale last came off its shelf, if one has: the shelf "ran out" only if it was selling. */
+  lastShelfSale?: Date | null;
 }
 
 export interface Prompt {
@@ -213,7 +239,10 @@ export function prompts(models: ModelState[], now: Date): Prompt[] {
       continue;
     }
     const samples = Math.max(0, b.SAMPLE_EBAY) + Math.max(0, b.SAMPLE_TIKTOK);
-    if (b.SELLABLE <= 0 && samples > 0) {
+    // Only a shelf that ran out by selling lately — not every model whose last
+    // pieces happened to be the samples on the day of the opening count.
+    const ranOut = m.lastShelfSale != null && now.getTime() - m.lastShelfSale.getTime() <= NEW_MODEL_DAYS * 86_400_000;
+    if (b.SELLABLE <= 0 && samples > 0 && ranOut) {
       out.push({
         model: m.model,
         kind: "samples to random pulls",

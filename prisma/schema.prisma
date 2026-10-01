@@ -743,6 +743,8 @@ model SalesRecord {
   @@index([showDate, show])
   @@index([batchId])
   @@index([tracking])
+  /// A return or cancellation looks its order up in the reports.
+  @@index([orderRef])
   @@index([shiftTag])
   @@index([business, showDate])
 }
@@ -1156,6 +1158,8 @@ model StockSale {
   @@index([status, showDate])
   @@index([productId])
   @@index([showDate])
+  /// A return or cancellation finds its sale by order number.
+  @@index([orderRef])
 }
 
 /// One change to one model in one place. Never edited, never deleted.

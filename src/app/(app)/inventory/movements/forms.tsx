@@ -6,7 +6,7 @@ import { Alert, Button, Input, Select } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
 import { fetchPictures } from "../../shipping/use-box-pictures";
 import type { Kind } from "@/lib/server/movements";
-import { acceptPrompt, saveTyped, undo, uploadTemplate } from "./actions";
+import { acceptPrompt, notYet, saveTyped, undo, uploadTemplate } from "./actions";
 import type { MovementState } from "./actions";
 
 export function Result({ state }: { state: MovementState }) {
@@ -60,7 +60,13 @@ export function RowsForm({ kind, fields, saveLabel }: { kind: Kind; fields: Fiel
         setBusy(true);
         setState({});
         try {
-          const r = await saveTyped(kind, rows);
+          // A row left untouched (only its dropdowns' defaults) is not a row.
+          const typed = rows.filter((r) => fields.some((f) => !f.options && (r[f.name] ?? "").trim() !== ""));
+          if (typed.length === 0) {
+            setState({ error: "Type a model and how many first." });
+            return;
+          }
+          const r = await saveTyped(kind, typed);
           setState(r);
           if (r.ok) {
             setRows([blank()]);
@@ -168,13 +174,30 @@ export function UndoButton({ entryId }: { entryId: string }) {
   );
 }
 
-/** "Yes, record it" on a prompt. Nothing moves until Gladys says so. */
+/** "Yes, record it" on a prompt, or "Not yet". Nothing moves until Gladys says so. */
 export function PromptButton({ model, kind, label }: { model: string; kind: string; label: string }) {
   const router = useRouter();
   const [state, setState] = useState<MovementState>({});
   const [busy, setBusy] = useState(false);
   return (
-    <span className="inline-flex flex-col gap-1">
+    <span className="inline-flex flex-wrap items-start gap-2">
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          try {
+            await notYet(model, kind);
+            router.refresh();
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        Not yet
+      </Button>
       <Button
         type="button"
         size="sm"

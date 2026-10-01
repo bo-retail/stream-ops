@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
 import { isBlankRow, readAdjustment, readMove, readReturn } from "@/lib/domain/movements";
 import type { Adjustment, Move, ReturnRow, Row } from "@/lib/domain/movements";
-import { getPrompts, readTemplate, saveAdjustments, saveMoves, saveReturns, undoEntry } from "@/lib/server/movements";
+import { bringStockUpToDateQuietly } from "@/lib/server/deduction";
+import { getPrompts, readTemplate, saveAdjustments, saveMoves, saveReturns, snoozePrompt, undoEntry } from "@/lib/server/movements";
 import type { Kind, SaveResult } from "@/lib/server/movements";
 
 /** Admins and shipping directors only — by role, never by name. */
@@ -32,6 +33,9 @@ const KINDS: Kind[] = ["MOVES", "ADJUSTMENTS", "RETURNS"];
  * uploaded template behave the same (build rule 11).
  */
 async function save(userId: string, kind: Kind, rows: { line?: number; row: Row }[], source: string): Promise<MovementState> {
+  // Today's sales and packing first, so a return of a watch that has just been
+  // packed is booked as a return, not as a cancellation.
+  await bringStockUpToDateQuietly(userId, { ifChanged: true });
   const problems: string[] = [];
   const at = (line?: number) => (line ? `Row ${line}: ` : "");
   let result: SaveResult;
@@ -114,8 +118,19 @@ export async function acceptPrompt(model: string, kind: string): Promise<Movemen
   if (!user) return { error: NOT_ALLOWED };
   const prompt = (await getPrompts()).find((p) => p.model === model && p.kind === kind);
   if (!prompt || prompt.moves.length === 0) return { error: "Nothing to do any more — stock has changed. Refresh the page." };
-  const r = await saveMoves(user.id, prompt.moves.map((m) => ({ ...m, note: "Asked by the app, confirmed" })), "prompt on the movements page");
+  const r = await saveMoves(user.id, prompt.moves.map((m) => ({ ...m, note: "Asked by the app, confirmed" })), "prompt on the movements page", {
+    onlyIntoEmpty: prompt.kind === "pull samples",
+  });
   if (!r.ok) return { error: "Nothing was saved:", details: r.problems };
   revalidatePath("/inventory", "layout");
   return { ok: "Recorded.", details: r.done };
+}
+
+/** "Not yet": not asked again for a day. */
+export async function notYet(model: string, kind: string): Promise<MovementState> {
+  const user = await director();
+  if (!user) return { error: NOT_ALLOWED };
+  await snoozePrompt(user.id, String(model).slice(0, 60), String(kind).slice(0, 60));
+  revalidatePath("/inventory/movements");
+  return { ok: "Asked again tomorrow." };
 }

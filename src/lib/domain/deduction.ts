@@ -323,7 +323,11 @@ export function planDeduction(
     wantedKeys.add(w.key);
     const k = known.get(w.key);
     // Cancelled or returned by hand: the reports still list the sale, and must not take it off again.
-    if (byHand(k)) continue;
+    if (byHand(k)) {
+      // …but a cancelled order whose box was packed and sent anyway needs a person.
+      if (k!.status === "CANCELLED" && w.sent) flag(k!, "Cancelled, but its box was packed and sent anyway. Check whether the watch really went.");
+      continue;
+    }
     if (sendsOnly) {
       if (!k || k.status === "UNDONE") continue;
       if (k.status === "SOLD" && w.sent && w.model === k.model) changes.push({ kind: "send", key: k.key, model: k.model });

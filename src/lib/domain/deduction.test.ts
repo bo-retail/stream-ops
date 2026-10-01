@@ -179,9 +179,12 @@ describe("a sale settled by hand (step 4)", () => {
   const k = (status: KnownSale["status"]): KnownSale => ({ key: key(), model: "49888", place: "SELLABLE", status, flag: "", tracking: "T1" });
   const run = (status: KnownSale["status"], lines: SaleLine[], b = boxes()) =>
     planDeduction(want(lines, b), new Map([[key(), k(status)]]), cat("49888"), new Map([["49888", stock({ SELLABLE: 5 })]])).changes;
-  it("cancelled: the report still listing it never takes it off again, even when its box closes", () => {
+  it("cancelled: the report still listing it never takes it off again", () => {
     expect(run("CANCELLED", [line()])).toEqual([]);
-    expect(run("CANCELLED", [line()], boxes(["T1", box("CLOSED_COMPLETE", { "49888": 1 })]))).toEqual([]);
+  });
+  it("cancelled, but its box was packed and sent anyway: flagged for a person, stock not touched", () => {
+    const c = run("CANCELLED", [line()], boxes(["T1", box("CLOSED_COMPLETE", { "49888": 1 })]));
+    expect(c).toEqual([{ kind: "flag", key: key(), flag: "Cancelled, but its box was packed and sent anyway. Check whether the watch really went." }]);
   });
   it("returned: nothing changes, and no flag when the report later drops it", () => {
     expect(run("RETURNED", [line()])).toEqual([]);
