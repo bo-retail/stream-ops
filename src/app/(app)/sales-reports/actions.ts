@@ -5,6 +5,7 @@ import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { isDateISO } from "@/lib/domain/dates";
 import { BUSINESS_SHORT, items } from "@/lib/domain/business";
+import { bringStockUpToDateQuietly } from "@/lib/server/deduction";
 import { readFiles, runImports } from "@/lib/server/imports";
 import type { ImportOutcome } from "@/lib/server/imports";
 import { deleteImport, reportRemovalImpact } from "@/lib/server/shipping";
@@ -114,6 +115,13 @@ export async function uploadReports(
   revalidatePath("/shipping");
   revalidatePath("/shipping/log");
   revalidatePath("/dashboard");
+
+  // Inventory: the new sales come off stock. Quiet: an upload never fails
+  // because of it, and it does nothing until a start date is set.
+  if (outcomes.some((o) => o.status === "OK")) {
+    await bringStockUpToDateQuietly(user.id);
+    revalidatePath("/inventory", "layout");
+  }
 
   /*
     One drop can come back as two uploads — watches and diamonds are written

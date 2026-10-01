@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { LinkButton, PageHeader } from "@/components/ui";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { todayISO } from "@/lib/domain/dates";
+import { bringStockUpToDateQuietly } from "@/lib/server/deduction";
 import { listStock } from "@/lib/server/inventory";
 import { getSettings } from "@/lib/server/settings";
 import { AddModel, CountList } from "./count-client";
@@ -16,8 +17,10 @@ export const metadata: Metadata = { title: "Count" };
  * without losing anything.
  */
 export default async function CountPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
-  await requireShippingDirector();
+  const user = await requireShippingDirector();
   const { q = "" } = await searchParams;
+  // The day's packing taken off first, so the numbers to count against are today's.
+  await bringStockUpToDateQuietly(user.id);
   const [rows, settings] = await Promise.all([listStock(), getSettings()]);
   // "Counted today" by the business's own day, so the list to work down starts
   // again for each count rather than emptying after the first one.
@@ -28,7 +31,7 @@ export default async function CountPage({ searchParams }: { searchParams: Promis
     <>
       <PageHeader
         title="Count"
-        description="Find the model, count every spot it is in, type the total, press Enter. Blank means you did not count that place; 0 means none. A model is done for today once all five places are counted."
+        description="Count after the day's packing. Find the model, count every spot it is in, type the total, press Enter. Blank means you did not count that place; 0 means none. Watches sold and not yet packed are set aside and not counted. A model is done for today once all five places are counted."
         action={<LinkButton href="/inventory">Back to inventory</LinkButton>}
       />
       <div className="space-y-5">

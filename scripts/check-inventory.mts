@@ -77,7 +77,11 @@ async function masterFile(rows: Record<string, unknown>[], extraSheet?: Record<s
 }
 
 const product = (model: string) => prisma.product.findUniqueOrThrow({ where: { model } });
-const stock = async (model: string) => (await getModel(model))!.balances;
+// The five places a count sees; "sold, waiting to ship" is step 3's.
+const stock = async (model: string) => {
+  const { WAITING: _waiting, ...places } = (await getModel(model))!.balances;
+  return places;
+};
 
 const boss = await prisma.user.findFirst({ where: { role: "BOSS", isActive: true }, select: { id: true } });
 if (!boss) {

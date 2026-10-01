@@ -63,6 +63,7 @@ function toSalesRow(sale: WatchSale, batchId: string) {
     lineRef: sale.lineRef,
     buyer: sale.buyer,
     stockNumber: sale.stockNumber,
+    modelNumber: sale.modelNumber ?? "",
     category: sale.category,
     qty: sale.qty,
     unitPriceCents: cents(sale.unitPrice),

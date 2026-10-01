@@ -15,12 +15,20 @@ import { storableLink } from "./watch-images";
 export const PLACES = ["SELLABLE", "SAMPLE_EBAY", "SAMPLE_TIKTOK", "RANDOM_PULLS", "DAMAGED"] as const;
 export type Place = (typeof PLACES)[number];
 
-export const PLACE_LABEL: Record<Place, string> = {
+/**
+ * Sold and paid for, still in the building until its box is sent. Not one of
+ * the {@link PLACES}: nobody counts it, a sale fills it and packing empties it.
+ */
+export const WAITING = "WAITING" as const;
+export type Where = Place | typeof WAITING;
+
+export const PLACE_LABEL: Record<Where, string> = {
   SELLABLE: "Sellable",
   SAMPLE_EBAY: "Sample eBay",
   SAMPLE_TIKTOK: "Sample TikTok",
   RANDOM_PULLS: "Random pulls",
   DAMAGED: "Damaged",
+  WAITING: "Sold, waiting to ship",
 };
 
 /**

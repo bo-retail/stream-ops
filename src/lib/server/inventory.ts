@@ -12,7 +12,7 @@ import {
   normaliseModel,
   parseQty,
 } from "@/lib/domain/inventory";
-import type { CountedPlaces, Place, ProductDetails } from "@/lib/domain/inventory";
+import type { CountedPlaces, Place, ProductDetails, Where } from "@/lib/domain/inventory";
 import { sheetRows } from "@/lib/domain/inventory-sheets";
 import type { SheetRows } from "@/lib/domain/inventory-sheets";
 import { MAX_PHOTO_BYTES, photoType, pictureFor, storableLink } from "@/lib/domain/watch-images";
@@ -133,8 +133,9 @@ export async function importMaster(userId: string, fileName: string, sheets: She
 
 /* ------------------------------------------------------------------- stock */
 
-export type Balances = Record<Place, number>;
-export const zero = (): Balances => ({ SELLABLE: 0, SAMPLE_EBAY: 0, SAMPLE_TIKTOK: 0, RANDOM_PULLS: 0, DAMAGED: 0 });
+/** What is in each place, plus what is sold and waiting to ship. */
+export type Balances = Record<Where, number>;
+export const zero = (): Balances => ({ SELLABLE: 0, SAMPLE_EBAY: 0, SAMPLE_TIKTOK: 0, RANDOM_PULLS: 0, DAMAGED: 0, WAITING: 0 });
 
 export async function balancesFor(
   db: Pick<typeof prisma, "stockMove">,
@@ -201,7 +202,8 @@ export async function listStock(search = ""): Promise<StockRow[]> {
     _max: { at: true },
   })) {
     const m = lastCount.get(r.productId) ?? new Map<Place, Date>();
-    if (r._max.at) m.set(r.place, r._max.at);
+    // Only counts are read here, and nobody counts "waiting to ship".
+    if (r._max.at && r.place !== "WAITING") m.set(r.place, r._max.at);
     lastCount.set(r.productId, m);
   }
   return products.map((p) => {

@@ -51,6 +51,8 @@ export interface WatchSale {
   buyer: string;
   /** The stock number. TikTok `Product Name`, eBay `Item Title`. */
   stockNumber: string;
+  /** The report's `Model #`: which watch a random-pull line really was. Blank when absent. */
+  modelNumber?: string;
   category: string;
   qty: number;
 

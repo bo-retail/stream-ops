@@ -119,3 +119,14 @@ export function decidePlaceholderScan(input: {
   }
   return { kind: "fill", listing: open.stockNumber };
 }
+
+/**
+ * The report's `Model #` column, if the file has one: on a random-pull line,
+ * the watch that was actually sold. Daniel's team fills it in before the
+ * upload. Matched loosely ("Model #", "Model No", "Model Number") because the
+ * column is added by hand; blank when the file has no such column.
+ */
+export function readModelNumber(record: Readonly<Record<string, string | undefined>>): string {
+  const key = Object.keys(record).find((k) => /^model\s*(#|no\.?|number)$/i.test(k.trim()));
+  return key === undefined ? "" : (record[key] ?? "").trim().toUpperCase();
+}

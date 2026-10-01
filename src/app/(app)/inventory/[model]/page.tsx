@@ -56,6 +56,7 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
           <Stat key={place} label={PLACE_LABEL[place]} value={balances[place]} tone={balances[place] < 0 ? "danger" : undefined} />
         ))}
         <Stat label="Total" value={total} />
+        {balances.WAITING !== 0 ? <Stat label="Sold, waiting to ship" value={balances.WAITING} /> : null}
       </div>
 
       <div className="grid gap-5 lg:grid-cols-3">
@@ -110,6 +111,10 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
                         <>
                           Received{m.unitCostCents !== null ? ` at ${money(m.unitCostCents)}` : ""}
                         </>
+                      ) : m.kind === "SOLD" ? (
+                        <>{(m.place === "WAITING") === (m.qty > 0) ? "Sold" : "Put back (the report no longer has it)"}</>
+                      ) : m.kind === "SENT" ? (
+                        <>{m.qty < 0 ? "Sent" : "Box reopened"}</>
                       ) : (
                         <>Counted {m.countedQty}</>
                       )}

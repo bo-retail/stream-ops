@@ -13,6 +13,7 @@
 import { TZDate } from "@date-fns/tz";
 import type { DateISO } from "../types";
 import { businessOfHandle } from "../business";
+import { readModelNumber } from "./placeholders";
 import {
   checkHeaders,
   notedRoundingMessage,
@@ -355,6 +356,7 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
       lineRef: record["SKU ID"],
       buyer: record["Buyer Username"],
       stockNumber: record["Product Name"],
+      modelNumber: readModelNumber(record),
       category: record["Product Category"],
       qty: Number(record["Quantity"]) || 1,
 

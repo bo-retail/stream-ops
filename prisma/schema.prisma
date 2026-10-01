@@ -486,6 +486,11 @@ model Settings {
   /// so a show at 1% pays out 2% of its sales in total.
   streamerCommissionBps Int @default(100)
 
+  /// Inventory: the first show day whose paid orders come off stock. Null until
+  /// the opening count is done and a director sets it — before that, sales
+  /// never move stock (Samuel, round 6: "from the first show after the count").
+  inventoryStartDate DateTime? @db.Date
+
   updatedAt DateTime @updatedAt
 }
 
@@ -700,6 +705,10 @@ model SalesRecord {
   buyer       String
   /// The stock number. TikTok `Product Name`, eBay `Item Title`.
   stockNumber String
+  /// The report's `Model #` column: on a random-pull line ("#300 - Invicta
+  /// Random Pulls"), which watch was actually sold. Blank where the file has no
+  /// such column, or the line did not need it.
+  modelNumber String  @default("")
   category    String  @default("")
   qty         Int     @default(1)
 
@@ -950,6 +959,7 @@ model Product {
   photo         ProductPhoto?
   offerLines    OfferLine[]
   shipmentLines ShipmentLine[]
+  sales         StockSale[]
 }
 
 /// Daniel's offer to Invicta — what he ordered, how many, at what cost. Named by
@@ -1049,6 +1059,10 @@ enum StockPlace {
   SAMPLE_TIKTOK
   RANDOM_PULLS
   DAMAGED
+  /// Sold and paid for, still in the building until its box is packed and
+  /// sent. Not a shelf: it is never counted, only filled by a sale and emptied
+  /// by the packing scan.
+  WAITING
 }
 
 /// Why stock changed. Step 1 has counts only; receiving, sales and the rest
@@ -1057,6 +1071,59 @@ enum StockMoveKind {
   COUNT
   /// A shipment counted in: what arrived, at its shipping-list cost.
   RECEIVED
+  /// A paid order line: from where it sat to "sold, waiting to ship" (or back,
+  /// when a corrected report no longer has it).
+  SOLD
+  /// Its box was packed and closed: it leaves (or comes back, if the box is
+  /// reopened).
+  SENT
+}
+
+/// Where one sold watch is in its life.
+enum StockSaleStatus {
+  /// Taken off where it sat; waiting to ship.
+  SOLD
+  /// Its box was closed; it has left.
+  SENT
+  /// The report no longer has it (corrected or re-uploaded): put back.
+  UNDONE
+}
+
+/// One watch sold, and what that did to stock. One row per unit of a paid
+/// order line, keyed so the same line can never come off twice however many
+/// times its day is uploaded (build rule 2). A corrected report changes the row
+/// and writes reversing stock lines; it never deletes it.
+model StockSale {
+  id        String          @id @default(cuid())
+  /// "TIKTOK|<order>|<line>|<unit>" — the same line in any upload is the same key.
+  key       String          @unique
+  platform  Platform
+  orderRef  String
+  showDate  DateTime        @db.Date
+  show      String
+  tracking  String          @default("")
+  /// What it sold as: a stock number, or a random-pull listing.
+  listing   String
+  productId String
+  /// Where it was taken from, so a correction puts it back there.
+  place     StockPlace
+  /// What it cost us when it sold: the cost snapshot for its margin.
+  costCents Int?
+  status    StockSaleStatus @default(SOLD)
+  sentAt    DateTime?
+  /// Anything worth a human look: a random pull scanned as a different watch
+  /// than the report named, more sold than there was, sent but no longer in the
+  /// report.
+  flag      String          @default("")
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  product Product     @relation(fields: [productId], references: [id], onDelete: Restrict)
+  moves   StockMove[]
+
+  @@index([status, showDate])
+  @@index([productId])
+  @@index([showDate])
 }
 
 /// One change to one model in one place. Never edited, never deleted.
@@ -1076,6 +1143,8 @@ model StockMove {
   unitCostCents Int?
   /// For a receipt: the shipment it came in.
   shipmentId String?
+  /// For a sale or a send: the sold watch it belongs to.
+  saleId     String?
   note      String        @default("")
   /// Everything written by one save or one upload shares this.
   entryId   String
@@ -1088,9 +1157,11 @@ model StockMove {
   by      User?   @relation(fields: [byId], references: [id], onDelete: SetNull)
   // Restrict too: a counted shipment can never be deleted out from under its stock.
   shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  sale     StockSale? @relation(fields: [saleId], references: [id], onDelete: Restrict)
 
   @@index([productId, place])
   @@index([shipmentId])
+  @@index([saleId])
   @@index([entryId])
   @@index([at])
 }

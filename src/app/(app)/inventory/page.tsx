@@ -4,6 +4,7 @@ import { Badge, Card, EmptyState, Input, LinkButton, PageHeader, Stat, Table, Td
 import { WatchImage } from "@/components/watch-image";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { PLACES, PLACE_LABEL } from "@/lib/domain/inventory";
+import { bringStockUpToDateQuietly } from "@/lib/server/deduction";
 import { listStock } from "@/lib/server/inventory";
 
 export const metadata: Metadata = { title: "Inventory" };
@@ -18,8 +19,10 @@ const money = (cents: number) =>
  * The search narrows it; nothing else to learn.
  */
 export default async function InventoryPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
-  await requireShippingDirector();
+  const user = await requireShippingDirector();
   const { q = "" } = await searchParams;
+  // Today's sales and packing, taken off before stock is shown.
+  await bringStockUpToDateQuietly(user.id);
   const rows = await listStock(q);
   const all = q ? null : rows;
 
@@ -38,6 +41,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
             <LinkButton href="/inventory/count" variant="primary">
               Count
             </LinkButton>
+            <LinkButton href="/inventory/sales">Sales</LinkButton>
             <LinkButton href="/inventory/receiving">Receiving</LinkButton>
             <LinkButton href="/inventory/templates">Templates &amp; uploads</LinkButton>
           </div>
@@ -101,6 +105,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
                   </Th>
                 ))}
                 <Th className="text-right">Total</Th>
+                <Th className="text-right">Sold, waiting to ship</Th>
               </tr>
             </thead>
             <tbody>
@@ -131,6 +136,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
                     </Td>
                   ))}
                   <Td className="tabular text-right font-semibold">{r.total}</Td>
+                  <Td className="tabular text-right text-ink-muted">{r.balances.WAITING === 0 ? "" : r.balances.WAITING}</Td>
                 </tr>
               ))}
             </tbody>

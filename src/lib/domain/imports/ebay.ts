@@ -19,6 +19,7 @@
 
 import type { Business } from "../business";
 import type { DateISO } from "../types";
+import { readModelNumber } from "./placeholders";
 import {
   checkHeaders,
   isBlankRow,
@@ -419,6 +420,7 @@ export function parseEbayFile(file: EbayFile, business: Business = "WATCH"): Par
         lineRef: item["Transaction ID"],
         buyer: item["Buyer Username"] || orderSource["Buyer Username"],
         stockNumber: item["Item Title"],
+        modelNumber: readModelNumber(item),
         category: "",
         qty: Number(item["Quantity"]) || 1,
 
