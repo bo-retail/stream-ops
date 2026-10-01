@@ -6,11 +6,24 @@ new session can pick this up without the conversation that produced it.
 Read `CLAUDE.md` first (how work is done here). `WHERE-WE-ARE.md` covers the rest
 of the project; this file is inventory only.
 
-**Status on 1 October 2026: steps 1 and 2 built, on `main`, not pushed.** Step 1
-(catalogue, counting, pictures) and step 2 (receiving: offer, shipping list,
-shipment count, differences, still to come, product details) are committed and
-checked by `scripts/check-inventory.mts` and `scripts/check-receiving.mts`. Next is
-step 3 (stock comes off when an order is paid). Push once steps 1–3 are done.
+**Status on 1 October 2026: steps 1, 2 and 3 built, on `main`, not pushed.**
+Step 1 (catalogue, counting, pictures), step 2 (receiving: offer, shipping list,
+shipment count, differences, still to come, product details) and step 3 (paid
+orders come off stock; packing sends them) are committed, each independently
+reviewed, and checked by `scripts/check-inventory.mts`, `check-receiving.mts` and
+`check-deduction.mts`. Neon needs migrations 20261002…20261006 before the push.
+
+**Before launch** (step 3 does nothing until a director sets the start date on
+Inventory → Sales):
+1. Load the master, **every recent offer and shipping list** — on the real 09/27
+   day, 683 of 936 watches sold were on the 09.19 offer and not in the master;
+   with the offer loaded, all 936 came off.
+2. Gladys's opening count, after packing, with sold-not-sent watches set aside.
+3. Set the start date to the first show after the count.
+4. Get a real report with the `Model #` column (random pulls are named by it; until
+   then by the piece scanned at packing). Packing does **not** refuse a wrong
+   random-pull watch yet — a mismatch is flagged; switching refusal on is a small
+   change once real files carry the column.
 
 _(Was: 30 September — nothing built yet.)_
 Daniel has answered five rounds. Sections 1–8 below are the design as of 28
