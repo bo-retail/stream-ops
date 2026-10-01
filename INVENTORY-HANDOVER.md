@@ -6,12 +6,18 @@ new session can pick this up without the conversation that produced it.
 Read `CLAUDE.md` first (how work is done here). `WHERE-WE-ARE.md` covers the rest
 of the project; this file is inventory only.
 
-**Status on 1 October 2026: steps 1, 2 and 3 built, on `main`, not pushed.**
+**Status on 1 October 2026: steps 1–4 built, on `main`, not pushed.** Step 4 (moves,
+adjustments, returns and cancellations, sample prompts, undo) is on Inventory →
+Movements, checked by `scripts/check-movements.mts`. Not built from the demo yet: a
+scanned cancelled box saying "do not ship" (it is flagged instead), and the prompt to
+put samples back when a model is restocked. Neon needs migrations 20261002…20261009.
+
+_Steps 1–3:_
 Step 1 (catalogue, counting, pictures), step 2 (receiving: offer, shipping list,
 shipment count, differences, still to come, product details) and step 3 (paid
 orders come off stock; packing sends them) are committed, each independently
 reviewed, and checked by `scripts/check-inventory.mts`, `check-receiving.mts` and
-`check-deduction.mts`. Neon needs migrations 20261002…20261006 before the push.
+`check-deduction.mts`. 
 
 **Before launch** (step 3 does nothing until a director sets the start date on
 Inventory → Sales):
