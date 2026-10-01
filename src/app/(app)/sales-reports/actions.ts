@@ -118,8 +118,9 @@ export async function uploadReports(
 
   // Inventory: the new sales come off stock. Quiet: an upload never fails
   // because of it, and it does nothing until a start date is set.
+  let stockFailed = false;
   if (outcomes.some((o) => o.status === "OK")) {
-    await bringStockUpToDateQuietly(user.id);
+    stockFailed = (await bringStockUpToDateQuietly(user.id)) === null;
     revalidatePath("/inventory", "layout");
   }
 
@@ -134,6 +135,12 @@ export async function uploadReports(
   const flags = outcomes.flatMap((o) =>
     o.flags.map((f) => ({ ...f, message: label(o) + f.message })),
   );
+  if (stockFailed) {
+    flags.push({
+      severity: "warning",
+      message: "The reports are in, but stock could not be brought up to date just now. Open Inventory → Sales in a minute; it tries again there.",
+    });
+  }
   const showDate = outcomes.find((o) => o.showDate)?.showDate ?? undefined;
 
   const summary = (o: ImportOutcome) => {

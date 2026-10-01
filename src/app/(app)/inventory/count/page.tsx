@@ -20,7 +20,7 @@ export default async function CountPage({ searchParams }: { searchParams: Promis
   const user = await requireShippingDirector();
   const { q = "" } = await searchParams;
   // The day's packing taken off first, so the numbers to count against are today's.
-  await bringStockUpToDateQuietly(user.id);
+  await bringStockUpToDateQuietly(user.id, { ifChanged: true });
   const [rows, settings] = await Promise.all([listStock(), getSettings()]);
   // "Counted today" by the business's own day, so the list to work down starts
   // again for each count rather than emptying after the first one.

@@ -17,6 +17,12 @@
  *   - a line removed from the report after it was sent: flagged, never reversed
  *   - the start date moved later: what was not sent is put back
  *   - diamond sales: never touched
+ *   - two watches of one order whose line ids Excel rounded to the same number
+ *   - one order in two uploads with different boxes: the latest upload decides
+ *   - a box packed before its report with the wrong watch: listed, not taken off
+ *   - switched off while boxes are packed, then on again: nothing shipped comes back
+ *   - a sale older than two weeks whose box closes now: sent
+ *   - a page opened with nothing changed: no run, no wait
  *
  * Every model it makes starts ZZTEST-, every order ZZ-, every box ZZT; all of
  * it is removed at the end and the start date put back as it was. It refuses
@@ -76,30 +82,30 @@ async function cleanUp() {
   await prisma.product.deleteMany({ where: { id: { in: products } } });
 }
 
-type Line = { order: string; stock: string; model?: string; qty?: number; tracking: string; business?: "WATCH" | "DIAMOND" };
+type Line = { order: string; stock: string; model?: string; qty?: number; tracking: string; lineRef?: string };
 let uploads = 0;
 /** A day's TikTok night report, uploaded (each call is a newer upload of the same file). */
-async function upload(lines: Line[], business: "WATCH" | "DIAMOND" = "WATCH") {
+async function upload(lines: Line[], business: "WATCH" | "DIAMOND" = "WATCH", date = day, slot: "DAY" | "NIGHT" = "NIGHT") {
   uploads++;
   await prisma.importBatch.create({
     data: {
-      business, showDate: toDbDate(day), status: "OK", platform: "TIKTOK", slot: "NIGHT",
+      business, showDate: toDbDate(date), status: "OK", platform: "TIKTOK", slot,
       uploadedAt: new Date(Date.now() + uploads * 1000), files: [{ name: "ZZTEST" }], flags: [],
       sales: {
         create: lines.map((l) => ({
-          business, platform: "TIKTOK", show: "TikTok PM", showDate: toDbDate(day), shiftTag: "", rawShiftTag: "",
-          orderRef: `ZZ-${l.order}`, lineRef: "1", buyer: "test", stockNumber: l.stock, modelNumber: l.model ?? "", qty: l.qty ?? 1,
+          business, platform: "TIKTOK", show: slot === "DAY" ? "TikTok AM" : "TikTok PM", showDate: toDbDate(date), shiftTag: "", rawShiftTag: "",
+          orderRef: `ZZ-${l.order}`, lineRef: l.lineRef ?? "1", buyer: "test", stockNumber: l.stock, modelNumber: l.model ?? "", qty: l.qty ?? 1,
           tracking: l.tracking, sourceFile: "ZZTEST",
         })),
       },
     },
   });
 }
-async function box(tracking: string, status: "OPEN" | "CLOSED_COMPLETE" | "CLOSED_INCOMPLETE", items: Record<string, number>, pieces: [string, string][] = []) {
+async function box(tracking: string, status: "OPEN" | "CLOSED_COMPLETE" | "CLOSED_INCOMPLETE", items: Record<string, number>, pieces: [string, string][] = [], date = day) {
   const existing = await prisma.package.findUnique({ where: { trackingNumber: tracking } });
   const b = existing
     ? await prisma.package.update({ where: { id: existing.id }, data: { status } })
-    : await prisma.package.create({ data: { trackingNumber: tracking, platform: "TIKTOK", showDate: toDbDate(day), status } });
+    : await prisma.package.create({ data: { trackingNumber: tracking, platform: "TIKTOK", showDate: toDbDate(date), status } });
   for (const [stockNumber, scanned] of Object.entries(items)) {
     await prisma.packageItem.upsert({
       where: { packageId_stockNumber: { packageId: b.id, stockNumber } },
@@ -195,13 +201,77 @@ try {
   await setStartDate(boss.id, today);
   await bringStockUpToDate(boss.id);
   check("what was not sent is put back (order 2, still waiting)", await stock(D2), { S: 1, R: 1, T: 0, W: 0 });
-  check("what was sent stays sent", (await prisma.stockSale.findMany({ where: { orderRef: "ZZ-3" }, select: { status: true } })).map((s) => s.status), ["SENT"]);
+  check("what was sent stays sent, and is not flagged as missing from the reports", (await prisma.stockSale.findMany({ where: { orderRef: "ZZ-3" }, select: { status: true, flag: true } })).map((s) => [s.status, s.flag]), [["SENT", ""]]);
+  await bringStockUpToDate(boss.id);
+  check("  …nor on the next run", (await prisma.stockSale.findFirstOrThrow({ where: { orderRef: "ZZ-3" } })).flag, "");
   await setStartDate(boss.id, day);
 
   console.log("\nDiamonds.");
   await upload([{ order: "D1", stock: D1, tracking: "ZZT9" }], "DIAMOND");
   await bringStockUpToDate(boss.id);
   check("a diamond sale never touches watch stock", await prisma.stockSale.count({ where: { orderRef: "ZZ-D1" } }), 0);
+
+  console.log("\nExcel-damaged line ids, and an order in two uploads.");
+  // Two watches of one order whose eBay-style line ids Excel rounded to the same number.
+  await upload([...LINES.filter((l) => l.order !== "4"), { order: "6", stock: D1, tracking: "ZZT6", lineRef: "1.00839E+13" }, { order: "6", stock: D3, tracking: "ZZT6", lineRef: "1.00839E+13" }]);
+  await saveCount(boss.id, [{ model: D3, counted: { SELLABLE: 1, SAMPLE_TIKTOK: 1 } }], "check");
+  await bringStockUpToDate(boss.id);
+  check("two watches sharing a rounded line id: both come off", (await prisma.stockSale.findMany({ where: { orderRef: "ZZ-6", status: "SOLD" }, select: { product: { select: { model: true } } } })).map((s) => s.product.model).sort(), [D1, D3].sort());
+  // Order 7 in the morning file without a box, and in the night file (uploaded later) with its box, closed.
+  await upload([{ order: "7", stock: D3, tracking: "" }], "WATCH", day, "DAY");
+  await upload([...LINES.filter((l) => l.order !== "4"), { order: "6", stock: D1, tracking: "ZZT6", lineRef: "1.00839E+13" }, { order: "6", stock: D3, tracking: "ZZT6", lineRef: "1.00839E+13" }, { order: "7", stock: D3, tracking: "ZZT7" }]);
+  await box("ZZT7", "CLOSED_COMPLETE", { [D3]: 1 });
+  const runs = [await bringStockUpToDate(boss.id), await bringStockUpToDate(boss.id), await bringStockUpToDate(boss.id)];
+  check("an order in two uploads: one watch, read from the latest, sent — and it stays so run after run", [
+    await prisma.stockSale.count({ where: { orderRef: "ZZ-7" } }),
+    (await prisma.stockSale.findFirstOrThrow({ where: { orderRef: "ZZ-7" } })).status,
+    runs.map((r) => r.sent + r.unsent),
+  ], [1, "SENT", [1, 0, 0]]);
+
+  console.log("\nA box packed before its report.");
+  await upload([...LINES.filter((l) => l.order !== "4"), { order: "6", stock: D1, tracking: "ZZT6", lineRef: "1.00839E+13" }, { order: "6", stock: D3, tracking: "ZZT6", lineRef: "1.00839E+13" }, { order: "7", stock: D3, tracking: "ZZT7" }, { order: "8", stock: D1, tracking: "ZZT8" }]);
+  await box("ZZT8", "CLOSED_COMPLETE", { [D2]: 1 });
+  const r8 = await bringStockUpToDate(boss.id);
+  check("the wrong watch scanned: the sold one is not taken off as sent, the scanned one is listed", [
+    (await prisma.stockSale.findFirstOrThrow({ where: { orderRef: "ZZ-8" } })).status,
+    r8.strays.filter((s) => s.tracking === "ZZT8").map((s) => s.model),
+  ], ["SOLD", [D2]]);
+
+  console.log("\nSwitched off, then on again.");
+  await setStartDate(boss.id, null);
+  await box("ZZT6", "CLOSED_COMPLETE", { [D1]: 1, [D3]: 1 });
+  await bringStockUpToDate(boss.id);
+  check("switched off: a box packed meanwhile still sends its watches", (await prisma.stockSale.findMany({ where: { orderRef: "ZZ-6" }, select: { status: true } })).map((s) => s.status), ["SENT", "SENT"]);
+  await setStartDate(boss.id, today);
+  await bringStockUpToDate(boss.id);
+  check("on again with a later date: what shipped meanwhile stays shipped, not back on the shelf", (await prisma.stockSale.findMany({ where: { orderRef: "ZZ-6" }, select: { status: true } })).map((s) => s.status), ["SENT", "SENT"]);
+  await setStartDate(boss.id, day);
+
+  console.log("\nA sale older than two weeks.");
+  const old = addDays(today, -16);
+  await setStartDate(boss.id, addDays(today, -20));
+  await upload([{ order: "9", stock: D1, tracking: "ZZT9OLD" }], "WATCH", old);
+  // Taken off back when it was recent (the run of that day), still waiting now.
+  const p1 = await prisma.product.findUniqueOrThrow({ where: { model: D1 } });
+  const oldSale = await prisma.stockSale.create({
+    data: { key: `TIKTOK|ZZ-9|${D1}|0`, platform: "TIKTOK", orderRef: "ZZ-9", showDate: toDbDate(old), show: "TikTok PM", tracking: "ZZT9OLD", listing: D1, productId: p1.id, place: "SELLABLE", costCents: p1.costCents },
+  });
+  await prisma.stockMove.createMany({ data: [
+    { productId: p1.id, place: "SELLABLE", qty: -1, kind: "SOLD", saleId: oldSale.id, entryId: oldSale.id },
+    { productId: p1.id, place: "WAITING", qty: 1, kind: "SOLD", saleId: oldSale.id, entryId: oldSale.id },
+  ] });
+  await box("ZZT9OLD", "CLOSED_COMPLETE", { [D1]: 1 }, [], old);
+  await bringStockUpToDate(boss.id);
+  check("its box closes now: it is sent, not stuck waiting", (await prisma.stockSale.findUniqueOrThrow({ where: { id: oldSale.id } })).status, "SENT");
+  await setStartDate(boss.id, day);
+
+  console.log("\nA page opened with nothing changed.");
+  await bringStockUpToDate(boss.id);
+  const skip = await bringStockUpToDate(boss.id, { ifChanged: true });
+  check("no run: nothing has changed since the last one", skip.skipped, true);
+  await upload([{ order: "10", stock: D1, tracking: "ZZT10" }], "WATCH", day, "DAY");
+  const ran = await bringStockUpToDate(boss.id, { ifChanged: true });
+  check("after a new upload it runs again", [ran.skipped, ran.sold], [false, 1]);
 
   console.log("\nHistory.");
   let blocked = false;

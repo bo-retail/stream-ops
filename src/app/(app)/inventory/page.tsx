@@ -22,7 +22,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
   const user = await requireShippingDirector();
   const { q = "" } = await searchParams;
   // Today's sales and packing, taken off before stock is shown.
-  await bringStockUpToDateQuietly(user.id);
+  const run = await bringStockUpToDateQuietly(user.id, { ifChanged: true });
   const rows = await listStock(q);
   const all = q ? null : rows;
 
@@ -47,6 +47,13 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
           </div>
         }
       />
+
+      {run === null ? (
+        <p className="mb-4 rounded-lg border border-warn-200 bg-warn-50 px-4 py-3 text-sm text-warn-700">
+          Stock could not be brought up to date with the latest sales just now; this is how it last stood. See{" "}
+          <Link href="/inventory/sales" className="underline">Sales</Link>.
+        </p>
+      ) : null}
 
       {all && all.length > 0 ? (
         <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">

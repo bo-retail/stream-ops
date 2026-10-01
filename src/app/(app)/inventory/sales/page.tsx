@@ -30,6 +30,7 @@ export default async function SalesStockPage() {
     ...view.waiting.map((w) => w.product.model),
     ...view.flagged.map((f) => f.product.model),
     ...(run?.unknown ?? []).map((u) => u.line.stockNumber),
+    ...(run?.strays ?? []).map((s) => s.model),
   ]);
 
   // Packed the morning after a show; not sent by the end of that next day is late,
@@ -60,9 +61,11 @@ export default async function SalesStockPage() {
             <StartDateForm current={start} />
             {start ? <UpdateNowButton /> : null}
           </div>
-          {start && run === null ? (
+          {run === null || view.failed ? (
             <div className="px-4 pb-4">
-              <Alert tone="warn">Stock could not be brought up to date just now; what you see is how it last stood. Try again in a minute.</Alert>
+              <Alert tone="warn">
+                Stock could not be brought up to date{view.failed ? `: ${view.failed.summary.replace(/^Stock could not be brought up to date: /, "")}` : " just now"}. What you see is how it last stood. Try &quot;Bring up to date now&quot;; if it keeps failing, tell your admin.
+              </Alert>
             </div>
           ) : null}
         </Card>
@@ -87,7 +90,7 @@ export default async function SalesStockPage() {
                 title="Needs a look"
                 description="What the app could not settle on its own. Each says what happened."
               />
-              {view.flagged.length === 0 && (run?.unknown.length ?? 0) === 0 ? (
+              {view.flagged.length === 0 && (run?.unknown.length ?? 0) === 0 && (run?.strays.length ?? 0) === 0 ? (
                 <EmptyState title="Nothing to look at">Every sale came off cleanly.</EmptyState>
               ) : (
                 <Table>
@@ -102,6 +105,21 @@ export default async function SalesStockPage() {
                     </tr>
                   </thead>
                   <tbody>
+                    {(run?.strays ?? []).map((s) => (
+                      <tr key={`${s.tracking}-${s.model}`}>
+                        <Td className="py-1.5">
+                          <WatchImage url={pictures.get(s.model)} model={s.model} size={48} />
+                        </Td>
+                        <Td className="tabular font-medium">{s.model}</Td>
+                        <Td className="text-ink-muted">box {s.tracking}</Td>
+                        <Td>
+                          <Badge tone="warn">Packed, not on any sale in its box</Badge>{" "}
+                          <span className="text-sm text-ink-muted">
+                            {s.qty} scanned into the box with no sale for it there. Check what was sold to that buyer: a corrected report, or an adjustment.
+                          </span>
+                        </Td>
+                      </tr>
+                    ))}
                     {(run?.unknown ?? []).map((u) => (
                       <tr key={u.key}>
                         <Td className="py-1.5">

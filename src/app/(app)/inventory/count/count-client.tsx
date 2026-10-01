@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Alert, Button, Card, CardHeader, Input, LinkButton } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
 import { PLACES, PLACE_LABEL } from "@/lib/domain/inventory";
-import type { Place } from "@/lib/domain/inventory";
+import type { Place, Where } from "@/lib/domain/inventory";
 import { addAndCount, countOne } from "../actions";
 import type { FormState } from "../actions";
 
@@ -14,7 +14,7 @@ interface Model {
   description: string;
   picture: string;
   countedToday: boolean;
-  balances: Record<Place, number>;
+  balances: Record<Where, number>;
 }
 
 /** How many rows to show at once. Enough to work through, few enough to stay quick. */
@@ -81,7 +81,7 @@ export function CountList({ models, initialSearch }: { models: Model[]; initialS
   );
 }
 
-function CountRow({ model, onSaved }: { model: Model; onSaved: (b: Record<Place, number>) => void }) {
+function CountRow({ model, onSaved }: { model: Model; onSaved: (b: Record<Where, number>) => void }) {
   const [values, setValues] = useState<Partial<Record<Place, string>>>({});
   const [message, setMessage] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
   const [saving, setSaving] = useState(false);
@@ -125,6 +125,11 @@ function CountRow({ model, onSaved }: { model: Model; onSaved: (b: Record<Place,
         <Button type="submit" size="sm" disabled={saving}>
           {saving ? "Saving…" : "Save"}
         </Button>
+        {model.balances.WAITING > 0 ? (
+          <span className="w-full text-xs font-medium text-brand-700">
+            {model.balances.WAITING} sold, waiting to ship — set aside, do not count {model.balances.WAITING === 1 ? "it" : "them"}.
+          </span>
+        ) : null}
         {message ? (
           <span className={`text-sm font-medium ${message.tone === "ok" ? "text-ok-700" : "text-danger-600"}`}>
             {message.text}
