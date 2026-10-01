@@ -61,7 +61,8 @@ export interface KnownSale {
   key: string;
   model: string;
   place: Place;
-  status: "SOLD" | "SENT" | "UNDONE";
+  /** CANCELLED and RETURNED were settled by hand (step 4): never touched again here. */
+  status: "SOLD" | "SENT" | "UNDONE" | "CANCELLED" | "RETURNED";
   flag: string;
   tracking: string;
 }
@@ -317,9 +318,12 @@ export function planDeduction(
     if (text && k.flag !== text) changes.push({ kind: "flag", key: k.key, flag: text });
   };
 
+  const byHand = (k: KnownSale | undefined) => k !== undefined && (k.status === "CANCELLED" || k.status === "RETURNED");
   for (const w of wanted) {
     wantedKeys.add(w.key);
     const k = known.get(w.key);
+    // Cancelled or returned by hand: the reports still list the sale, and must not take it off again.
+    if (byHand(k)) continue;
     if (sendsOnly) {
       if (!k || k.status === "UNDONE") continue;
       if (k.status === "SOLD" && w.sent && w.model === k.model) changes.push({ kind: "send", key: k.key, model: k.model });
@@ -362,7 +366,7 @@ export function planDeduction(
   // Taken off before, no longer in the reports (a corrected upload, a line
   // removed): put back — unless it has already gone out, which needs a person.
   for (const k of known.values()) {
-    if (wantedKeys.has(k.key) || k.status === "UNDONE") continue;
+    if (wantedKeys.has(k.key) || k.status === "UNDONE" || byHand(k)) continue;
     if (k.status === "SOLD") changes.push({ kind: "unsell", key: k.key, model: k.model, place: k.place });
     else flag(k, "Sent, but no longer in the reports (corrected or cancelled after it shipped). Check with the buyer: a return or a refund is step 4.");
   }

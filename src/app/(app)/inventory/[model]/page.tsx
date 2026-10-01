@@ -115,6 +115,12 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
                         <>{(m.place === "WAITING") === (m.qty > 0) ? "Sold" : "Put back (the report no longer has it)"}</>
                       ) : m.kind === "SENT" ? (
                         <>{m.qty < 0 ? "Sent" : "Box reopened"}</>
+                      ) : m.kind === "MOVE" ? (
+                        <>Moved{m.reason ? ` (${m.reason.toLowerCase()})` : ""}</>
+                      ) : m.kind === "ADJUST" ? (
+                        <>{m.reason || "Adjusted"}</>
+                      ) : m.kind === "RETURN" ? (
+                        <>{m.reason || "Return"}</>
                       ) : (
                         <>Counted {m.countedQty}</>
                       )}

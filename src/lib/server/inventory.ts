@@ -240,7 +240,7 @@ export async function getModel(model: string) {
       moves: {
         orderBy: { at: "desc" },
         take: 500,
-        select: { id: true, place: true, qty: true, kind: true, countedQty: true, unitCostCents: true, note: true, at: true, by: { select: { name: true } } },
+        select: { id: true, place: true, qty: true, kind: true, countedQty: true, unitCostCents: true, reason: true, note: true, at: true, by: { select: { name: true } } },
       },
     },
   });

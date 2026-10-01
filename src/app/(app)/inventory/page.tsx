@@ -42,6 +42,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
               Count
             </LinkButton>
             <LinkButton href="/inventory/sales">Sales</LinkButton>
+            <LinkButton href="/inventory/movements">Movements</LinkButton>
             <LinkButton href="/inventory/receiving">Receiving</LinkButton>
             <LinkButton href="/inventory/templates">Templates &amp; uploads</LinkButton>
           </div>

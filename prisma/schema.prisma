@@ -126,6 +126,8 @@ model User {
   snapshotsCreated  ScheduleSnapshot[]      @relation("SnapshotCreatedBy")
   auditLogs         AuditLog[]              @relation("AuditActor")
   stockMoves        StockMove[]
+  stockEntries      StockEntry[]            @relation("StockEntryBy")
+  stockEntriesUndone StockEntry[]           @relation("StockEntryUndoneBy")
   offersUploaded    Offer[]                 @relation("OfferUploadedBy")
   shipmentsUploaded Shipment[]              @relation("ShipmentUploadedBy")
   shipmentLinesSettled ShipmentLine[]       @relation("ShipmentLineSettledBy")
@@ -1077,6 +1079,12 @@ enum StockMoveKind {
   /// Its box was packed and closed: it leaves (or comes back, if the box is
   /// reopened).
   SENT
+  /// Pieces moved between two places: the total does not change.
+  MOVE
+  /// Added or taken away by hand, with a reason (giveaway, lost, found…).
+  ADJUST
+  /// Back in stock from a return or a cancellation, or out on an exchange.
+  RETURN
 }
 
 /// Where one sold watch is in its life.
@@ -1087,6 +1095,30 @@ enum StockSaleStatus {
   SENT
   /// The report no longer has it (corrected or re-uploaded): put back.
   UNDONE
+  /// Cancelled before it shipped: put back by hand (the reports cannot know).
+  CANCELLED
+  /// Shipped, then came back.
+  RETURNED
+}
+
+/// One save of moves, adjustments or returns — typed or uploaded — so it can be
+/// undone as a whole. Undoing writes reversing stock lines; nothing is deleted.
+model StockEntry {
+  id         String    @id @default(cuid())
+  /// "MOVES", "ADJUSTMENTS" or "RETURNS".
+  kind       String
+  /// "typed on the site" or the uploaded file's name.
+  source     String
+  summary    String
+  byId       String?
+  at         DateTime  @default(now())
+  undoneAt   DateTime?
+  undoneById String?
+
+  by       User? @relation("StockEntryBy", fields: [byId], references: [id], onDelete: SetNull)
+  undoneBy User? @relation("StockEntryUndoneBy", fields: [undoneById], references: [id], onDelete: SetNull)
+
+  @@index([at])
 }
 
 /// One watch sold, and what that did to stock. One row per unit of a paid
@@ -1145,6 +1177,8 @@ model StockMove {
   shipmentId String?
   /// For a sale or a send: the sold watch it belongs to.
   saleId     String?
+  /// For a move or an adjustment: the reason from its list.
+  reason     String  @default("")
   note      String        @default("")
   /// Everything written by one save or one upload shares this.
   entryId   String
