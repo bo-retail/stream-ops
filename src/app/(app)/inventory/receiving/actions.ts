@@ -9,6 +9,7 @@ import { offerDateFromName, readLineCount } from "@/lib/domain/receiving";
 import { readDetailsSheet, saveDetails } from "@/lib/server/product-details";
 import type { DetailsEntry } from "@/lib/server/product-details";
 import {
+  finishShipmentCount,
   importOffer,
   importShippingList,
   readShipmentCountSheet,
@@ -99,10 +100,16 @@ function countMessage(r: ShipmentCountResult): ReceivingState {
   return { ok: r.changed === 0 ? "Saved — nothing changed." : `Saved: ${r.changed} line(s) changed.`, details: details.length > 0 ? details : undefined };
 }
 
+/** What the page saw as already saved for a row, so a newer count by somebody else is never overwritten. */
+type Before = { counted: number; damaged: number } | null;
+const isBefore = (b: unknown): b is Before =>
+  b === null ||
+  (typeof b === "object" && Number.isInteger((b as { counted?: unknown }).counted) && Number.isInteger((b as { damaged?: unknown }).damaged));
+
 /** The count typed on the shipment's page: one row per model, blanks skipped. */
 export async function countShipment(
   sop: string,
-  rows: { model: string; counted: string; damaged: string }[],
+  rows: { model: string; counted: string; damaged: string; before?: Before; allowNew?: boolean }[],
 ): Promise<ReceivingState> {
   const user = await director();
   if (!user) return { error: NOT_ALLOWED };
@@ -113,7 +120,14 @@ export async function countShipment(
     const r = readLineCount(String(row?.counted ?? ""), String(row?.damaged ?? ""));
     if (r.ok === "blank") continue;
     if (r.ok === false) problems.push(`${row.model}: ${r.why}`);
-    else entries.push({ model: String(row.model), ...r.count });
+    else {
+      entries.push({
+        model: String(row.model),
+        ...r.count,
+        before: row.before === undefined || !isBefore(row.before) ? undefined : row.before,
+        allowNew: row.allowNew === true,
+      });
+    }
   }
   if (problems.length > 0) return { error: "Nothing was saved. Fix these:", details: problems };
   if (entries.length === 0) return { error: "Type at least one count. Leave a model blank only if it has not been counted yet." };
@@ -136,10 +150,20 @@ export async function uploadShipmentCount(sop: string, _prev: ReceivingState, fo
     return { error: `That sheet is for ${sheet.sop}, not ${sop}. Upload it on ${sheet.sop}'s page.` };
   }
   if (sheet.entries.length === 0) return { error: "No counts were found. Is the Counted column filled in?" };
-  const r = await saveShipmentCount(user.id, sop, sheet.entries, `count sheet ${file.name}`);
+  const r = await saveShipmentCount(user.id, sop, sheet.entries, `count sheet ${file.name}`, { sheetDownloadedAt: sheet.downloadedAt });
   if (!r.ok) return { error: "Nothing was saved:", details: r.problems.slice(0, 50) };
   refresh();
   return countMessage(r);
+}
+
+/** Every model on the list not counted yet is counted as 0: short, for Invicta. */
+export async function finishCount(sop: string): Promise<ReceivingState> {
+  const user = await director();
+  if (!user) return { error: NOT_ALLOWED };
+  const r = await finishShipmentCount(user.id, String(sop));
+  if (!r.ok) return { error: "Nothing was saved:", details: r.problems };
+  refresh();
+  return { ok: r.changed === 0 ? "Every model was already counted." : `Finished: ${r.changed} model(s) not counted are now short.` };
 }
 
 export async function settle(lineId: string, note: string): Promise<ReceivingState> {

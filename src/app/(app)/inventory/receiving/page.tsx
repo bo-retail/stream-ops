@@ -85,6 +85,10 @@ export default async function ReceivingPage() {
                     <Td>
                       {s.countedAt === null ? (
                         <Badge tone="brand">To count</Badge>
+                      ) : s.uncounted > 0 ? (
+                        <Badge tone="brand">
+                          Being counted ({s.models - s.uncounted} of {s.models})
+                        </Badge>
                       ) : s.openDifferences > 0 ? (
                         <Badge tone="warn">{s.openDifferences} difference(s) open</Badge>
                       ) : (

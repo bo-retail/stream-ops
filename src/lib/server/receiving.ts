@@ -213,6 +213,28 @@ export interface ShipmentCountEntry {
   damaged: number;
   /** Where it came from, for a problem message ("row 7"). */
   where?: string;
+  /**
+   * What the page showed as already saved for this model when it was opened
+   * (null: nothing yet). If the line has changed since — somebody else counted
+   * it — the save is refused rather than overwrite their count unseen.
+   * Undefined: not checked.
+   */
+  before?: LineCount | null;
+  /**
+   * A model in neither the catalogue, an offer nor the list may only be added
+   * when this is set ("it really is a new model"), so a typo never becomes a
+   * permanent model nobody can remove.
+   */
+  allowNew?: boolean;
+}
+
+export interface ShipmentCountOptions {
+  /**
+   * For a downloaded sheet: when it was downloaded. If the shipment's count was
+   * saved after that, any line the sheet would change is refused — the sheet
+   * may carry numbers older than what is saved now.
+   */
+  sheetDownloadedAt?: Date;
 }
 
 export interface ShipmentCountResult {
@@ -237,7 +259,13 @@ export interface ShipmentCountResult {
  * in. A model that came in the boxes without being on the list is added as a
  * line of its own. All or nothing.
  */
-export async function saveShipmentCount(userId: string, sop: string, entries: ShipmentCountEntry[], source: string): Promise<ShipmentCountResult> {
+export async function saveShipmentCount(
+  userId: string,
+  sop: string,
+  entries: ShipmentCountEntry[],
+  source: string,
+  options: ShipmentCountOptions = {},
+): Promise<ShipmentCountResult> {
   const fail = (problems: string[]): ShipmentCountResult => ({ ok: false, changed: 0, activated: [], notOnList: [], costChanges: [], problems });
   const clean = entries.map((e) => ({ ...e, model: normaliseModel(e.model) }));
   const problems: string[] = [];
@@ -260,7 +288,7 @@ export async function saveShipmentCount(userId: string, sop: string, entries: Sh
     await lockStock(tx);
     const shipment = await tx.shipment.findUnique({
       where: { sop: sop.trim().toUpperCase() },
-      select: { id: true, sop: true, lines: { select: { id: true, productId: true, listedQty: true, unitCostCents: true, countedQty: true, damagedQty: true, product: { select: { model: true } } } } },
+      select: { id: true, sop: true, countedAt: true, lines: { select: { id: true, productId: true, listedQty: true, unitCostCents: true, countedQty: true, damagedQty: true, product: { select: { model: true } } } } },
     });
     if (!shipment) return fail([`There is no shipment ${sop}. Upload its shipping list first.`]);
 
@@ -273,6 +301,44 @@ export async function saveShipmentCount(userId: string, sop: string, entries: Sh
         })
       ).map((p) => [p.model, p]),
     );
+
+    // Refused before anything is written: a count somebody else saved since this
+    // page or sheet was opened, and a model nobody has ever heard of.
+    const saved = (model: string): LineCount | null => {
+      const l = lineOf.get(model);
+      return l && l.countedQty !== null ? { counted: l.countedQty, damaged: l.damagedQty ?? 0 } : null;
+    };
+    const same = (a: LineCount | null, b: LineCount | null) =>
+      a === null || b === null ? a === b : a.counted === b.counted && a.damaged === b.damaged;
+    const sheetIsOld =
+      options.sheetDownloadedAt !== undefined && shipment.countedAt !== null && shipment.countedAt > options.sheetDownloadedAt;
+    const late: string[] = [];
+    for (const e of clean) {
+      const now = saved(e.model);
+      if (e.before !== undefined && !same(now, e.before)) {
+        late.push(
+          e.before === null && now !== null
+            ? `${e.model} is already on this shipment (counted ${now.counted}). Change it on its own row — the number there is the total of every delivery.`
+            : `${e.model} was counted as ${now ? now.counted : "nothing"} by somebody else since this page was opened.`,
+        );
+      } else if (sheetIsOld && now !== null && !same(now, { counted: e.counted, damaged: e.damaged })) {
+        late.push(`${e.model}: this sheet was downloaded before the last count was saved (now ${now.counted}). Download a fresh sheet so nothing newer is undone.`);
+      }
+      if (!lineOf.has(e.model) && e.counted > 0 && !products.has(e.model) && !e.allowNew) {
+        late.push(
+          `${e.where ? `${e.where}: ` : ""}${e.model} is not in the catalogue, on any offer or on this list. Check the number on the watch. ` +
+            `If it is right, add it on the shipment's page and tick "New model".`,
+        );
+      }
+    }
+    if (late.length > 0) {
+      return fail([
+        ...late,
+        options.sheetDownloadedAt !== undefined
+          ? "Nothing was saved. Download a fresh sheet — it comes filled with what is saved now — and make the change on that."
+          : "Nothing was saved. Refresh the page to see the latest count.",
+      ]);
+    }
 
     // Models that came in the boxes without being on the list: a product if
     // the app has never seen it, and a line of their own at the offer's cost.
@@ -371,6 +437,27 @@ export async function saveShipmentCount(userId: string, sop: string, entries: Sh
   }, TX);
 }
 
+/**
+ * The count is finished: every model on the list still not counted is
+ * counted as 0, so it shows as short — rather than sit "not counted yet"
+ * forever and never reach Invicta.
+ */
+export async function finishShipmentCount(userId: string, sop: string): Promise<ShipmentCountResult> {
+  const none = { changed: 0, activated: [], notOnList: [], costChanges: [] };
+  const s = await prisma.shipment.findUnique({
+    where: { sop: sop.trim().toUpperCase() },
+    select: { lines: { where: { listedQty: { gt: 0 }, countedQty: null }, select: { product: { select: { model: true } } } } },
+  });
+  if (!s) return { ok: false, ...none, problems: [`There is no shipment ${sop}.`] };
+  if (s.lines.length === 0) return { ok: true, ...none, problems: [] };
+  return saveShipmentCount(
+    userId,
+    sop,
+    s.lines.map((l) => ({ model: l.product.model, counted: 0, damaged: 0, before: null })),
+    "count finished",
+  );
+}
+
 /** Mark one line's difference with Invicta settled, with what settled it. */
 export async function settleDifference(userId: string, lineId: string, note: string): Promise<{ ok: boolean; problem?: string }> {
   const line = await prisma.shipmentLine.findUnique({
@@ -381,9 +468,11 @@ export async function settleDifference(userId: string, lineId: string, note: str
   if (line.countedQty === null) return { ok: false, problem: "That line has not been counted yet." };
   if (line.settledAt) return { ok: true };
   const text = note.trim().slice(0, 500);
-  await prisma.$transaction([
-    prisma.shipmentLine.update({ where: { id: lineId }, data: { settledAt: new Date(), settledNote: text, settledById: userId } }),
-    prisma.auditLog.create({
+  await prisma.$transaction(async (tx) => {
+    // Under the stock lock, so it never settles numbers a recount is changing right now.
+    await lockStock(tx);
+    await tx.shipmentLine.update({ where: { id: lineId }, data: { settledAt: new Date(), settledNote: text, settledById: userId } });
+    await tx.auditLog.create({
       data: {
         entityType: "ShipmentLine",
         entityId: lineId,
@@ -391,8 +480,8 @@ export async function settleDifference(userId: string, lineId: string, note: str
         actorId: userId,
         summary: `Settled the difference on ${line.product.model} in ${line.shipment.sop}${text ? `: ${text}` : "."}`,
       },
-    }),
-  ]);
+    });
+  });
   return { ok: true };
 }
 
@@ -411,8 +500,8 @@ export interface OpenDifference {
 
 /** Everything the receiving page shows. */
 export async function getReceiving() {
-  const today = todayISO((await getSettings()).timezone);
   const tz = (await getSettings()).timezone;
+  const today = todayISO(tz);
   const [offers, shipments, open] = await Promise.all([
     prisma.offer.findMany({
       orderBy: { date: "desc" },
@@ -459,6 +548,8 @@ export async function getReceiving() {
       models: s.lines.filter((l) => l.listedQty > 0).length,
       listed: s.lines.reduce((n, l) => n + l.listedQty, 0),
       counted: s.countedAt ? s.lines.reduce((n, l) => n + (l.countedQty ?? 0), 0) : null,
+      /** Models on the list not counted yet: it is "being counted" until this is 0. */
+      uncounted: s.lines.filter((l) => l.listedQty > 0 && l.countedQty === null).length,
       openDifferences: s.lines.filter((l) => !l.settledAt && differences(l).length > 0).length,
     })),
     toCome: toCome.map((t) => ({ ...t, picture: pictures.get(t.model) ?? "" })),
@@ -487,14 +578,20 @@ async function getStillToCome(today: DateISO, tz: string) {
     select: { date: true, lines: { select: { qty: true, product: { select: { model: true, description: true } } } } },
   });
   if (offers.length === 0) return [];
+  // What a list says was sent — or, for a model that came without being on
+  // the list, what was counted of it.
   const shipped = await prisma.shipmentLine.findMany({
-    where: { listedQty: { gt: 0 }, shipment: { uploadedAt: { gte: from } } },
-    select: { listedQty: true, product: { select: { model: true } }, shipment: { select: { uploadedAt: true } } },
+    where: { OR: [{ listedQty: { gt: 0 } }, { countedQty: { gt: 0 } }], shipment: { uploadedAt: { gte: from } } },
+    select: { listedQty: true, countedQty: true, product: { select: { model: true } }, shipment: { select: { uploadedAt: true } } },
   });
   const description = new Map(offers.flatMap((o) => o.lines.map((l) => [l.product.model, l.product.description] as const)));
   return stillToCome(
     offers.map((o) => ({ date: fromDbDate(o.date), lines: o.lines.map((l) => ({ model: l.product.model, qty: l.qty })) })),
-    shipped.map((s) => ({ date: todayISO(tz, s.shipment.uploadedAt), model: s.product.model, qty: s.listedQty })),
+    shipped.map((s) => ({
+      date: todayISO(tz, s.shipment.uploadedAt),
+      model: s.product.model,
+      qty: s.listedQty > 0 ? s.listedQty : (s.countedQty ?? 0),
+    })),
     today,
   ).map((t) => ({ ...t, description: description.get(t.model) ?? "" }));
 }
@@ -570,10 +667,14 @@ export async function shipmentCountSheet(sop: string): Promise<ArrayBuffer | nul
   const s = await getShipment(sop);
   if (!s) return null;
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet("Shipment count", { views: [{ state: "frozen", ySplit: 2 }] });
+  // The tab is named for the shipment, so the sheet only goes back on its own page.
+  const ws = wb.addWorksheet(`Count ${s.sop}`.slice(0, 31), { views: [{ state: "frozen", ySplit: 2 }] });
   ws.getCell("A1").value =
-    `Shipment ${s.sop}. Count what came out of the boxes. Counted includes the damaged ones. ` +
-    `Add a row at the bottom for anything that is not on the list.`;
+    `Shipment ${s.sop}. Counted is the total out of the boxes for each model, all deliveries together, damaged ones included. ` +
+    `Add a row at the bottom for anything not on the list.`;
+  // When it was downloaded, so an old copy can never undo a newer count.
+  ws.getCell("H1").value = `Downloaded ${new Date().toISOString()}`;
+  ws.getCell("H1").font = { color: { argb: "FF9AA1AC" } };
   ws.getCell("A1").font = { italic: true, color: { argb: "FF5B6472" } };
   ws.getRow(2).values = COUNT_HEADINGS;
   ws.getRow(2).font = { bold: true };
@@ -586,19 +687,29 @@ export async function shipmentCountSheet(sop: string): Promise<ArrayBuffer | nul
 }
 
 /** A filled-in shipment count sheet. Rows left blank are not counted. */
-export async function readShipmentCountSheet(buffer: ArrayBuffer): Promise<{ sop: string; entries: ShipmentCountEntry[]; problems: string[] }> {
+export async function readShipmentCountSheet(
+  buffer: ArrayBuffer,
+): Promise<{ sop: string; downloadedAt?: Date; entries: ShipmentCountEntry[]; problems: string[] }> {
   let sheets: SheetRows;
+  let downloadedAt: Date | undefined;
   try {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(buffer);
     sheets = sheetRows(wb, (c) => /^counted$/i.test(c.trim()));
+    const stamp = /^Downloaded (\S+)$/.exec(String(wb.worksheets[0]?.getCell("H1").value ?? ""));
+    if (stamp && !Number.isNaN(Date.parse(stamp[1]))) downloadedAt = new Date(stamp[1]);
   } catch {
     return { sop: "", entries: [], problems: ["That is not an Excel (.xlsx) file. Download the shipment's count sheet and fill that in."] };
   }
   if (sheets.length === 0) return { sop: "", entries: [], problems: ['No sheet has a "Counted" column. Is this a shipment count sheet?'] };
   const problems: string[] = [];
   const entries: ShipmentCountEntry[] = [];
+  // The tab's own name says which shipment it is, even with the SOP cells cleared.
   const sops = new Set<string>();
+  for (const { sheet } of sheets) {
+    const m = /^count (\S+)$/i.exec(sheet.trim());
+    if (m) sops.add(m[1].toUpperCase());
+  }
   for (const { sheet, rows } of sheets) {
     for (const { line, values } of rows) {
       const get = (name: string) => {
@@ -623,5 +734,5 @@ export async function readShipmentCountSheet(buffer: ArrayBuffer): Promise<{ sop
     }
   }
   if (sops.size > 1) problems.push(`The sheet has more than one SOP (${[...sops].join(", ")}). Count one shipment per sheet.`);
-  return { sop: [...sops][0] ?? "", entries, problems };
+  return { sop: [...sops][0] ?? "", downloadedAt, entries, problems };
 }

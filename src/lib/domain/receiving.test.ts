@@ -123,6 +123,10 @@ describe("cost after a shipment", () => {
     expect(weightedCost(3000, 10, 4000, 0)).toBe(3000);
     expect(weightedCost(3500, 10, 3500, 4)).toBe(3500);
   });
+  it("a model sold before its shipment was counted (nothing or less than nothing on hand) takes the new price", () => {
+    expect(weightedCost(3000, -3, 4000, 10)).toBe(4000);
+    expect(weightedCost(3000, -3, 4000, -2)).toBe(3000);
+  });
   it("a count corrected back puts the cost back where it was", () => {
     const after = weightedCost(3000, 10, 4000, 10)!;
     expect(weightedCost(after, 20, 4000, -10)).toBe(3000);

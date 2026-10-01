@@ -104,7 +104,7 @@ export async function importMaster(userId: string, fileName: string, sheets: She
       for (const d of incoming.values()) {
         const current = existing.get(d.model);
         if (!current) continue;
-        const changes = masterChanges(current, d);
+        const changes = masterChanges(current, d, current.typedFields);
         const needsDetails = (changes.description ?? current.description) === "";
         if (Object.keys(changes).length === 0 && needsDetails === current.needsDetails) {
           unchanged++;
@@ -352,6 +352,14 @@ export async function saveCount(userId: string, entries: CountEntry[], source: s
       });
       await tx.stockMove.createMany({ data: lines });
 
+      // A model ordered but not counted in as a shipment yet, found on the
+      // shelf: it is here, so it is active.
+      // Damaged pieces alone do not make it a model we can sell.
+      const found = clean
+        .filter((e) => Object.entries(e.counted).some(([place, q]) => place !== "DAMAGED" && (q ?? 0) > 0))
+        .map((e) => known.get(e.model)!);
+      if (found.length > 0) await tx.product.updateMany({ where: { id: { in: found }, active: false }, data: { active: true } });
+
       await tx.auditLog.create({
         data: {
           entityType: "StockMove",
@@ -536,11 +544,21 @@ export async function setImageUrl(userId: string, model: string, raw: string): P
   if (text !== "" && imageUrl === "") {
     return { ok: false, problem: "That is not a web address. Paste the whole link, starting https://" };
   }
-  const product = await prisma.product.findUnique({ where: { model: normaliseModel(model) }, select: { id: true, model: true, imageUrl: true } });
+  const product = await prisma.product.findUnique({ where: { model: normaliseModel(model) }, select: { id: true, model: true, imageUrl: true, typedFields: true } });
   if (!product) return { ok: false, problem: `${model} is not in the catalogue.` };
   if (imageUrl === product.imageUrl) return { ok: true };
   await prisma.$transaction([
-    prisma.product.update({ where: { id: product.id }, data: { imageUrl } }),
+    // Typed here, so a later master never puts its own link back over it.
+    prisma.product.update({
+      where: { id: product.id },
+      // Cleared, it is the master's again: a later master may fill it.
+      data: {
+        imageUrl,
+        typedFields: imageUrl === ""
+          ? product.typedFields.filter((f) => f !== "imageUrl")
+          : product.typedFields.includes("imageUrl") ? undefined : [...product.typedFields, "imageUrl"],
+      },
+    }),
     prisma.auditLog.create({
       data: {
         entityType: "Product",

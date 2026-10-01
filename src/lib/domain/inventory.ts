@@ -150,17 +150,20 @@ export function detailsFromMasterRow(row: Record<string, unknown>): ProductDetai
 export function masterChanges(
   current: Omit<ProductDetails, "model">,
   incoming: ProductDetails,
+  typed: readonly string[] = [],
 ): Partial<Omit<ProductDetails, "model">> {
   const changes: Partial<Omit<ProductDetails, "model">> = {};
+  // What the team typed in the app wins over the master (Samuel, 1 October).
+  const ours = new Set(typed);
   const fields = [
     "brand", "collection", "series", "gender", "description", "imageUrl", "ebayShippingProfile",
   ] as const;
   for (const f of fields) {
-    if (incoming[f] !== "" && incoming[f] !== current[f]) changes[f] = incoming[f];
+    if (incoming[f] !== "" && incoming[f] !== current[f] && !ours.has(f)) changes[f] = incoming[f];
   }
   const numbers = ["tpCents", "msrpCents", "weightLb", "lengthIn", "widthIn", "heightIn"] as const;
   for (const f of numbers) {
-    if (incoming[f] !== null && incoming[f] !== current[f]) changes[f] = incoming[f];
+    if (incoming[f] !== null && incoming[f] !== current[f] && !ours.has(f)) changes[f] = incoming[f];
   }
   if (current.costCents === null && incoming.costCents !== null && incoming.costCents > 0) {
     changes.costCents = incoming.costCents;

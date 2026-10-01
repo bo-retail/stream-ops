@@ -938,6 +938,11 @@ model Product {
   /// a shipment makes it active.
   active Boolean @default(true)
 
+  /// The details the team typed in the app (product details form or sheet,
+  /// picture link), by field name: "description", "tpCents"… The master never
+  /// overwrites these; it still updates everything else (Samuel, 1 October).
+  typedFields String[] @default([])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

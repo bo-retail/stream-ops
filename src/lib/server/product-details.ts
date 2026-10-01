@@ -112,15 +112,18 @@ export async function saveDetails(userId: string, entries: DetailsEntry[], sourc
   }
   if (problems.length > 0) return fail(problems);
 
-  const products = new Map(
-    (await prisma.product.findMany({ where: { model: { in: read.map((r) => r.model) } } })).map((p) => [p.model, p]),
-  );
-  const missing = read.filter((r) => !products.has(r.model)).map((r) => r.model);
-  if (missing.length > 0) {
-    return fail([`Not in the catalogue: ${missing.join(", ")}. A model comes in from an offer, a shipping list or a count first.`]);
-  }
-
   return prisma.$transaction(async (tx) => {
+    // The stock lock, and the models read inside it: a shipment count setting
+    // a cost right now is seen, and never overwritten by a stale "cost is blank".
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('inventory-count')::bigint)`;
+    const products = new Map(
+      (await tx.product.findMany({ where: { model: { in: read.map((r) => r.model) } } })).map((p) => [p.model, p]),
+    );
+    const missing = read.filter((r) => !products.has(r.model)).map((r) => r.model);
+    if (missing.length > 0) {
+      return fail([`Not in the catalogue: ${missing.join(", ")}. A model comes in from an offer, a shipping list or a count first.`]);
+    }
+
     const updated: string[] = [];
     const costKept: string[] = [];
     let unchanged = 0;
@@ -139,6 +142,9 @@ export async function saveDetails(userId: string, entries: DetailsEntry[], sourc
           before[k] = (p as Record<string, unknown>)[k];
         }
       }
+      // Remembered, so a later master never overwrites what was typed here.
+      const typed = Object.keys(data).filter((k) => k !== "costCents" && !p.typedFields.includes(k));
+      if (typed.length > 0) data.typedFields = [...p.typedFields, ...typed];
       const description = (data.description as string | undefined) ?? p.description;
       if (p.needsDetails !== (description === "")) data.needsDetails = description === "";
       if (Object.keys(data).length === 0) {
@@ -152,7 +158,7 @@ export async function saveDetails(userId: string, entries: DetailsEntry[], sourc
           entityId: p.id,
           action: "DETAILS_SAVED",
           actorId: userId,
-          summary: `Product details of ${model} (${source}): ${Object.keys(data).filter((k) => k !== "needsDetails").join(", ") || "flag cleared"}.`,
+          summary: `Product details of ${model} (${source}): ${Object.keys(data).filter((k) => k !== "needsDetails" && k !== "typedFields").join(", ") || "flag cleared"}.`,
           before: before as object,
           after: data as object,
         },

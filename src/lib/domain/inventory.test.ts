@@ -102,6 +102,11 @@ describe("loading the master over a model already there", () => {
   };
   const incoming = { ...blank, model: "1", description: "New text", costCents: 4000, tpCents: 6100 };
 
+  it("never overwrites what the team typed in the app, but updates the rest", () => {
+    const typed = { ...blank, description: "Typed by Claudia", tpCents: 5000, collection: "Old" };
+    const incoming2 = { ...incoming, collection: "Pro Diver", tpCents: 6100 };
+    expect(masterChanges(typed, incoming2, ["description", "tpCents"])).toEqual({ collection: "Pro Diver", costCents: 4000 });
+  });
   it("updates details", () => {
     expect(masterChanges({ ...blank, description: "Old" }, incoming)).toMatchObject({ description: "New text", tpCents: 6100 });
   });

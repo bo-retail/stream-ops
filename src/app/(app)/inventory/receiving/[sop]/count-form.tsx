@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Card, CardHeader, Input } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
-import { countShipment } from "../actions";
+import { countShipment, finishCount } from "../actions";
 import type { ReceivingState } from "../actions";
 import { Result } from "../forms";
 
@@ -32,13 +32,16 @@ const BOX =
  * model that came without being on the list is added at the bottom.
  */
 export function CountForm({ sop, lines }: { sop: string; lines: CountLine[] }) {
+  const before = (l: CountLine) => (l.counted === null ? null : { counted: l.counted, damaged: l.damaged ?? 0 });
+  const uncounted = lines.filter((l) => l.listed > 0 && l.counted === null).length;
+  const anyCounted = lines.some((l) => l.counted !== null);
   const router = useRouter();
   const start = () =>
     Object.fromEntries(
       lines.map((l) => [l.model, { counted: l.counted === null ? "" : String(l.counted), damaged: l.counted === null || !l.damaged ? "" : String(l.damaged) }]),
     );
   const [values, setValues] = useState<Record<string, { counted: string; damaged: string }>>(start);
-  const [extra, setExtra] = useState<{ model: string; counted: string; damaged: string }[]>([]);
+  const [extra, setExtra] = useState<{ model: string; counted: string; damaged: string; allowNew: boolean }[]>([]);
   const [state, setState] = useState<ReceivingState>({});
   const [busy, setBusy] = useState(false);
 
@@ -57,11 +60,28 @@ export function CountForm({ sop, lines }: { sop: string; lines: CountLine[] }) {
             // Only what was typed or changed is sent: an untouched counted row is not re-saved.
             return v.counted !== (l.counted === null ? "" : String(l.counted)) || v.damaged !== (l.counted === null || !l.damaged ? "" : String(l.damaged));
           })
-          .map((l) => ({ model: l.model, ...values[l.model] })),
-        ...extra.filter((x) => x.model.trim() !== ""),
+          .map((l) => ({ model: l.model, ...values[l.model], before: before(l) })),
+        // Nothing saved yet for a model added here: if it is already on the
+        // shipment, the server says so rather than replace its total.
+        ...extra.filter((x) => x.model.trim() !== "").map((x) => ({ ...x, before: null })),
       ];
       if (rows.length === 0) {
         setState({ error: "Nothing new to save: type a count first." });
+        return;
+      }
+      // Counted is a running total. A second delivery typed as only its own
+      // pieces would lower it, so a lower number is asked about first.
+      const lower = lines.filter((l) => {
+        const typed = Number(values[l.model].counted);
+        return l.counted !== null && values[l.model].counted.trim() !== "" && Number.isFinite(typed) && typed < l.counted;
+      });
+      if (
+        lower.length > 0 &&
+        !window.confirm(
+          `This lowers the count of ${lower.map((l) => `${l.model} from ${l.counted} to ${values[l.model].counted}`).join(", ")}.\n\n` +
+            "Counted is the total of every delivery of this shipment. If more pieces arrived, add them to the number already there.\n\nLower it?",
+        )
+      ) {
         return;
       }
       const r = await countShipment(sop, rows);
@@ -81,7 +101,7 @@ export function CountForm({ sop, lines }: { sop: string; lines: CountLine[] }) {
     <Card>
       <CardHeader
         title="Count it in"
-        description="Count what came out of the boxes. Counted includes the damaged ones. Leave a model blank until it is counted. You can save part of it and come back."
+        description="Counted is the total out of the boxes for each model — every delivery together, damaged ones included. Leave a model blank until it is counted; you can save part and come back. When it is all done, finish the count so anything missing shows as short."
       />
       <form onSubmit={save}>
         <ul className="divide-y divide-line">
@@ -104,7 +124,7 @@ export function CountForm({ sop, lines }: { sop: string; lines: CountLine[] }) {
                   {priceDiffers ? <span className="block text-xs text-warn-700">offer said {usd(l.offerCents)}</span> : null}
                 </div>
                 <label>
-                  <span className="block text-xs text-ink-muted">Counted</span>
+                  <span className="block text-xs text-ink-muted">Counted (total)</span>
                   <input
                     inputMode="numeric"
                     className={BOX}
@@ -141,6 +161,14 @@ export function CountForm({ sop, lines }: { sop: string; lines: CountLine[] }) {
                 <span className="block text-xs text-ink-muted">Damaged</span>
                 <input inputMode="numeric" className={BOX} placeholder="0" value={x.damaged} onChange={(e) => setExtra((all) => all.map((y, j) => (j === i ? { ...y, damaged: e.target.value } : y)))} />
               </label>
+              <label className="flex items-center gap-1.5 pb-2 text-xs text-ink-muted">
+                <input
+                  type="checkbox"
+                  checked={x.allowNew}
+                  onChange={(e) => setExtra((all) => all.map((y, j) => (j === i ? { ...y, allowNew: e.target.checked } : y)))}
+                />
+                New model (not in the app at all)
+              </label>
               <Button type="button" size="sm" variant="ghost" onClick={() => setExtra((all) => all.filter((_, j) => j !== i))}>
                 Remove
               </Button>
@@ -151,9 +179,31 @@ export function CountForm({ sop, lines }: { sop: string; lines: CountLine[] }) {
           <Button type="submit" disabled={busy}>
             {busy ? "Saving…" : "Save the count"}
           </Button>
-          <Button type="button" variant="secondary" onClick={() => setExtra((all) => [...all, { model: "", counted: "", damaged: "" }])}>
+          <Button type="button" variant="secondary" onClick={() => setExtra((all) => [...all, { model: "", counted: "", damaged: "", allowNew: false }])}>
             A model not on the list
           </Button>
+          {anyCounted && uncounted > 0 ? (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={busy}
+              onClick={async () => {
+                if (!window.confirm(`${uncounted} model(s) on the list have not been counted. Finish the count, so they show as short for Invicta?`)) return;
+                setBusy(true);
+                try {
+                  const r = await finishCount(sop);
+                  setState(r);
+                  if (r.ok) router.refresh();
+                } catch {
+                  setState({ error: "That did not save. Try again." });
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Finish the count ({uncounted} not counted)
+            </Button>
+          ) : null}
         </div>
         <div className="px-4 pb-4">
           <Result state={state} />
