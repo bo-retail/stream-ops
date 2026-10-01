@@ -125,6 +125,7 @@ model User {
   priorities        ReleasePriority[]
   snapshotsCreated  ScheduleSnapshot[]      @relation("SnapshotCreatedBy")
   auditLogs         AuditLog[]              @relation("AuditActor")
+  stockMoves        StockMove[]
   timeEntries       TimeEntry[]
   timeEntriesEdited TimeEntryRevision[]     @relation("TimeEntryChangedBy")
 
@@ -882,5 +883,99 @@ model ScanEvent {
 
   @@index([packageId, at])
   @@index([userId, at])
+  @@index([at])
+}
+
+/* ==========================================================================
+   Inventory — step 1: the catalogue and the stock history.
+   ========================================================================== */
+
+/// One model in the catalogue: what it is, never how many.
+///
+/// Loaded from Invicta's master file, and later created by the offer. How many
+/// there are lives only in StockMove — a model with no moves has simply never
+/// been counted.
+model Product {
+  id String @id @default(cuid())
+
+  /// The model number as the scanner and the reports read it: trimmed,
+  /// upper-case. "49888", "TM-525003", "ACW8082-014".
+  model String @unique
+
+  brand       String @default("")
+  collection  String @default("")
+  series      String @default("")
+  gender      String @default("")
+  description String @default("")
+  imageUrl    String @default("")
+
+  /// What one costs us, in cents. Set by the master, the offer or the shipping
+  /// list only when it is missing; changed afterwards only by a cost correction.
+  costCents Int?
+  /// Target price, in cents.
+  tpCents   Int?
+  /// Invicta's MSRP, in cents. TikTok's fixed price is half of it.
+  msrpCents Int?
+
+  /// TikTok's package size, in pounds and inches.
+  weightLb Float?
+  lengthIn Float?
+  widthIn  Float?
+  heightIn Float?
+
+  ebayShippingProfile String @default("")
+  upc                 String @default("")
+
+  /// Added at a count without its details (a watch on the shelf that is in no
+  /// file). Flagged on the stock page until somebody fills them in.
+  needsDetails Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  moves StockMove[]
+}
+
+/// Where a watch physically is.
+enum StockPlace {
+  SELLABLE
+  SAMPLE_EBAY
+  SAMPLE_TIKTOK
+  RANDOM_PULLS
+  DAMAGED
+}
+
+/// Why stock changed. Step 1 has counts only; receiving, sales and the rest
+/// come with their steps.
+enum StockMoveKind {
+  COUNT
+}
+
+/// One change to one model in one place. Never edited, never deleted.
+///
+/// A model's stock in a place is the sum of its lines — there is no separate
+/// running total to drift out of step. A correction is a new line.
+model StockMove {
+  id        String        @id @default(cuid())
+  productId String
+  place     StockPlace
+  /// The change: +3, -1, or 0 for a count that matched.
+  qty       Int
+  kind      StockMoveKind
+  /// For a count: the number counted, so the history reads "counted 12 (was 10)".
+  countedQty Int?
+  note      String        @default("")
+  /// Everything written by one save or one upload shares this.
+  entryId   String
+  byId      String?
+  at        DateTime      @default(now())
+
+  // Restrict, not Cascade: stock history is never removed by deleting
+  // something else (the 09/22 lesson).
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  by      User?   @relation(fields: [byId], references: [id], onDelete: SetNull)
+
+  @@index([productId, place])
+  @@index([entryId])
   @@index([at])
 }

@@ -23,6 +23,11 @@ localhost:4321): its `whatif.mjs` lists 119 situations and how each is handled.
   (description, TP, TikTok weight and box, eBay profile, UPC). Gladys's count makes
   them active. The shipping list is compared with the offer on price and quantity
   ("still to come").
+- **Which file says what** (Samuel, 1 October): the offer says *which models,
+  how many and at what cost*; the product details sheet says *everything about a
+  model*. The offer's brand, collection, gender and picture are copied in only to
+  fill blanks on a model it creates. They never overwrite anything, and the
+  product details sheet (or its in-app form) always wins.
 - **Sold, then sent.** A paid report line makes the watch "sold, waiting to ship"
   (no longer available, still in the building). The packing scan must match the
   report's `model #`; a wrong watch is refused (the packer's mistake; stock does not
@@ -45,6 +50,34 @@ localhost:4321): its `whatif.mjs` lists 119 situations and how each is handled.
   the last decisions, each with a recommended default. We build on those
   defaults and change any that Daniel answers differently.
 
+### Round 6, answered by Samuel (1 October)
+- **Launch:** sales before the count never move stock; from the first show after
+  it, everything does. The first real shipment stays boxed until the shelf count
+  is done, then is counted as a shipment. Andres's xlookup runs in parallel until
+  **Samuel says it stops** (no automatic rule).
+- **Every day:** the shelf is counted after the day's packing. "Not sent" is
+  flagged at the end of the next day and goes to Samuel after two days.
+- **Offers:** only models with a `Dani` quantity are created. Offers are named
+  by date; the same date replaces. Not arrived after **60 days** (not 30) drops
+  off "still to come" and stays in the history. Cost is set only by the offer,
+  the shipping list and the cost correction; product details fill a missing cost
+  only.
+- **Shows:** a watch counts as run if it sold or was on that show's eBay
+  selection or show run.
+- **Numbers:** a cost snapshot on every sale; a correction moves the current
+  month only, and a closed month gets a correction line; returns go back at the
+  cost they left with, booked on the day they come back; damaged stock is valued
+  at cost until credited or written off.
+- **Upload files:** a set-price watch (TP over $120) goes on eBay as an
+  **auction starting at its TP**. TikTok's fixed price will become **50% of
+  MSRP** as Invicta sends MSRPs, so MSRP is now a field kept per model (until
+  then, $800). One eBay file per show (AM and PM), each with its show tag.
+  **The AM and PM TikTok files are both uploaded in the morning.** No Seller SKU
+  column on TikTok.
+- **Still open:** does an unsold set-price eBay auction end with the show or
+  stay up? On TikTok, is a set-price watch's starting bid its TP? How do the AM
+  and PM TikTok files split the quantity, when both go up before either show?
+
 ### Build rules, from the first line of code
 1. **Stock history is append-only.** No hard deletes, and no `onDelete: Cascade`
    into it from ImportBatch, Release, Show or anything else (the 09/22 incident).
@@ -64,8 +97,9 @@ localhost:4321): its `whatif.mjs` lists 119 situations and how each is handled.
    "Mark day sent" refuses while there are unmatched boxes.
 5. **Time:** store instants in UTC. The business day comes from the business-zone
    helper, never from UTC midnight.
-6. **A balance table updated in the same transaction as the ledger,** with a
-   nightly check that they agree. Snapshot the cost on every sale.
+6. **No separate balance table** (changed 1 October, for simplicity): a model's
+   stock in a place is the sum of its ledger lines, worked out when it is read,
+   so it can never drift from its own history. Snapshot the cost on every sale.
 7. **Per-person permissions:** stock changes by Gladys, Claudia and Daniel;
    product details and the eBay selection by the shipping directors. Log
    everything to AuditLog.
@@ -77,6 +111,15 @@ localhost:4321): its `whatif.mjs` lists 119 situations and how each is handled.
    Deploy outside packing and upload hours, and tell the floor to refresh.
 10. **Backups:** make a Neon branch at launch, and a daily export of balances and
     the ledger after it.
+11. **Every template can also be typed in on the website, and that is the main
+    way** (Samuel, 1 October). Each template-based job (full count, spot count,
+    shipment count, returns and cancellations, adjustments, moves, cost
+    correction, product details) has an in-app form with the same columns, a
+    blank template to download from a Templates page on the site (no OneDrive
+    copies), and an upload for the filled template. Typed and uploaded entries go
+    through one shared checker and one write path, so they behave identically.
+    Files that come from outside (sales reports, offers, shipping lists,
+    invoices) stay upload-only.
 
 ---
 

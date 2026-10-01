@@ -87,6 +87,11 @@ ALTER TABLE "BusinessSettings"
   ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
   ADD CONSTRAINT "BusinessSettings_streamerHourlyCents_not_negative" CHECK ("streamerHourlyCents" >= 0);
 
+-- Inventory: a count is never negative, and money is never negative.
+ALTER TABLE "StockMove" ADD CONSTRAINT "StockMove_countedQty_not_negative" CHECK ("countedQty" IS NULL OR "countedQty" >= 0);
+ALTER TABLE "Product" ADD CONSTRAINT "Product_money_not_negative"
+  CHECK (("costCents" IS NULL OR "costCents" >= 0) AND ("tpCents" IS NULL OR "tpCents" >= 0) AND ("msrpCents" IS NULL OR "msrpCents" >= 0));
+
 -- A database standing up from nothing still needs both rows to exist. The
 -- migration seeds watches by copying the singleton; from empty there is nothing
 -- to copy, so they start on what the two actually pay.

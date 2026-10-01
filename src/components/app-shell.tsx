@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   BarChart3,
+  Boxes,
   CalendarDays,
   CalendarRange,
   DollarSign,
@@ -39,6 +40,7 @@ const ICONS = {
   settings: Settings,
   shipping: PackageIcon,
   reports: FileSpreadsheet,
+  inventory: Boxes,
 } as const;
 
 function isActive(pathname: string, href: string): boolean {

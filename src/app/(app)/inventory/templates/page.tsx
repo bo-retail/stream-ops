@@ -1,0 +1,59 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { Download } from "lucide-react";
+import { Card, CardHeader, LinkButton, PageHeader } from "@/components/ui";
+import { requireShippingDirector } from "@/lib/auth/guards";
+import { UploadCount, UploadMaster } from "./upload-forms";
+
+export const metadata: Metadata = { title: "Templates & uploads" };
+
+/**
+ * Every inventory template, and where each one goes back in.
+ *
+ * The templates live here rather than in a shared folder, so the copy
+ * downloaded is always the current one. Each job can also be done on its own
+ * screen without any file at all — the template is for whoever prefers it.
+ */
+export default async function TemplatesPage() {
+  await requireShippingDirector();
+
+  return (
+    <>
+      <PageHeader
+        title="Templates & uploads"
+        description="Download a template, fill it in, upload it. Every job here can also be typed straight into the app instead."
+        action={<LinkButton href="/inventory">Back to inventory</LinkButton>}
+      />
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card>
+          <CardHeader
+            title="Count sheet"
+            description="Every model, with a column for each place. Blank means not counted; 0 means none. The second tab is for watches that are not on the list."
+          />
+          <div className="space-y-4 p-4">
+            <a
+              href="/api/inventory/count-sheet"
+              className="inline-flex items-center gap-2 rounded-lg border border-line-strong px-3 py-2 text-sm font-medium text-ink hover:bg-canvas"
+            >
+              <Download className="h-4 w-4" aria-hidden /> Download the count sheet
+            </a>
+            <p className="text-sm text-ink-muted">
+              Or count on the <Link href="/inventory/count" className="underline">count screen</Link>, one model at a time.
+            </p>
+            <UploadCount />
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Invicta master file"
+            description="Their file, as it comes. Adds new models and updates details; never deletes a model, and never changes a cost that is already set."
+          />
+          <div className="p-4">
+            <UploadMaster />
+          </div>
+        </Card>
+      </div>
+    </>
+  );
+}

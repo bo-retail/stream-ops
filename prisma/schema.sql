@@ -52,6 +52,12 @@ CREATE TYPE "PackageStatus" AS ENUM ('OPEN', 'CLOSED_COMPLETE', 'CLOSED_INCOMPLE
 -- CreateEnum
 CREATE TYPE "ScanKind" AS ENUM ('LABEL', 'ITEM_ACCEPTED', 'ITEM_REFUSED', 'ITEM_OVERRIDE', 'ITEM_PLACEHOLDER', 'CLOSE_COMPLETE', 'CLOSE_INCOMPLETE', 'CLOSE_UNVERIFIED', 'REOPEN');
 
+-- CreateEnum
+CREATE TYPE "StockPlace" AS ENUM ('SELLABLE', 'SAMPLE_EBAY', 'SAMPLE_TIKTOK', 'RANDOM_PULLS', 'DAMAGED');
+
+-- CreateEnum
+CREATE TYPE "StockMoveKind" AS ENUM ('COUNT');
+
 -- CreateTable
 CREATE TABLE "User" (
     "id" TEXT NOT NULL,
@@ -388,6 +394,48 @@ CREATE TABLE "ScanEvent" (
     CONSTRAINT "ScanEvent_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "Product" (
+    "id" TEXT NOT NULL,
+    "model" TEXT NOT NULL,
+    "brand" TEXT NOT NULL DEFAULT '',
+    "collection" TEXT NOT NULL DEFAULT '',
+    "series" TEXT NOT NULL DEFAULT '',
+    "gender" TEXT NOT NULL DEFAULT '',
+    "description" TEXT NOT NULL DEFAULT '',
+    "imageUrl" TEXT NOT NULL DEFAULT '',
+    "costCents" INTEGER,
+    "tpCents" INTEGER,
+    "msrpCents" INTEGER,
+    "weightLb" DOUBLE PRECISION,
+    "lengthIn" DOUBLE PRECISION,
+    "widthIn" DOUBLE PRECISION,
+    "heightIn" DOUBLE PRECISION,
+    "ebayShippingProfile" TEXT NOT NULL DEFAULT '',
+    "upc" TEXT NOT NULL DEFAULT '',
+    "needsDetails" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Product_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "StockMove" (
+    "id" TEXT NOT NULL,
+    "productId" TEXT NOT NULL,
+    "place" "StockPlace" NOT NULL,
+    "qty" INTEGER NOT NULL,
+    "kind" "StockMoveKind" NOT NULL,
+    "countedQty" INTEGER,
+    "note" TEXT NOT NULL DEFAULT '',
+    "entryId" TEXT NOT NULL,
+    "byId" TEXT,
+    "at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "StockMove_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
 
@@ -544,6 +592,18 @@ CREATE INDEX "ScanEvent_userId_at_idx" ON "ScanEvent"("userId", "at");
 -- CreateIndex
 CREATE INDEX "ScanEvent_at_idx" ON "ScanEvent"("at");
 
+-- CreateIndex
+CREATE UNIQUE INDEX "Product_model_key" ON "Product"("model");
+
+-- CreateIndex
+CREATE INDEX "StockMove_productId_place_idx" ON "StockMove"("productId", "place");
+
+-- CreateIndex
+CREATE INDEX "StockMove_entryId_idx" ON "StockMove"("entryId");
+
+-- CreateIndex
+CREATE INDEX "StockMove_at_idx" ON "StockMove"("at");
+
 -- AddForeignKey
 ALTER TABLE "Release" ADD CONSTRAINT "Release_createdById_fkey" FOREIGN KEY ("createdById") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
@@ -640,6 +700,12 @@ ALTER TABLE "ScanEvent" ADD CONSTRAINT "ScanEvent_packageId_fkey" FOREIGN KEY ("
 -- AddForeignKey
 ALTER TABLE "ScanEvent" ADD CONSTRAINT "ScanEvent_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
+-- AddForeignKey
+ALTER TABLE "StockMove" ADD CONSTRAINT "StockMove_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "StockMove" ADD CONSTRAINT "StockMove_byId_fkey" FOREIGN KEY ("byId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
 -- ===========================================================================
 -- Guarantees Prisma's schema language cannot express
 -- ===========================================================================
@@ -698,6 +764,11 @@ ALTER TABLE "User"
 ALTER TABLE "BusinessSettings"
   ADD CONSTRAINT "BusinessSettings_streamerCommissionBps_not_negative" CHECK ("streamerCommissionBps" >= 0),
   ADD CONSTRAINT "BusinessSettings_streamerHourlyCents_not_negative" CHECK ("streamerHourlyCents" >= 0);
+
+-- Inventory: a count is never negative, and money is never negative.
+ALTER TABLE "StockMove" ADD CONSTRAINT "StockMove_countedQty_not_negative" CHECK ("countedQty" IS NULL OR "countedQty" >= 0);
+ALTER TABLE "Product" ADD CONSTRAINT "Product_money_not_negative"
+  CHECK (("costCents" IS NULL OR "costCents" >= 0) AND ("tpCents" IS NULL OR "tpCents" >= 0) AND ("msrpCents" IS NULL OR "msrpCents" >= 0));
 
 -- A database standing up from nothing still needs both rows to exist. The
 -- migration seeds watches by copying the singleton; from empty there is nothing
