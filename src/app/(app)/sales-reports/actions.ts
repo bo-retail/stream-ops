@@ -4,7 +4,9 @@ import { revalidatePath } from "next/cache";
 import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { isDateISO } from "@/lib/domain/dates";
-import { readFiles, runImport } from "@/lib/server/imports";
+import { BUSINESS_SHORT, items } from "@/lib/domain/business";
+import { readFiles, runImports } from "@/lib/server/imports";
+import type { ImportOutcome } from "@/lib/server/imports";
 import { deleteImport, reportRemovalImpact } from "@/lib/server/shipping";
 import type { ImportFlag } from "@/lib/domain/imports/types";
 
@@ -79,9 +81,9 @@ export async function uploadReports(
     }
   }
 
-  let outcome;
+  let outcomes: ImportOutcome[];
   try {
-    outcome = await runImport(files, user.id);
+    outcomes = await runImports(files, user.id);
   } catch (error) {
     // A failed import must not look like a successful empty one.
     return {
@@ -89,46 +91,71 @@ export async function uploadReports(
     };
   }
 
-  await prisma.auditLog.create({
-    data: {
-      entityType: "ImportBatch",
-      entityId: outcome.batchId ?? "none",
-      action: outcome.status === "OK" ? "IMPORT" : "IMPORT_BLOCKED",
-      actorId: user.id,
-      summary:
-        outcome.status === "OK"
-          ? `Uploaded the reports for ${outcome.showDate} — ${outcome.watchCount} watches in ${outcome.boxCount} boxes`
-          : `Upload for ${outcome.showDate ?? "an unreadable day"} was refused: ${
-              outcome.flags.find((f) => f.severity === "blocking")?.message ?? "unknown"
-            }`,
-    },
-  });
+  for (const outcome of outcomes) {
+    const what = outcome.business ?? "WATCH";
+    await prisma.auditLog.create({
+      data: {
+        entityType: "ImportBatch",
+        entityId: outcome.batchId ?? "none",
+        action: outcome.status === "OK" ? "IMPORT" : "IMPORT_BLOCKED",
+        actorId: user.id,
+        summary:
+          outcome.status === "OK"
+            ? `Uploaded the ${BUSINESS_SHORT[what].toLowerCase()} reports for ${outcome.showDate} — ` +
+              `${items(what, outcome.watchCount)} in ${outcome.boxCount} boxes`
+            : `Upload for ${outcome.showDate ?? "an unreadable day"} was refused: ${
+                outcome.flags.find((f) => f.severity === "blocking")?.message ?? "unknown"
+              }`,
+      },
+    });
+  }
 
   revalidatePath("/sales-reports");
   revalidatePath("/shipping");
   revalidatePath("/shipping/log");
   revalidatePath("/dashboard");
 
-  if (outcome.status === "BLOCKED") {
+  /*
+    One drop can come back as two uploads — watches and diamonds are written
+    separately — and either can be refused without the other. Each says what
+    happened to it, under its own name, so a refused half is never hidden
+    behind a successful one.
+  */
+  const several = outcomes.length > 1;
+  const label = (o: ImportOutcome) => (several ? `${BUSINESS_SHORT[o.business ?? "WATCH"]}: ` : "");
+  const flags = outcomes.flatMap((o) =>
+    o.flags.map((f) => ({ ...f, message: label(o) + f.message })),
+  );
+  const showDate = outcomes.find((o) => o.showDate)?.showDate ?? undefined;
+
+  const summary = (o: ImportOutcome) => {
+    if (o.status === "BLOCKED") return `${label(o)}nothing was imported.`;
+    const kept =
+      o.untouchedClosedBoxes > 0
+        ? ` ${o.untouchedClosedBoxes} box(es) already sent were left untouched.`
+        : "";
+    return (
+      `${label(o)}${items(o.business ?? "WATCH", o.watchCount)} in ${o.boxCount} boxes for ${o.showDate}.` +
+      ` ${o.droppedCount} row(s) not counted.${kept}`
+    );
+  };
+
+  const refused = outcomes.filter((o) => o.status === "BLOCKED");
+  const done = outcomes.filter((o) => o.status === "OK");
+  if (refused.length > 0) {
     return {
-      error: "Nothing was imported — see below.",
-      flags: outcome.flags,
-      showDate: outcome.showDate ?? undefined,
+      // The half that went in is reported as done, so the checklist refreshes
+      // and nobody uploads it again; the refused half is the error.
+      ok: done.length > 0 ? done.map(summary).join(" ") : undefined,
+      error: several
+        ? `${refused.map(summary).join(" ")} See below.`
+        : "Nothing was imported — see below.",
+      flags,
+      showDate,
     };
   }
 
-  const kept =
-    outcome.untouchedClosedBoxes > 0
-      ? ` ${outcome.untouchedClosedBoxes} box(es) already sent were left untouched.`
-      : "";
-
-  return {
-    ok:
-      `${outcome.watchCount} watches in ${outcome.boxCount} boxes for ${outcome.showDate}.` +
-      ` ${outcome.droppedCount} row(s) not counted.${kept}`,
-    flags: outcome.flags,
-    showDate: outcome.showDate ?? undefined,
-  };
+  return { ok: outcomes.map(summary).join(" "), flags, showDate };
 }
 
 /**

@@ -171,7 +171,8 @@ export function UploadForm({ targets }: { targets: UploadTarget[] }) {
         {state.ok ? (
           <Alert tone="ok" title="Imported">
             {state.ok}
-            {state.flags && state.flags.length > 0 ? <Flags flags={state.flags} /> : null}
+            {/* With a refused half alongside, the flags are shown once, under it. */}
+            {!state.error && state.flags && state.flags.length > 0 ? <Flags flags={state.flags} /> : null}
           </Alert>
         ) : null}
 
