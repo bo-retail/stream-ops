@@ -96,3 +96,30 @@ const MASTER_COLUMNS = [
   "ebay shipping profile name", "ebay shipping profile",
 ];
 export const isMasterColumn = (heading: string) => MASTER_COLUMNS.includes(heading.trim().toLowerCase());
+
+/**
+ * Whether rows sent from the browser have the shape `sheetRows` makes, within
+ * sane limits. They are untrusted input like any other.
+ */
+export function isSheetRows(sheets: unknown): sheets is SheetRows {
+  const plain = (v: unknown) => v === null || typeof v === "string" || typeof v === "number";
+  return (
+    Array.isArray(sheets) &&
+    sheets.length <= 20 &&
+    sheets.every(
+      (s) =>
+        typeof s?.sheet === "string" &&
+        Array.isArray(s.rows) &&
+        s.rows.length <= 10_000 &&
+        s.rows.every(
+          (r: unknown) =>
+            r !== null &&
+            typeof r === "object" &&
+            typeof (r as { line?: unknown }).line === "number" &&
+            typeof (r as { values?: unknown }).values === "object" &&
+            (r as { values: object | null }).values !== null &&
+            Object.values((r as { values: object }).values).every(plain),
+        ),
+    )
+  );
+}

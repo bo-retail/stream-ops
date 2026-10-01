@@ -6,6 +6,7 @@ import { pictureFor } from "@/lib/domain/watch-images";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { PLACES, PLACE_LABEL } from "@/lib/domain/inventory";
 import { getModel } from "@/lib/server/inventory";
+import { DetailsEditor } from "./details-editor";
 import { PictureEditor } from "./picture-editor";
 
 export const metadata: Metadata = { title: "Inventory" };
@@ -43,9 +44,10 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
           </div>
         }
       />
-      {p.needsDetails ? (
-        <p className="mb-4">
-          <Badge tone="warn">Added at a count — needs its details from the master file</Badge>
+      {p.needsDetails || !p.active ? (
+        <p className="mb-4 flex flex-wrap gap-2">
+          {!p.active ? <Badge tone="brand">Ordered — not arrived yet. It becomes active when a shipment of it is counted in.</Badge> : null}
+          {p.needsDetails ? <Badge tone="warn">Needs its details — fill them in below</Badge> : null}
         </p>
       ) : null}
 
@@ -63,30 +65,31 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
             <WatchImage url={pictureFor(p.model, p.imageUrl, p.photo?.updatedAt)} model={p.model} size={256} priority />
           </div>
           <PictureEditor key={p.imageUrl} model={p.model} hasPhoto={p.photo !== null} imageUrl={p.imageUrl} />
-          <dl className="grid grid-cols-2 gap-x-3 gap-y-2 p-4 text-sm">
-            {[
-              ["Brand", p.brand],
-              ["Collection", p.collection],
-              ["Gender", p.gender],
-              ["Cost", money(p.costCents)],
-              ["Target price", money(p.tpCents)],
-              ["MSRP", money(p.msrpCents)],
-              ["TikTok box", p.weightLb !== null ? `${p.weightLb} lb · ${p.lengthIn}×${p.widthIn}×${p.heightIn} in` : ""],
-              ["eBay profile", p.ebayShippingProfile],
-              ["UPC", p.upc],
-            ].map(([label, value]) => (
-              <div key={label} className="contents">
-                <dt className="text-ink-muted">{label}</dt>
-                <dd className="text-ink">{value || "—"}</dd>
-              </div>
-            ))}
-          </dl>
+          <DetailsEditor
+            key={p.updatedAt.getTime()}
+            model={p.model}
+            details={{
+              brand: p.brand,
+              collection: p.collection,
+              gender: p.gender,
+              description: p.description,
+              costCents: p.costCents,
+              tpCents: p.tpCents,
+              msrpCents: p.msrpCents,
+              weightLb: p.weightLb,
+              lengthIn: p.lengthIn,
+              widthIn: p.widthIn,
+              heightIn: p.heightIn,
+              ebayShippingProfile: p.ebayShippingProfile,
+              upc: p.upc,
+            }}
+          />
         </Card>
 
         <Card className="lg:col-span-2">
           <CardHeader title="History" description="Every change, newest first. Nothing here is ever edited or removed." />
           {p.moves.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-ink-muted">Not counted yet.</p>
+            <p className="px-4 py-6 text-sm text-ink-muted">Not counted or received yet.</p>
           ) : (
             <Table>
               <thead>
@@ -103,7 +106,13 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
                   <tr key={m.id}>
                     <Td className="whitespace-nowrap text-ink-muted">{when.format(m.at)}</Td>
                     <Td>
-                      Counted {m.countedQty}
+                      {m.kind === "RECEIVED" ? (
+                        <>
+                          Received{m.unitCostCents !== null ? ` at ${money(m.unitCostCents)}` : ""}
+                        </>
+                      ) : (
+                        <>Counted {m.countedQty}</>
+                      )}
                       {m.note ? <span className="block text-xs text-ink-subtle">{m.note}</span> : null}
                     </Td>
                     <Td>{PLACE_LABEL[m.place]}</Td>

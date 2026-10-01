@@ -6,7 +6,13 @@ new session can pick this up without the conversation that produced it.
 Read `CLAUDE.md` first (how work is done here). `WHERE-WE-ARE.md` covers the rest
 of the project; this file is inventory only.
 
-**Status on 30 September 2026: nothing built yet; building starts 1 October.**
+**Status on 1 October 2026: steps 1 and 2 built, on `main`, not pushed.** Step 1
+(catalogue, counting, pictures) and step 2 (receiving: offer, shipping list,
+shipment count, differences, still to come, product details) are committed and
+checked by `scripts/check-inventory.mts` and `scripts/check-receiving.mts`. Next is
+step 3 (stock comes off when an order is paid). Push once steps 1–3 are done.
+
+_(Was: 30 September — nothing built yet.)_
 Daniel has answered five rounds. Sections 1–8 below are the design as of 28
 September; **section 0 supersedes them where they differ.** The full working model
 of the design is the local demo at `C:\dev\inventory-demo` (`node serve.mjs`,

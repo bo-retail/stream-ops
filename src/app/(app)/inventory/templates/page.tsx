@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Download } from "lucide-react";
 import { Card, CardHeader, LinkButton, PageHeader } from "@/components/ui";
 import { requireShippingDirector } from "@/lib/auth/guards";
+import { UploadDetails } from "../receiving/forms";
 import { UploadCount, UploadMaster } from "./upload-forms";
 
 export const metadata: Metadata = { title: "Templates & uploads" };
@@ -41,6 +42,33 @@ export default async function TemplatesPage() {
               Or count on the <Link href="/inventory/count" className="underline">count screen</Link>, one model at a time.
             </p>
             <UploadCount />
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Product details"
+            description="Everything about a model the offer does not say: description, target price, TikTok weight and box, eBay profile, barcode. Models still needing theirs are at the top. A blank keeps what is there; cost only fills a missing one."
+          />
+          <div className="space-y-4 p-4">
+            <a
+              href="/api/inventory/details-sheet"
+              className="inline-flex items-center gap-2 rounded-lg border border-line-strong px-3 py-2 text-sm font-medium text-ink hover:bg-canvas"
+            >
+              <Download className="h-4 w-4" aria-hidden /> Download the product details sheet
+            </a>
+            <p className="text-sm text-ink-muted">Or fill them in on each model&apos;s page, with its picture.</p>
+            <UploadDetails />
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="Shipment count"
+            description="Each shipment has its own count sheet, with its list filled in."
+          />
+          <div className="p-4 text-sm text-ink-muted">
+            Open the shipment on <Link href="/inventory/receiving" className="underline">Receiving</Link>: count it there, or download its sheet and upload it back on the same page.
           </div>
         </Card>
 

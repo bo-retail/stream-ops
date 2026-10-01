@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
 import { PLACES, PLACE_LABEL, normaliseModel, parseQty } from "@/lib/domain/inventory";
 import type { CountedPlaces } from "@/lib/domain/inventory";
+import { isSheetRows } from "@/lib/domain/inventory-sheets";
 import type { SheetRows } from "@/lib/domain/inventory-sheets";
 import { getModel, importMaster, readCountSheet, removePhoto, saveCount, savePhoto, setImageUrl } from "@/lib/server/inventory";
 import type { Balances } from "@/lib/server/inventory";
@@ -141,18 +142,7 @@ export async function uploadMasterRows(fileName: string, sheets: SheetRows): Pro
   } catch {
     return { error: NOT_ALLOWED };
   }
-  const plain = (v: unknown) => v === null || typeof v === "string" || typeof v === "number";
-  const shapeOk =
-    Array.isArray(sheets) &&
-    sheets.length <= 20 &&
-    sheets.every(
-      (s) =>
-        typeof s?.sheet === "string" &&
-        Array.isArray(s.rows) &&
-        s.rows.length <= 10_000 &&
-        s.rows.every((r) => r && typeof r.line === "number" && r.values && Object.values(r.values).every(plain)),
-    );
-  if (!shapeOk) return { error: "That file could not be read as Invicta's master file." };
+  if (!isSheetRows(sheets)) return { error: "That file could not be read as Invicta's master file." };
 
   const r = await importMaster(user.id, String(fileName).slice(0, 200), sheets);
   if (!r.ok) return { error: r.problems.join(" ") };

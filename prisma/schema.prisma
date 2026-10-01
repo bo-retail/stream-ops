@@ -126,6 +126,9 @@ model User {
   snapshotsCreated  ScheduleSnapshot[]      @relation("SnapshotCreatedBy")
   auditLogs         AuditLog[]              @relation("AuditActor")
   stockMoves        StockMove[]
+  offersUploaded    Offer[]                 @relation("OfferUploadedBy")
+  shipmentsUploaded Shipment[]              @relation("ShipmentUploadedBy")
+  shipmentLinesSettled ShipmentLine[]       @relation("ShipmentLineSettledBy")
   timeEntries       TimeEntry[]
   timeEntriesEdited TimeEntryRevision[]     @relation("TimeEntryChangedBy")
 
@@ -930,11 +933,96 @@ model Product {
   /// file). Flagged on the stock page until somebody fills them in.
   needsDetails Boolean @default(false)
 
+  /// False for a model created from an offer or a shipping list that has not
+  /// been counted in yet: known, ordered, not on the shelf. Gladys's count of
+  /// a shipment makes it active.
+  active Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  moves         StockMove[]
+  photo         ProductPhoto?
+  offerLines    OfferLine[]
+  shipmentLines ShipmentLine[]
+}
+
+/// Daniel's offer to Invicta — what he ordered, how many, at what cost. Named by
+/// its date; uploading the same date again replaces it. Not stock: nothing on
+/// it is ours until a shipment of it is counted.
+model Offer {
+  id         String   @id @default(cuid())
+  /// The offer's date, as named ("09.19").
+  date       DateTime @unique @db.Date
+  fileName   String
+  uploadedAt DateTime @default(now())
+  byId       String?
+
+  by    User?       @relation("OfferUploadedBy", fields: [byId], references: [id], onDelete: SetNull)
+  lines OfferLine[]
+}
+
+model OfferLine {
+  id        String @id @default(cuid())
+  offerId   String
+  productId String
+  /// The `Dani` column: how many he ordered.
+  qty       Int
+  /// `BO COSTS`: what one costs us.
+  costCents Int
+
+  offer   Offer   @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([offerId, productId])
+  @@index([productId])
+}
+
+/// One SOP from Invicta's shipping list: what they say they sent, at what
+/// price. Stock moves only when Gladys counts it.
+model Shipment {
+  id         String   @id @default(cuid())
+  /// "INV258905". One shipping list can carry several.
+  sop        String   @unique
+  /// "Customer PO Number" — free text ("9.15 ORDER").
+  po         String   @default("")
+  fileName   String
+  uploadedAt DateTime @default(now())
+  byId       String?
+  /// When its count was last saved; null until it is counted.
+  countedAt  DateTime?
+
+  by    User?          @relation("ShipmentUploadedBy", fields: [byId], references: [id], onDelete: SetNull)
+  lines ShipmentLine[]
   moves StockMove[]
-  photo ProductPhoto?
+}
+
+model ShipmentLine {
+  id            String @id @default(cuid())
+  shipmentId    String
+  productId     String
+  /// What the shipping list says was sent. 0 for a model that came in the
+  /// boxes without being on the list.
+  listedQty     Int
+  /// The shipping list's unit price, which is what it cost us. Null only for a
+  /// model that was not on the list.
+  unitCostCents Int?
+  /// Gladys's count of it, damaged pieces included; null until counted.
+  countedQty    Int?
+  /// Of those, how many arrived damaged.
+  damagedQty    Int?
+  /// A difference with Invicta (short, over, damaged, not on the list) is open
+  /// until somebody marks it settled.
+  settledAt     DateTime?
+  settledNote   String    @default("")
+  settledById   String?
+
+  shipment  Shipment @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  settledBy User?    @relation("ShipmentLineSettledBy", fields: [settledById], references: [id], onDelete: SetNull)
+
+  @@unique([shipmentId, productId])
+  @@index([productId])
 }
 
 /// A photo of a model taken or chosen in the app, shrunk in the browser first.
@@ -962,6 +1050,8 @@ enum StockPlace {
 /// come with their steps.
 enum StockMoveKind {
   COUNT
+  /// A shipment counted in: what arrived, at its shipping-list cost.
+  RECEIVED
 }
 
 /// One change to one model in one place. Never edited, never deleted.
@@ -977,6 +1067,10 @@ model StockMove {
   kind      StockMoveKind
   /// For a count: the number counted, so the history reads "counted 12 (was 10)".
   countedQty Int?
+  /// For a receipt: what one cost, from the shipping list.
+  unitCostCents Int?
+  /// For a receipt: the shipment it came in.
+  shipmentId String?
   note      String        @default("")
   /// Everything written by one save or one upload shares this.
   entryId   String
@@ -987,8 +1081,11 @@ model StockMove {
   // something else (the 09/22 lesson).
   product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
   by      User?   @relation(fields: [byId], references: [id], onDelete: SetNull)
+  // Restrict too: a counted shipment can never be deleted out from under its stock.
+  shipment Shipment? @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
 
   @@index([productId, place])
+  @@index([shipmentId])
   @@index([entryId])
   @@index([at])
 }

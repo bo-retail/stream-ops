@@ -38,6 +38,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
             <LinkButton href="/inventory/count" variant="primary">
               Count
             </LinkButton>
+            <LinkButton href="/inventory/receiving">Receiving</LinkButton>
             <LinkButton href="/inventory/templates">Templates &amp; uploads</LinkButton>
           </div>
         }
@@ -114,9 +115,12 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
                     <Link href={`/inventory/${encodeURIComponent(r.model)}`} className="tabular font-medium text-brand-700 underline">
                       {r.model}
                     </Link>
+                    {!r.active ? (
+                      <span className="block text-xs text-brand-700">Ordered, not arrived yet</span>
+                    ) : null}
                     {r.needsDetails ? (
                       <span className="block text-xs text-warn-700">Needs its details</span>
-                    ) : r.lastCountedAt === null ? (
+                    ) : r.active && r.lastCountedAt === null ? (
                       <span className="block text-xs text-ink-subtle">Not counted yet</span>
                     ) : null}
                   </Td>

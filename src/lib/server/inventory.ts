@@ -134,9 +134,9 @@ export async function importMaster(userId: string, fileName: string, sheets: She
 /* ------------------------------------------------------------------- stock */
 
 export type Balances = Record<Place, number>;
-const zero = (): Balances => ({ SELLABLE: 0, SAMPLE_EBAY: 0, SAMPLE_TIKTOK: 0, RANDOM_PULLS: 0, DAMAGED: 0 });
+export const zero = (): Balances => ({ SELLABLE: 0, SAMPLE_EBAY: 0, SAMPLE_TIKTOK: 0, RANDOM_PULLS: 0, DAMAGED: 0 });
 
-async function balancesFor(
+export async function balancesFor(
   db: Pick<typeof prisma, "stockMove">,
   productIds?: string[],
 ): Promise<Map<string, Balances>> {
@@ -162,6 +162,8 @@ export interface StockRow {
   picture: string;
   costCents: number | null;
   needsDetails: boolean;
+  /** False until a shipment of it is counted in (a model created from an offer or a shipping list). */
+  active: boolean;
   /** When it was last counted, in any place, or null if never. */
   lastCountedAt: Date | null;
   /**
@@ -188,7 +190,7 @@ export async function listStock(search = ""): Promise<StockRow[]> {
         }
       : undefined,
     orderBy: { model: "asc" },
-    select: { id: true, model: true, description: true, collection: true, imageUrl: true, costCents: true, needsDetails: true, photo: { select: { updatedAt: true } } },
+    select: { id: true, model: true, description: true, collection: true, imageUrl: true, costCents: true, needsDetails: true, active: true, photo: { select: { updatedAt: true } } },
   });
   const ids = q ? products.map((p) => p.id) : undefined;
   const balances = await balancesFor(prisma, ids);
@@ -211,6 +213,7 @@ export async function listStock(search = ""): Promise<StockRow[]> {
       picture: pictureFor(p.model, p.imageUrl, p.photo?.updatedAt),
       costCents: p.costCents,
       needsDetails: p.needsDetails,
+      active: p.active,
       lastCountedAt: (() => {
         const dates = [...(lastCount.get(p.id)?.values() ?? [])];
         return dates.length > 0 ? new Date(Math.max(...dates.map((d) => d.getTime()))) : null;
@@ -235,7 +238,7 @@ export async function getModel(model: string) {
       moves: {
         orderBy: { at: "desc" },
         take: 500,
-        select: { id: true, place: true, qty: true, kind: true, countedQty: true, note: true, at: true, by: { select: { name: true } } },
+        select: { id: true, place: true, qty: true, kind: true, countedQty: true, unitCostCents: true, note: true, at: true, by: { select: { name: true } } },
       },
     },
   });
