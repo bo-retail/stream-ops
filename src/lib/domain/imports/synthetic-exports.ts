@@ -73,8 +73,26 @@ export function ebayReport(orders: EbayOrder[]): string {
   );
 }
 
+export interface TiktokOptions {
+  /** When the orders were placed: "07:05:00 PM" is the night show. The day show if left out. */
+  time?: string;
+  /** Each row's product name, which is its stock number. One with a space is a placeholder listing. */
+  names?: string[];
+  /** A label for every row, or row by row: one buyer's orders sharing a box. */
+  tracking?: string | (string | undefined)[];
+  /** One buyer on every row, as a shared label must have. */
+  buyer?: string;
+}
+
 /** A TikTok export from one shop, for one show of one day. */
-export function tiktokReport(handle: string, day: string, n: number, idBase: string): string {
+export function tiktokReport(
+  handle: string,
+  day: string,
+  n: number,
+  idBase: string,
+  options: TiktokOptions = {},
+): string {
+  const time = options.time ?? "10:17:29 AM";
   const [y, m, d] = day.split("-");
   const header = TIKTOK_HEADERS.map((h) =>
     h === "Virtual Bundle Seller SKU" ? " Virtual Bundle Seller SKU" : h,
@@ -87,9 +105,9 @@ export function tiktokReport(handle: string, day: string, n: number, idBase: str
       "Order Status": "To ship",
       "Order Substatus": "Awaiting collection",
       "SKU ID": `17294${id}\t`,
-      "Seller SKU": `${tagDate(day)} AM`,
+      "Seller SKU": `${tagDate(day)} ${time.endsWith("PM") ? "PM" : "AM"}`,
       "Product ID": `17295${id}\t`,
-      "Product Name": `T${id.slice(-6)}`,
+      "Product Name": options.names?.[i] ?? `T${id.slice(-6)}`,
       Variation: "Default",
       Quantity: "1",
       "SKU Unit Original Price": "41",
@@ -101,10 +119,11 @@ export function tiktokReport(handle: string, day: string, n: number, idBase: str
       Taxes: "3.06",
       "Retail Delivery Fee": "0",
       "Order Amount": "53.05",
-      "Created Time": `${m}/${d}/${y} 10:17:29 AM\t`,
-      "Paid Time": `${m}/${d}/${y} 10:17:33 AM\t`,
-      "Tracking ID": `92346903${id}`,
-      "Buyer Username": `buyer.${id}`,
+      "Created Time": `${m}/${d}/${y} ${time}\t`,
+      "Paid Time": `${m}/${d}/${y} ${time}\t`,
+      "Tracking ID":
+        (Array.isArray(options.tracking) ? options.tracking[i] : options.tracking) ?? `92346903${id}`,
+      "Buyer Username": options.buyer ?? `buyer.${id}`,
       Recipient: "T**** B****",
       State: "Illinois",
       "Payment Method": "ApplePay",

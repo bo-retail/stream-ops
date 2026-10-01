@@ -249,20 +249,27 @@ export function readFiles(
  * Run after a line of the day's checklist has been written — by an upload, or
  * by a late order being added to the previous day's eBay report. Reads every
  * current line of the day, so a box spanning two shows keeps both.
+ *
+ * Every open box is filed under a current line whose own sales are in it —
+ * never simply under whichever upload touched the day last. That is what lets
+ * a corrected file find the boxes its line made: on 10/01 the eBay upload was
+ * found re-filing the TikTok night boxes as its own, after which a corrected
+ * night file could not sweep a cancelled order's box, and it sat open on the
+ * floor with nothing to pack.
  */
 async function reconcileDayBoxes(
   tx: Prisma.TransactionClient,
   {
     business,
     showDate,
-    batchId,
+    written,
     supersededIds,
     splitOrigins,
   }: {
     business: Business;
     showDate: DateISO;
-    /** The upload now responsible for the boxes it touches. */
-    batchId: string;
+    /** The lines just written. A box two lines want goes to one of these first. */
+    written: string[];
     /** The uploads just replaced, whose untouched boxes may be swept away. */
     supersededIds: string[];
     splitOrigins: string[];
@@ -311,6 +318,7 @@ async function reconcileDayBoxes(
       stockNumber: true,
       qty: true,
       orderRef: true,
+      batchId: true,
     },
   });
   const dayBoxes = buildBoxes(
@@ -322,24 +330,62 @@ async function reconcileDayBoxes(
   );
   const dayTrackings = dayBoxes.map((b) => b.tracking);
 
+  // Which current lines have sales in each box — usually one, two for a buyer
+  // who bought in both shows on one label.
+  const linesWanting = new Map<string, Set<string>>();
+  for (const r of dayRows) {
+    if (r.tracking === "") continue;
+    const lines = linesWanting.get(r.tracking) ?? new Set<string>();
+    lines.add(r.batchId);
+    linesWanting.set(r.tracking, lines);
+  }
   const existing = await tx.package.findMany({
     where: { trackingNumber: { in: dayTrackings } },
     select: {
       id: true,
       trackingNumber: true,
       status: true,
+      batchId: true,
       items: { select: { id: true, stockNumber: true, scannedQty: true } },
       // The real pieces a packer recorded against placeholder lines, so a
-      // report that now names them can be matched to what is in the box.
+      // report that now names them can be matched to what is in the box —
+      // and the pieces scanned straight onto a line, which say how much of
+      // that line's count was carried there from a placeholder before.
       scans: {
-        where: { kind: "ITEM_PLACEHOLDER" },
-        select: { stockNumber: true, note: true },
+        where: { kind: { in: ["ITEM_PLACEHOLDER", "ITEM_ACCEPTED", "ITEM_OVERRIDE"] } },
+        select: { kind: true, stockNumber: true, note: true },
+        orderBy: [{ at: "asc" }, { id: "asc" }],
       },
     },
   });
   const byTracking = new Map(existing.map((p) => [p.trackingNumber, p]));
   const closed = existing.filter((p) => p.status !== "OPEN");
   const closedTracking = new Set(closed.map((p) => p.trackingNumber));
+
+  // Boxes filed under a line from outside this day. Nearly always none.
+  const elsewhere = await currentLinesElsewhere(
+    tx,
+    business,
+    showDate,
+    existing
+      .filter((p) => p.batchId !== null && !liveBatchIds.includes(p.batchId))
+      .map((p) => p.trackingNumber),
+  );
+
+  /*
+    The line a box is filed under: the one it already has while that line is
+    current and still has sales in it, so uploading eBay leaves the TikTok
+    boxes where they are — and so does a day's upload leave a label the next
+    day's report also has. Otherwise a line just written that wants it, and
+    otherwise any current line that does — so a box whose night order was
+    cancelled passes to the day show that still has a piece in it, and a
+    corrected day-show file can sweep it in turn.
+  */
+  const ownerFor = (tracking: string, now: string | null): string => {
+    const lines = linesWanting.get(tracking) ?? new Set<string>();
+    if (now !== null && (lines.has(now) || elsewhere.get(tracking)?.has(now))) return now;
+    return written.find((id) => lines.has(id)) ?? [...lines][0];
+  };
 
   const fresh = dayBoxes.filter((b) => !byTracking.has(b.tracking));
   if (fresh.length > 0) {
@@ -352,7 +398,7 @@ async function reconcileDayBoxes(
         buyer: b.buyer,
         shipToName: b.shipToName,
         shipToState: b.state,
-        batchId: batchId,
+        batchId: ownerFor(b.tracking, null),
       })),
       skipDuplicates: true,
     });
@@ -389,7 +435,7 @@ async function reconcileDayBoxes(
         buyer: box.buyer,
         shipToName: box.shipToName,
         shipToState: box.state,
-        batchId: batchId,
+        batchId: ownerFor(box.tracking, row.batchId),
         isUnrecognised: false,
       },
     });
@@ -410,7 +456,26 @@ async function reconcileDayBoxes(
       Only a piece the report now names in this very box is carried across.
       A different real SKU from the one she scanned is a genuine mismatch,
       and is left exactly as it is for the director to see.
+
+      The box is reconciled again by every later upload of its day, and the
+      scans stay on record after a piece is carried, so a piece carried once
+      must not be carried again. Which ones were is read off the real line:
+      every scan straight onto it is on record, so whatever it counts beyond
+      those came from a placeholder already. Worked out piece by piece, not
+      by how many — the report can rename a placeholder twice, and the second
+      time the piece now named may be one that was never carried.
     */
+    const scannedOnto = new Map<string, number>();
+    for (const scan of row.scans) {
+      if (scan.kind === "ITEM_PLACEHOLDER" || !scan.stockNumber) continue;
+      scannedOnto.set(scan.stockNumber, (scannedOnto.get(scan.stockNumber) ?? 0) + 1);
+    }
+    const alreadyCarried = new Map<string, number>();
+    for (const item of row.items) {
+      const fromPlaceholders = item.scannedQty - (scannedOnto.get(item.stockNumber) ?? 0);
+      if (fromPlaceholders > 0) alreadyCarried.set(item.stockNumber, fromPlaceholders);
+    }
+
     const carried = new Map<string, number>();
     const placeholderLeft = new Map<string, number>();
     for (const item of row.items) {
@@ -418,8 +483,14 @@ async function reconcileDayBoxes(
       let left = item.scannedQty;
       for (const scan of row.scans) {
         if (left === 0) break;
-        if (listingOfNote(scan.note) !== item.stockNumber || !scan.stockNumber) continue;
+        if (scan.kind !== "ITEM_PLACEHOLDER" || !scan.stockNumber) continue;
+        if (listingOfNote(scan.note) !== item.stockNumber) continue;
         if (!wanted.has(scan.stockNumber)) continue;
+        const done = alreadyCarried.get(scan.stockNumber) ?? 0;
+        if (done > 0) {
+          alreadyCarried.set(scan.stockNumber, done - 1);
+          continue;
+        }
         carried.set(scan.stockNumber, (carried.get(scan.stockNumber) ?? 0) + 1);
         left--;
       }
@@ -479,33 +550,173 @@ async function reconcileDayBoxes(
     night file made and nothing else — not the day show's, not eBay's, not
     the diamond report's from the same morning.
 
-    A day that has never had this line loaded supersedes nothing, so this is
-    a no-op on a first upload.
+    Also a box filed under one of the day's current lines that no longer
+    has it. Every box is now filed where its sales are (`ownerFor`), so the
+    only such boxes are ones filed before 10/01 under whichever upload
+    touched the day last — a TikTok night box under eBay — and they are
+    swept here rather than left open on the floor.
   */
-  if (supersededIds.length > 0) {
-    await tx.package.deleteMany({
-      where: {
-        batchId: { in: [...supersededIds, ...splitOrigins] },
-        status: "OPEN",
-        /*
-          Measured against the whole day, not against the file just
-          uploaded.
+  const stale = await tx.package.findMany({
+    where: {
+      batchId: { in: [...supersededIds, ...splitOrigins, ...liveBatchIds] },
+      status: "OPEN",
+      /*
+        Measured against the whole day, not against the file just uploaded.
 
-          A box can hold watches from two shows, and it carries the id of
-          whichever upload last touched it. If a buyer's night order is
-          cancelled and the night file re-uploaded, that box leaves the
-          night file — but their morning watch is still in it, and against
-          this upload alone the box would be deleted out from under the
-          packer holding it.
-        */
-        trackingNumber: { notIn: dayTrackings.length > 0 ? dayTrackings : ["-"] },
-        scans: { none: {} },
+        A box can hold watches from two shows, filed under either. If a
+        buyer's night order is cancelled and the night file re-uploaded, that
+        box leaves the night file — but their morning watch is still in it,
+        and against this upload alone the box would be deleted out from under
+        the packer holding it.
+      */
+      trackingNumber: { notIn: dayTrackings.length > 0 ? dayTrackings : ["-"] },
+      scans: { none: {} },
+    },
+    select: { id: true, trackingNumber: true },
+  });
+  /*
+    And against every other day too: a label this day no longer has may be
+    on the next day's report, and that day's packer still needs the box. It
+    passes to that day's line, so that day's own correction can sweep it —
+    and is made over as that day's box: its date, its buyer, and the pieces
+    that day sold, not the ones just cancelled here. Nobody has scanned it,
+    so there is nothing in it to keep.
+  */
+  const wantedElsewhere = await currentLinesElsewhere(
+    tx,
+    business,
+    showDate,
+    stale.map((p) => p.trackingNumber),
+  );
+  const sweep = stale.filter((p) => !wantedElsewhere.has(p.trackingNumber)).map((p) => p.id);
+  const refile = stale.filter((p) => wantedElsewhere.has(p.trackingNumber));
+  if (refile.length > 0) {
+    const theirRows = await tx.salesRecord.findMany({
+      where: {
+        tracking: { in: refile.map((p) => p.trackingNumber) },
+        batchId: { in: [...new Set(refile.flatMap((p) => [...wantedElsewhere.get(p.trackingNumber)!]))] },
+      },
+      select: {
+        tracking: true, platform: true, buyer: true, shipToName: true, state: true,
+        showDate: true, show: true, stockNumber: true, qty: true, orderRef: true,
       },
     });
+    const theirs = new Map(
+      buildBoxes(
+        theirRows.map((r) => ({ ...r, showDate: fromDbDate(r.showDate), show: r.show as WatchSale["show"] })),
+      ).map((b) => [b.tracking, b]),
+    );
+    for (const p of refile) {
+      const box = theirs.get(p.trackingNumber)!;
+      await tx.package.update({
+        where: { id: p.id },
+        data: {
+          platform: box.platform,
+          showDate: toDbDate(box.showDate),
+          buyer: box.buyer,
+          shipToName: box.shipToName,
+          shipToState: box.state,
+          batchId: [...wantedElsewhere.get(p.trackingNumber)!][0],
+        },
+      });
+      // Only lines nothing was scanned against, in case a scan landed since.
+      await tx.packageItem.deleteMany({
+        where: {
+          packageId: p.id,
+          scannedQty: 0,
+          stockNumber: { notIn: box.items.map((i) => i.stockNumber) },
+        },
+      });
+      await tx.packageItem.updateMany({
+        where: { packageId: p.id, stockNumber: { notIn: box.items.map((i) => i.stockNumber) } },
+        data: { expectedQty: 0 },
+      });
+      for (const item of box.items) {
+        await tx.packageItem.upsert({
+          where: { packageId_stockNumber: { packageId: p.id, stockNumber: item.stockNumber } },
+          create: { packageId: p.id, stockNumber: item.stockNumber, expectedQty: item.expected },
+          update: { expectedQty: item.expected },
+        });
+      }
+    }
+  }
+  if (sweep.length > 0) {
+    await tx.package.deleteMany({ where: { id: { in: sweep }, scans: { none: {} } } });
   }
 
-
   return { untouchedClosedBoxes: closedTracking.size };
+}
+
+/**
+ * Holds one business's show day until this transaction ends.
+ *
+ * Two uploads of the same day — the night file corrected while somebody else
+ * puts up eBay — each read the day's boxes and then change them. Side by side,
+ * one deleted a box the other was about to update, and the second upload
+ * failed with nothing written. Taken first, this makes the second wait for
+ * the first and then read what it left.
+ *
+ * A late eBay order takes the day before after its own day, never the other
+ * way round, and a day is always taken before its eBay report
+ * (`lockEbayReport`), so two uploads cannot each be holding what the other
+ * waits for.
+ */
+async function lockDay(tx: Prisma.TransactionClient, business: Business, day: DateISO) {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`import-day:${business}:${day}`}))`;
+}
+
+/**
+ * The current lines of other show days — or the other business's — with
+ * sales on these labels, by label.
+ *
+ * One label can be on two days' reports: a buyer's orders from consecutive
+ * days sent in one parcel. Reconciling one day must neither take that box off
+ * the other day's line nor sweep it while the other day still has it.
+ */
+async function currentLinesElsewhere(
+  tx: Prisma.TransactionClient,
+  business: Business,
+  showDate: DateISO,
+  trackings: string[],
+): Promise<Map<string, Set<string>>> {
+  const byTracking = new Map<string, Set<string>>();
+  if (trackings.length === 0) return byTracking;
+
+  const rows = await tx.salesRecord.findMany({
+    where: {
+      tracking: { in: trackings },
+      batch: { status: "OK", NOT: { business, showDate: toDbDate(showDate) } },
+    },
+    select: { tracking: true, batchId: true, batch: { select: { business: true, showDate: true } } },
+  });
+  if (rows.length === 0) return byTracking;
+
+  // Only the newest upload of each line is that line; older ones are history.
+  const days = new Map(rows.map((r) => [`${r.batch.business}|${r.batch.showDate.toISOString()}`, r.batch]));
+  const batches = await tx.importBatch.findMany({
+    where: {
+      status: "OK",
+      OR: [...days.values()].map((d) => ({ business: d.business, showDate: d.showDate })),
+    },
+    orderBy: { uploadedAt: "desc" },
+    select: { id: true, business: true, showDate: true, platform: true, slot: true },
+  });
+  const seen = new Set<string>();
+  const current = new Set<string>();
+  for (const b of batches) {
+    const line = `${b.business}|${b.showDate.toISOString()}|${b.platform ?? ""}|${b.slot ?? ""}`;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    current.add(b.id);
+  }
+
+  for (const r of rows) {
+    if (!current.has(r.batchId)) continue;
+    const lines = byTracking.get(r.tracking) ?? new Set<string>();
+    lines.add(r.batchId);
+    byTracking.set(r.tracking, lines);
+  }
+  return byTracking;
 }
 
 /** A row as it would be inserted again: everything but the id it already has. */
@@ -685,6 +896,8 @@ async function updateEarlierReport(
 ): Promise<{ batchId: string; pieces: number; newBoxes: number } | null> {
   if (add.length === 0) return null;
   const { business, day } = target;
+  // The day's boxes first, then its eBay report — the order runImport takes them in.
+  await lockDay(tx, business, day);
 
   await lockEbayReport(tx, business, day);
   const previous = await currentEbayReport(tx, business, day);
@@ -752,7 +965,7 @@ async function updateEarlierReport(
   await reconcileDayBoxes(tx, {
     business,
     showDate: day,
-    batchId: batch.id,
+    written: [batch.id],
     supersededIds: [previous.id],
     splitOrigins: origin !== previous.id ? [origin] : [],
   });
@@ -1168,8 +1381,12 @@ export async function runImport(
   const notes: ImportFlag[] = [];
   const written = await prisma.$transaction(
     async (tx) => {
+      // Before anything about the day is read.
+      if (keys.length > 0) await lockDay(tx, business ?? "WATCH", showDate);
+
       const supersededIds: string[] = [];
       const splitOrigins: string[] = [];
+      const writtenIds: string[] = [];
       let firstBatchId = "";
 
       for (const key of keys) {
@@ -1267,6 +1484,7 @@ export async function runImport(
           select: { id: true },
         });
         if (!firstBatchId) firstBatchId = batch.id;
+        writtenIds.push(batch.id);
 
         if (mine.length > 0) {
           await tx.salesRecord.createMany({ data: mine.map((s) => toSalesRow(s, batch.id)) });
@@ -1288,7 +1506,7 @@ export async function runImport(
           ? await reconcileDayBoxes(tx, {
               business: business ?? "WATCH",
               showDate,
-              batchId: firstBatchId,
+              written: writtenIds,
               supersededIds,
               splitOrigins,
             })
