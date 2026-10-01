@@ -100,8 +100,9 @@ localhost:4321): its `whatif.mjs` lists 119 situations and how each is handled.
 6. **No separate balance table** (changed 1 October, for simplicity): a model's
    stock in a place is the sum of its ledger lines, worked out when it is read,
    so it can never drift from its own history. Snapshot the cost on every sale.
-7. **Per-person permissions:** stock changes by Gladys, Claudia and Daniel;
-   product details and the eBay selection by the shipping directors. Log
+7. **Permissions by role, not by name** (Samuel, 1 October): admins and shipping
+   directors do everything in inventory — counts, stock changes, product
+   details, the eBay selection. Packers and streamers see none of it. Log
    everything to AuditLog.
 8. **Test from the real files:** the 09.19 offer (427 lines, a duplicate
    "Invicta Model" column, "Distriutor cost", #N/A), the 9.16 shipping list (PO is
