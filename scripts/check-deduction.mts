@@ -19,6 +19,8 @@
  *   - diamond sales: never touched
  *   - two watches of one order whose line ids Excel rounded to the same number
  *   - one order in two uploads with different boxes: the latest upload decides
+ *   - a late eBay payer kept on the next day and also in its own day's download:
+ *     once, on the day its box is, whatever the upload order or start date
  *   - a box packed before its report with the wrong watch: listed, not taken off
  *   - switched off while boxes are packed, then on again: nothing shipped comes back
  *   - a sale older than two weeks whose box closes now: sent
@@ -96,6 +98,23 @@ async function upload(lines: Line[], business: "WATCH" | "DIAMOND" = "WATCH", da
           business, platform: "TIKTOK", show: slot === "DAY" ? "TikTok AM" : "TikTok PM", showDate: toDbDate(date), shiftTag: "", rawShiftTag: "",
           orderRef: `ZZ-${l.order}`, lineRef: l.lineRef ?? "1", buyer: "test", stockNumber: l.stock, modelNumber: l.model ?? "", qty: l.qty ?? 1,
           tracking: l.tracking, sourceFile: "ZZTEST",
+        })),
+      },
+    },
+  });
+}
+/** A day's eBay report, uploaded; `paidOn` is the day the buyer paid. */
+async function uploadEbay(date: string, lines: (Line & { paidOn: string })[]) {
+  uploads++;
+  await prisma.importBatch.create({
+    data: {
+      business: "WATCH", showDate: toDbDate(date), status: "OK", platform: "EBAY",
+      uploadedAt: new Date(Date.now() + uploads * 1000), files: [{ name: "ZZTEST" }], flags: [],
+      sales: {
+        create: lines.map((l) => ({
+          business: "WATCH", platform: "EBAY", show: "eBay PM", showDate: toDbDate(date), shiftTag: "", rawShiftTag: "",
+          orderRef: `ZZ-${l.order}`, lineRef: l.lineRef ?? "1", buyer: "test", stockNumber: l.stock, modelNumber: l.model ?? "", qty: l.qty ?? 1,
+          tracking: l.tracking, paidOn: toDbDate(l.paidOn), sourceFile: "ZZTEST",
         })),
       },
     },
@@ -263,6 +282,30 @@ try {
   await box("ZZT9OLD", "CLOSED_COMPLETE", { [D1]: 1 }, [], old);
   await bringStockUpToDate(boss.id);
   check("its box closes now: it is sent, not stuck waiting", (await prisma.stockSale.findUniqueOrThrow({ where: { id: oldSale.id } })).status, "SENT");
+  await setStartDate(boss.id, day);
+
+  console.log("\nOne eBay order seen on two show days (a late payer kept on the next day).");
+  // Order 11 sold on the earlier day, paid after midnight, its box shared with a
+  // next-day order: the next day's report keeps it, dated that day. The earlier
+  // day's download, taken after the payment, has it too — and is uploaded last.
+  const sales11 = () => prisma.stockSale.findMany({ where: { orderRef: "ZZ-11" }, orderBy: { key: "asc" }, select: { key: true, showDate: true, tracking: true, status: true, product: { select: { model: true } } } });
+  const shape11 = async () => (await sales11()).map((s) => [s.key.split("|").at(-1), s.product.model, s.showDate.toISOString().slice(0, 10), s.tracking, s.status]);
+  const kept11 = { order: "11", stock: PULLS, model: `${D1};${D3}`, qty: 2, tracking: "ZZT11", lineRef: "1.00851E+13", paidOn: today };
+  await uploadEbay(today, [kept11]);
+  await uploadEbay(day, [{ ...kept11, tracking: "" }]);
+  await bringStockUpToDate(boss.id);
+  check("one copy: both watches once, on the later day, with its box", await shape11(), [["0", D1, today, "ZZT11", "SOLD"], ["1", D3, today, "ZZT11", "SOLD"]]);
+  await box("ZZT11", "CLOSED_COMPLETE", {}, [[D3, PULLS], [D1, PULLS]], today);
+  await bringStockUpToDate(boss.id);
+  check("  …its box packed: both sent", (await sales11()).map((s) => s.status), ["SENT", "SENT"]);
+  await uploadEbay(day, [{ ...kept11, tracking: "" }]);
+  const r11 = await bringStockUpToDate(boss.id);
+  check("  …the earlier day uploaded again: nothing changes", [r11.sold, r11.putBack, r11.sent, r11.unsent], [0, 0, 0, 0]);
+  await setStartDate(boss.id, today);
+  const flags11 = async () => (await prisma.stockSale.findMany({ where: { orderRef: "ZZ-11" }, orderBy: { key: "asc" }, select: { flag: true } })).map((s) => s.flag);
+  const before11 = [await shape11(), await flags11()];
+  await bringStockUpToDate(boss.id);
+  check("  …the start date moved between the two days: its watches unchanged, no new flag", [await shape11(), await flags11()], before11);
   await setStartDate(boss.id, day);
 
   console.log("\nA page opened with nothing changed.");

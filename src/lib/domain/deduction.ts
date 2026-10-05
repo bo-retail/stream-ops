@@ -123,10 +123,11 @@ const SAYS_RANDOM = /random|pull/i;
  * whether its box has gone — and any watch scanned into a closed box that no
  * sale accounts for.
  *
- * An order in two uploads (overlapping downloads, a late eBay payer carried to
- * its show) is read from the latest upload only, so the answer never depends
- * on which copy came first. In a box, what was scanned is handed out to the
- * sales in it: a normal watch is sent as far as its stock number was scanned
+ * An order in two uploads (overlapping downloads, a corrected report, a late
+ * eBay payer also kept on the next day) is read from one copy only — the latest
+ * show day, then the latest upload — so the answer never depends on which copy
+ * came first. In a box, what was scanned is handed out to the sales in it: a
+ * normal watch is sent as far as its stock number was scanned
  * (a box closed complete scanned all of them; one marked sent without scanning
  * sends all); a random pull is sent with the piece scanned for it, the piece
  * equal to its `Model #` first.
@@ -136,20 +137,31 @@ export function wantedSales(
   boxes: ReadonlyMap<string, BoxState>,
   isModel: (model: string) => boolean = () => false,
 ): { wanted: Wanted[]; strays: Stray[] } {
-  // The latest upload of each order's watches of one stock number. Per stock
-  // number, not per order: an eBay order won across two days keeps each day's
-  // line in that day's report, and both are current.
-  const latest = new Map<string, { batchId: string; uploadedAt: number }>();
+  // Which copy of each order's watches of one stock number is read: the latest
+  // show day, then the latest upload of it. Per stock number, not per order:
+  // one order's other listings may sit in another current file.
+  //
+  // One eBay order has one show day in every file (the parser dates all of an
+  // order's lines from the order's own Sale Date), so the only way an order
+  // turns up on two days is the import's own doing: a buyer who won in the
+  // night show and paid after midnight, whose box is shared with one of the
+  // next day's orders, is kept on the next day's report and dated that day
+  // (see `carryOver`). If its own day's download had it too, taken after the
+  // payment, that is the same watch twice — read from the later day, where its
+  // box is, whichever was uploaded last. And since only one day is ever read,
+  // a watch's key never depends on which days a run happens to read.
+  const latest = new Map<string, { showDate: DateISO; batchId: string; uploadedAt: number }>();
   const groupOf = (l: SaleLine) => `${l.platform}|${l.orderRef}|${normaliseStockNumber(l.stockNumber)}`;
+  const newer = (l: SaleLine, best: { showDate: DateISO; batchId: string; uploadedAt: number }) =>
+    l.showDate > best.showDate ||
+    (l.showDate === best.showDate && (l.uploadedAt > best.uploadedAt || (l.uploadedAt === best.uploadedAt && l.batchId > best.batchId)));
   for (const l of lines) {
     const k = groupOf(l);
     const best = latest.get(k);
-    if (!best || l.uploadedAt > best.uploadedAt || (l.uploadedAt === best.uploadedAt && l.batchId > best.batchId)) {
-      latest.set(k, { batchId: l.batchId, uploadedAt: l.uploadedAt });
-    }
+    if (!best || newer(l, best)) latest.set(k, { showDate: l.showDate, batchId: l.batchId, uploadedAt: l.uploadedAt });
   }
   const kept = lines
-    .filter((l) => latest.get(groupOf(l))!.batchId === l.batchId)
+    .filter((l) => latest.get(groupOf(l))!.batchId === l.batchId && latest.get(groupOf(l))!.showDate === l.showDate)
     // Everything that tells two lines apart, before the line id (which Excel can
     // round to the same number), so the order of rows in a file never matters.
     .sort(

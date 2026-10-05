@@ -100,17 +100,21 @@ describe("the units are the ones stock deduction sees (review, 4 October)", () =
     expect(total).toMatchObject({ revenueCents: 5_000, units: 1, cogsCents: 2_000 });
   });
 
-  it("an order whose latest upload is another day is reported on that day only, at its own snapshot", () => {
-    const PULLS = "#300 - Invicta Random Pulls";
+  it("an order seen on two days (a late payer kept on the next day, also in its own day's download): once, on the later day, at its snapshot", () => {
     const lines = [
-      line({ platform: "EBAY", show: "eBay PM", stockNumber: PULLS, modelNumber: "PA", showDate: "2026-10-02", batchId: "b2", uploadedAt: 2 }),
-      line({ platform: "EBAY", show: "eBay PM", stockNumber: PULLS, modelNumber: "PB", showDate: DAY, batchId: "b3", uploadedAt: 3 }),
+      line({ platform: "EBAY", show: "eBay PM", showDate: "2026-10-02", batchId: "b2", uploadedAt: 9 }),
+      line({ platform: "EBAY", show: "eBay PM", showDate: DAY, batchId: "b3", uploadedAt: 3, netCents: 6_000 }),
     ];
-    const s = sold([[saleKey("EBAY", "O1", PULLS, 0), { status: "SOLD", costCents: 2_500 }]]);
-    const both = morningFigures(lines, s, costs([["PA", 500], ["PB", 2_500]]), ["2026-10-02", DAY]);
-    // Deduction takes the latest line only; so do the numbers — never day 2 at day 3's cost.
+    const s = sold([[saleKey("EBAY", "O1", "49888", 0), { status: "SENT", costCents: 2_500 }]]);
+    const both = morningFigures(lines, s, costs([["49888", 999]]), ["2026-10-02", DAY]);
     expect(both.get("2026-10-02")!.total.units).toBe(0);
-    expect(both.get(DAY)!.total).toMatchObject({ units: 1, cogsCents: 2_500, estimatedUnits: 0 });
+    expect(both.get(DAY)!.total).toMatchObject({ revenueCents: 6_000, units: 1, cogsCents: 2_500, estimatedUnits: 0 });
+    // …and the same when only the later day is in the week.
+    expect(morningFigures(lines, s, costs(), [DAY]).get(DAY)!.total).toMatchObject({ units: 1, cogsCents: 2_500 });
+  });
+
+  it("a day with no shows: zeros, not missing", () => {
+    expect(morningFigures([], sold([]), costs(), [DAY]).get(DAY)!.total).toMatchObject({ revenueCents: 0, units: 0 });
   });
 
   it("two lines nothing tells apart (an eBay line id Excel rounded) are read in the order given, every time", () => {

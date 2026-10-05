@@ -191,3 +191,101 @@ describe("a sale settled by hand (step 4)", () => {
     expect(run("RETURNED", [])).toEqual([]);
   });
 });
+
+describe("one order seen on two show days (review, 4 October)", () => {
+  // An eBay order has one show day in every file: the parser dates all its lines
+  // from the order's own Sale Date. It turns up on two days only when the import
+  // keeps a late payer on the next day's report, dated that day (`carryOver`),
+  // and its own day's download — taken after the payment — has it too.
+  const D2 = "2026-10-02", D3 = "2026-10-03", D4 = "2026-10-04";
+  const ebay = (over: Partial<SaleLine>) => line({ platform: "EBAY", orderRef: "3003", stockNumber: "49888", lineRef: "1.00851E+13", ...over });
+  const own = ebay({ showDate: D2, tracking: "", batchId: "b2", uploadedAt: 2 });
+  const kept = ebay({ showDate: D3, tracking: "T9", batchId: "b3", uploadedAt: 3 });
+  const units = (ls: SaleLine[], b = boxes()) => want(ls, b).map((w) => `${w.key}=${w.model}@${w.line.showDate}/${w.line.tracking}${w.sent ? "/sent" : ""}`);
+  const k = (nth: number, stockNumber = "49888") => saleKey("EBAY", "3003", stockNumber, nth);
+  const catalogue = cat("49888", "PA", "PB", "PC");
+  const bal = () => new Map(["49888", "PA", "PB", "PC"].map((m) => [m, stock({ RANDOM_PULLS: 5, SELLABLE: 5 })]));
+  const knownFrom = (ls: SaleLine[], b = boxes()) =>
+    new Map(want(ls, b).map((w): [string, KnownSale] => [w.key, { key: w.key, model: w.model!, place: "SELLABLE", status: w.sent ? "SENT" : "SOLD", flag: "", tracking: w.line.tracking }]));
+
+  it("read once, from the later day where its box is — whichever was uploaded last", () => {
+    expect(units([own, kept])).toEqual([`${k(0)}=49888@${D3}/T9`]);
+    expect(units([kept, { ...own, uploadedAt: 9, batchId: "b2v2" }])).toEqual([`${k(0)}=49888@${D3}/T9`]);
+  });
+  it("…its box on the later day packed: sent", () => {
+    expect(units([own, kept], boxes(["T9", box("CLOSED_COMPLETE", { "49888": 1 })]))).toEqual([`${k(0)}=49888@${D3}/T9/sent`]);
+  });
+  it("…a random pull of two watches, Model # on both copies, packed: both named and sent, same keys either way", () => {
+    const p = (l: SaleLine) => ({ ...l, stockNumber: PULLS, qty: 2, modelNumber: "PA;PB" });
+    const closed = boxes(["T9", box("CLOSED_COMPLETE", {}, { [P]: ["PB", "PA"] })]);
+    expect(units([p(own), p(kept)], closed)).toEqual([`${k(0, PULLS)}=PA@${D3}/T9/sent`, `${k(1, PULLS)}=PB@${D3}/T9/sent`]);
+    expect(units([p(kept), { ...p(own), uploadedAt: 9 }], closed)).toEqual(units([p(own), p(kept)], closed));
+  });
+  it("the key never depends on which days a run reads (a start date or the look-back between the two days)", () => {
+    const all = knownFrom([own, kept], boxes(["T9", box("CLOSED_COMPLETE", { "49888": 1 })]));
+    for (const read of [[kept], [own, kept]]) {
+      expect(planDeduction(want(read, boxes(["T9", box("CLOSED_COMPLETE", { "49888": 1 })])), all, catalogue, bal()).changes).toEqual([]);
+    }
+  });
+  it("only its own day read (the later day not uploaded yet): its own day, and the same key once the later day comes", () => {
+    expect(units([own])).toEqual([`${k(0)}=49888@${D2}/`]);
+    // Later day arrives: the same watch moves to it — same key, no second watch.
+    const p = planDeduction(want([own, kept]), knownFrom([own]), catalogue, bal());
+    expect(p.changes.filter((c) => c.kind === "sell" || c.kind === "unsell")).toEqual([]);
+  });
+  it("one day uploaded twice (corrected) is still read from the latest upload", () => {
+    expect(units([ebay({ showDate: D2, modelNumber: "PA", stockNumber: PULLS, batchId: "a" }), ebay({ showDate: D2, modelNumber: "PC", stockNumber: PULLS, batchId: "b", uploadedAt: 5 })]))
+      .toEqual([`${k(0, PULLS)}=PC@${D2}/T1`]);
+  });
+  it("a late payer carried to its own day (no shared box) is a different order from the next day's: both", () => {
+    const carried = ebay({ orderRef: "5005", showDate: D2, batchId: "b2v2", uploadedAt: 5, tracking: "T5" });
+    const today = ebay({ orderRef: "6006", showDate: D3, batchId: "b3", uploadedAt: 4 });
+    expect(want([carried, today]).map((w) => [w.line.orderRef, w.line.showDate])).toEqual([["5005", D2], ["6006", D3]]);
+  });
+  it("TikTok AM and PM files both holding one order, same day: once, from the latest", () => {
+    const am = line({ orderRef: "T1", show: "TikTok AM", batchId: "am", uploadedAt: 1, tracking: "" });
+    const pm = line({ orderRef: "T1", show: "TikTok PM", batchId: "pm", uploadedAt: 2, tracking: "T1" });
+    expect(want([am, pm]).map((w) => [w.key, w.line.show])).toEqual([[key("T1"), "TikTok PM"]]);
+    expect(want([pm, am]).map((w) => [w.key, w.line.show])).toEqual([[key("T1"), "TikTok PM"]]);
+  });
+  it("a day with no shows: nothing", () => {
+    expect(wantedSales([], boxes())).toEqual({ wanted: [], strays: [] });
+    expect(planDeduction([], new Map(), catalogue, bal()).changes).toEqual([]);
+  });
+  it("a single day's order keeps exactly the keys it always had", () => {
+    const one = line({ platform: "EBAY", orderRef: "7007", stockNumber: PULLS, modelNumber: "PA" });
+    const two = { ...one, modelNumber: "PB", lineRef: "L2" };
+    expect(want([two, one]).map((w) => `${w.key}=${w.model}`)).toEqual([`${saleKey("EBAY", "7007", PULLS, 0)}=PA`, `${saleKey("EBAY", "7007", PULLS, 1)}=PB`]);
+  });
+  it("three copies on three days (two corrected own-day files and the next day's): once, from the latest day", () => {
+    expect(units([kept, own, { ...own, showDate: D4, tracking: "T4", batchId: "b4" }])).toEqual([`${k(0)}=49888@${D4}/T4`]);
+  });
+
+  // Second-round what-ifs (review 4 October).
+  it("(r1) its own day's report corrected after the next day's, with a fixed Model #: the next day's copy is still read (correct it there)", () => {
+    // Decided: the later show day wins over the later upload, so the watch is always read where its box is.
+    // A late payer kept on the next day is corrected by uploading the next day's report again.
+    const p = (l: SaleLine) => ({ ...l, stockNumber: PULLS });
+    const fixed = { ...p(own), modelNumber: "PC", batchId: "b2v2", uploadedAt: 9 };
+    expect(units([{ ...p(kept), modelNumber: "PA" }, fixed])).toEqual([`${k(0, PULLS)}=PA@${D3}/T9`]);
+  });
+  it("(r2) a TikTok order in day D's PM file and day D+1's AM file (downloads overlapping midnight): once, whichever was uploaded last", () => {
+    const pm = line({ orderRef: "T7", show: "TikTok PM", showDate: D2, batchId: "pm", uploadedAt: 9, tracking: "T7" });
+    const am = line({ orderRef: "T7", show: "TikTok AM", showDate: D3, batchId: "am", uploadedAt: 3, tracking: "T7" });
+    expect(want([pm, am]).map((w) => [w.key, w.line.showDate])).toEqual([[key("T7"), D3]]);
+    expect(want([am, { ...pm, uploadedAt: 1 }]).map((w) => [w.key, w.line.showDate])).toEqual([[key("T7"), D3]]);
+  });
+  // Known, not new (HEAD does the same): fails today, and will say so when it is fixed.
+  it.fails("(r3) the next day's report corrected so it no longer keeps the order (its box-mate cancelled), box already packed: still sent", () => {
+    // The corrected report carries it back; updateEarlierReport skips it (its own day already has it, blank tracking).
+    const p = planDeduction(want([own], boxes(["T9", box("CLOSED_COMPLETE", { "49888": 1 })])), knownFrom([own, kept], boxes(["T9", box("CLOSED_COMPLETE", { "49888": 1 })])), catalogue, bal());
+    expect(p.changes.filter((c) => c.kind !== "flag")).toEqual([]);
+  });
+  it("(r4) the next day's report removed by a person: read from its own day, same key, nothing moves", () => {
+    const p = planDeduction(want([own]), knownFrom([own, kept]), catalogue, bal());
+    expect(p.changes).toEqual([]);
+  });
+  it("(r5) a line of two on the own-day copy and of one on the next day's (one unit corrected away): the later day's one", () => {
+    expect(units([{ ...own, qty: 2, uploadedAt: 9 }, kept])).toEqual([`${k(0)}=49888@${D3}/T9`]);
+  });
+});
