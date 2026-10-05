@@ -165,7 +165,11 @@ async function ebayShows(date: DateISO): Promise<Record<Show, boolean>> {
  * watches that are already sold.
  */
 async function missingReportsFor(date: DateISO): Promise<string[]> {
-  const day = addDays(date, -1);
+  return missingReportsOn(addDays(date, -1));
+}
+
+/** A show day's published watch shows whose report is not uploaded. */
+export async function missingReportsOn(day: DateISO): Promise<string[]> {
   const [shows, batches] = await Promise.all([
     publishedShows(day),
     prisma.importBatch.findMany({

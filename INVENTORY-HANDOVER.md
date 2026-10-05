@@ -6,7 +6,16 @@ new session can pick this up without the conversation that produced it.
 Read `CLAUDE.md` first (how work is done here). `WHERE-WE-ARE.md` covers the rest
 of the project; this file is inventory only.
 
-**Status on 4 October 2026: steps 1–5 built, on `main`, not pushed.** Step 5 (the
+**Status on 4 October 2026: steps 1–6 built, on `main`, not pushed.** Step 6 (the
+morning numbers: revenue, COGS, gross margin, ASP, units per show and the last seven
+days against $35,000 a day at 35%, watches only, admins only) is on Inventory → Morning
+numbers, checked by `scripts/check-morning.mts`. Each unit is costed at its stock
+snapshot, matched by deduction's own `wantedSales`; before the start date at today's
+cost (said on screen). Returns stay on their sale day (no refund amounts in the
+reports; that comes with Flora's report in step 7). Open: deduction drops a second
+line of one eBay order selling the same listing on another day (spun off as a task).
+
+_Step 5:_ Step 5 (the
 day's plan: AM eBay, PM eBay, the rest on TikTok's one daily upload, and the three
 upload files) is on Inventory → The day's plan, checked by `scripts/check-plan.mts`
 (three review rounds). The files are the team's own templates
@@ -365,7 +374,7 @@ Nothing here stops steps 1–3 except question 1.
 | 3 | **Deduction.** Paid orders come off from the reports already uploaded. This is what ends Andres's xlookup. | 1, 2 |
 | 4 | **Movements.** Samples pulled, sample → random pulls at zero (ask Gladys first, do not move it silently), returns, damaged, write-offs. | 3 |
 | 5 | **The eBay selection.** Choose under the 750 cap, rest to TikTok, export both listing files. **Built 4 October.** | 3 |
-| 6 | **Morning numbers.** Revenue, COGS, gross margin, ASP, units against the target. | 3 |
+| 6 | **Morning numbers.** Revenue, COGS, gross margin, ASP, units against the target. **Built 4 October.** | 3 |
 | 7 | **Profitability.** Fees, salary, commission, opex → net margin, plus shipping gains and unsettled claims. | 6 |
 
 Steps 1–3 are the spine. Until stock comes off by itself, the rest is decoration.

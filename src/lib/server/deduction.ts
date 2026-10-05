@@ -117,6 +117,9 @@ export async function bringStockUpToDate(actorId: string | null, options: { ifCh
       const batchIds = await latestBatchIds(readFrom, to);
       const rows = await tx.salesRecord.findMany({
         where: { batchId: { in: batchIds }, business: "WATCH", showDate: { gte: toDbDate(readFrom), lte: toDbDate(to) } },
+        // A fixed order, so two lines nothing else tells apart (an eBay line id
+        // Excel rounded) always get the same keys — here and in the morning numbers.
+        orderBy: { id: "asc" },
         select: {
           platform: true, orderRef: true, lineRef: true, showDate: true, show: true, tracking: true, stockNumber: true, modelNumber: true, qty: true,
           batchId: true, batch: { select: { uploadedAt: true } },
