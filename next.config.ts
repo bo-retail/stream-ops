@@ -52,6 +52,13 @@ const nextConfig: NextConfig = {
     // the same shrunk copies: 64 and 128 for both, 256 and 640 for the model page.
     imageSizes: [64, 128, 256],
   },
+  /**
+   * The eBay and TikTok upload templates the day's plan fills in are read from
+   * disk when a file is downloaded, so they have to ship with that route.
+   */
+  outputFileTracingIncludes: {
+    "/api/inventory/plan/[date]/[file]": ["./src/lib/server/listing-templates/*.xlsx"],
+  },
   async headers() {
     return [{ source: "/:path*", headers: SECURITY_HEADERS }];
   },

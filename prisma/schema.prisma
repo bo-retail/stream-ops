@@ -138,6 +138,7 @@ model User {
   packagesClosed  Package[]     @relation("PackageClosedBy")
   reportsDismissed DismissedReport[] @relation("ReportDismissedBy")
   scans           ScanEvent[]   @relation("ScanBy")
+  showPlansSaved  ShowPlan[]    @relation("ShowPlanSavedBy")
 
   @@index([role, isActive])
 }
@@ -964,6 +965,7 @@ model Product {
   offerLines    OfferLine[]
   shipmentLines ShipmentLine[]
   sales         StockSale[]
+  planLines     ShowPlanLine[]
 }
 
 /// Daniel's offer to Invicta — what he ordered, how many, at what cost. Named by
@@ -1202,4 +1204,51 @@ model StockMove {
   @@index([saleId])
   @@index([entryId])
   @@index([at])
+}
+
+/// The day's plan (inventory step 5): what goes on eBay at the AM show, what at
+/// the PM show, and the rest on TikTok's one upload of the day. Watches only.
+/// Made in the morning for both shows at once, so a unit is on one show only.
+/// Never moves stock; it is what the upload files are made from, and the
+/// record of what was offered where. Saving again replaces its lines (the
+/// previous ones go to the AuditLog).
+model ShowPlan {
+  id        String   @id @default(cuid())
+  date      DateTime @unique @db.Date
+  /// Goes up on every save, so two people saving at once cannot overwrite each
+  /// other without knowing.
+  version   Int      @default(1)
+  savedById String?
+  savedAt   DateTime @default(now())
+  /// The files downloaded so far, by file ("AM", "PM", "tiktok"): when, by
+  /// whom, and what each listed per model. A downloaded file may already be on
+  /// the platform, so what it listed is fixed; later changes come out of the
+  /// files not yet downloaded.
+  files     Json     @default("{}")
+
+  savedBy User?          @relation("ShowPlanSavedBy", fields: [savedById], references: [id], onDelete: SetNull)
+  lines   ShowPlanLine[]
+}
+
+/// One model in a day's plan. A model with sellable stock and no line is all
+/// TikTok (when it is ready for TikTok).
+model ShowPlanLine {
+  id        String  @id @default(cuid())
+  planId    String
+  productId String
+  ebayAm    Int     @default(0)
+  ebayPm    Int     @default(0)
+  /// What TikTok had when the plan was saved. The file itself always takes
+  /// what is left at the time it is made.
+  tiktok    Int     @default(0)
+  /// An auction starting at the target price instead of $1.
+  setPrice  Boolean @default(false)
+  /// Sellable when the plan was saved.
+  available Int     @default(0)
+
+  plan    ShowPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  product Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([planId, productId])
+  @@index([productId])
 }

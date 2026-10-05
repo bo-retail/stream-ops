@@ -41,6 +41,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
             <LinkButton href="/inventory/count" variant="primary">
               Count
             </LinkButton>
+            <LinkButton href="/inventory/plan">The day&apos;s plan</LinkButton>
             <LinkButton href="/inventory/sales">Sales</LinkButton>
             <LinkButton href="/inventory/movements">Movements</LinkButton>
             <LinkButton href="/inventory/receiving">Receiving</LinkButton>

@@ -6,11 +6,17 @@ new session can pick this up without the conversation that produced it.
 Read `CLAUDE.md` first (how work is done here). `WHERE-WE-ARE.md` covers the rest
 of the project; this file is inventory only.
 
-**Status on 1 October 2026: steps 1–4 built, on `main`, not pushed.** Step 4 (moves,
+**Status on 4 October 2026: steps 1–5 built, on `main`, not pushed.** Step 5 (the
+day's plan: AM eBay, PM eBay, the rest on TikTok's one daily upload, and the three
+upload files) is on Inventory → The day's plan, checked by `scripts/check-plan.mts`
+(three review rounds). The files are the team's own templates
+(`src/lib/server/listing-templates/`, made by `scripts/make-listing-templates.mts` from
+"Correct eBay Upload sheet.xlsx" and "Correct TT Upload Sheet.xlsx"); a file's first
+download fixes what it lists, and "It was not uploaded" frees it. Step 4 (moves,
 adjustments, returns and cancellations, sample prompts, undo) is on Inventory →
-Movements, checked by `scripts/check-movements.mts`. Not built from the demo yet: a
-scanned cancelled box saying "do not ship" (it is flagged instead), and the prompt to
-put samples back when a model is restocked. Neon needs migrations 20261002…20261009.
+Movements. Not built from the demo yet: a scanned cancelled box saying "do not ship"
+(it is flagged instead), and the prompt to put samples back when a model is restocked.
+Neon needs migrations 20261002…20261010010000 (10).
 
 _Steps 1–3:_
 Step 1 (catalogue, counting, pictures), step 2 (receiving: offer, shipping list,
@@ -113,11 +119,26 @@ localhost:4321): its `whatif.mjs` lists 119 situations and how each is handled.
   **auction starting at its TP**. TikTok's fixed price will become **50% of
   MSRP** as Invicta sends MSRPs, so MSRP is now a field kept per model (until
   then, $800). One eBay file per show (AM and PM), each with its show tag.
-  **The AM and PM TikTok files are both uploaded in the morning.** No Seller SKU
-  column on TikTok.
-- **Still open:** does an unsold set-price eBay auction end with the show or
-  stay up? On TikTok, is a set-price watch's starting bid its TP? How do the AM
-  and PM TikTok files split the quantity, when both go up before either show?
+  No Seller SKU column on TikTok.
+
+### The day's files, answered by Samuel (4 October)
+- **The whole day is planned in the morning, at once.** The AM and PM show
+  runs are both made in the morning, and the sales reports only arrive the
+  next morning, so nothing sold in the AM show is known before the PM show.
+  **A unit can be on only one show:** a model with 1 left goes on the AM eBay
+  file *or* the PM eBay file *or* TikTok, never two of them.
+- **TikTok is one upload a day**, not one per show. What does not sell in the
+  AM show stays up for the PM show (10 listed, 7 sold AM → 3 left for PM). So
+  the TikTok file carries everything not on either eBay file.
+- **A set-price watch on TikTok starts at its TP**, as on eBay.
+- **Every eBay listing ends with its show** (Samuel took the recommendation):
+  an unsold watch is simply available again in the next morning's plan. If a
+  sale ever arrives for a watch that day's plan did not list, that is the sign
+  eBay kept a listing up — add a check then, not before.
+- So the day's plan: AM eBay (≤ 750 units) + PM eBay (≤ 750 units) + TikTok
+  (the rest) ≤ what is available that morning. The next morning's plan is only
+  right once the previous day's reports are uploaded, so the screen warns
+  until they are.
 
 ### Build rules, from the first line of code
 1. **Stock history is append-only.** No hard deletes, and no `onDelete: Cascade`
@@ -343,7 +364,7 @@ Nothing here stops steps 1–3 except question 1.
 | 2 | **Receiving.** Gladys enters what she counted against a shipment; cost captured; differences flagged. The product details form for new models includes the picture upload. | 1 |
 | 3 | **Deduction.** Paid orders come off from the reports already uploaded. This is what ends Andres's xlookup. | 1, 2 |
 | 4 | **Movements.** Samples pulled, sample → random pulls at zero (ask Gladys first, do not move it silently), returns, damaged, write-offs. | 3 |
-| 5 | **The eBay selection.** Choose under the 750 cap, rest to TikTok, export both listing files. | 3 |
+| 5 | **The eBay selection.** Choose under the 750 cap, rest to TikTok, export both listing files. **Built 4 October.** | 3 |
 | 6 | **Morning numbers.** Revenue, COGS, gross margin, ASP, units against the target. | 3 |
 | 7 | **Profitability.** Fees, salary, commission, opex → net margin, plus shipping gains and unsettled claims. | 6 |
 
