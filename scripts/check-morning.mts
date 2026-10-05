@@ -16,6 +16,7 @@
  *   - diamond sales the same day: not in the watch numbers
  *   - a published show whose report is not in yet: named
  *   - a day with no shows: nothing, no error
+ *   - the goal changed on the screen: kept, and streamers' pay rates untouched
  *
  * Every model it makes starts ZZTEST-, every order ZZ-; all of it is removed
  * at the end and the start date put back. It refuses to run if the development
@@ -30,7 +31,7 @@ import { addDays, toDbDate, todayISO } from "../src/lib/domain/dates";
 import { marginRate } from "../src/lib/domain/morning";
 import { bringStockUpToDate, getStartDate, setStartDate } from "../src/lib/server/deduction";
 import { saveCount } from "../src/lib/server/inventory";
-import { getMorningNumbers } from "../src/lib/server/morning";
+import { getMorningGoal, getMorningNumbers, saveMorningGoal } from "../src/lib/server/morning";
 import { saveReturns } from "../src/lib/server/movements";
 import { getSettings } from "../src/lib/server/settings";
 
@@ -65,6 +66,7 @@ if (realSales > 0) {
   process.exit(0);
 }
 const startBefore = await getStartDate();
+const goalBefore = await getMorningGoal();
 
 async function cleanUp() {
   const products = (await prisma.product.findMany({ where: { model: { startsWith: P } }, select: { id: true } })).map((p) => p.id);
@@ -183,7 +185,16 @@ try {
   check("a published show with no report yet is named", n.missingReports, ["eBay"]);
   check("…and a day with nothing gives nothing", [n.day.total.units, n.day.total.revenueCents], [0, 0]);
   check("the week runs back seven days, the day itself last", [n.week.length, n.week[6].date], [7, today]);
+
+  /* ------------------------------------------------------------ the goal */
+  const rates = () => prisma.businessSettings.findMany({ orderBy: { business: "asc" }, select: { business: true, streamerCommissionBps: true, streamerHourlyCents: true } });
+  const ratesBefore = await rates();
+  await saveMorningGoal(boss.id, { dailyCents: 4_000_000, margin: 0.375 });
+  check("a changed goal is kept", await getMorningGoal(), { dailyCents: 4_000_000, margin: 0.375 });
+  check("…and nobody's pay rate moved", await rates(), ratesBefore);
 } finally {
+  await saveMorningGoal(boss.id, goalBefore);
+  await prisma.auditLog.deleteMany({ where: { action: "MORNING_GOAL_CHANGED", actorId: boss.id, createdAt: { gte: new Date(Date.now() - 10 * 60_000) } } });
   await cleanUp();
   await setStartDate(boss.id, startBefore);
   await prisma.$disconnect();

@@ -1,12 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Alert, Card, CardHeader, EmptyState, LinkButton, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
-import { requireBoss } from "@/lib/auth/guards";
+import { requireShippingDirector } from "@/lib/auth/guards";
 import { addDays, formatDate, isDateISO, todayISO } from "@/lib/domain/dates";
 import { formatMoney } from "@/lib/domain/insights";
 import {
-  DAILY_GOAL_CENTS,
-  MARGIN_GOAL,
   SHOW_ORDER,
   averagePrice,
   grossMargin,
@@ -14,9 +12,10 @@ import {
   type Figures,
 } from "@/lib/domain/morning";
 import { bringStockUpToDateQuietly } from "@/lib/server/deduction";
-import { getMorningNumbers, latestShowDay } from "@/lib/server/morning";
+import { getMorningGoal, getMorningNumbers, latestShowDay } from "@/lib/server/morning";
 import { getSettings } from "@/lib/server/settings";
 import { DayPicker } from "./day-picker";
+import { GoalForm } from "./goal-form";
 
 export const metadata: Metadata = { title: "Morning numbers" };
 
@@ -26,17 +25,19 @@ const money = (c: number | null) => (c === null ? "—" : c < 0 ? `−${formatMo
 /**
  * The morning numbers: a show day's revenue, cost of goods, gross margin,
  * average price and units, per show and in total, against $35,000 a day at
- * 35%. Watches only. Admins only, like Sales insights: it is the business's
- * revenue and margin.
+ * 35% unless the goal has been changed. Watches only. Admins and shipping
+ * directors (Samuel, 4 October).
  */
 export default async function MorningPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
-  const user = await requireBoss();
+  const user = await requireShippingDirector();
   const today = todayISO((await getSettings()).timezone);
   const { date: asked } = await searchParams;
   const date = asked && isDateISO(asked) ? asked : ((await latestShowDay(today)) ?? addDays(today, -1));
   // The latest sales taken off first, so as many units as possible carry their cost snapshot.
   await bringStockUpToDateQuietly(user.id, { ifChanged: true });
-  const { day, week, missingReports, startDate } = await getMorningNumbers(date);
+  const [{ day, week, missingReports, startDate }, goal] = await Promise.all([getMorningNumbers(date), getMorningGoal()]);
+  const DAILY_GOAL_CENTS = goal.dailyCents;
+  const MARGIN_GOAL = goal.margin;
   const t = day.total;
   const m = marginRate(t);
   const shows = [...SHOW_ORDER, ...[...day.byShow.keys()].filter((s) => !(SHOW_ORDER as readonly string[]).includes(s)).sort()];
@@ -45,13 +46,16 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
     <>
       <PageHeader
         title="Morning numbers"
-        description="A show day's watch sales: revenue, cost of goods, gross margin, average price and units, against $35,000 a day at 35%."
+        description={`A show day's watch sales: revenue, cost of goods, gross margin, average price and units, against ${formatMoney(DAILY_GOAL_CENTS)} a day at ${pct(MARGIN_GOAL)}.`}
         action={<LinkButton href="/inventory">Back to inventory</LinkButton>}
       />
       <div className="space-y-5">
         <div className="flex flex-wrap items-center gap-3">
           <DayPicker date={date} />
           <span className="text-sm text-ink-muted">{formatDate(date, "long")}</span>
+          <div className="ml-auto">
+            <GoalForm dailyDollars={DAILY_GOAL_CENTS / 100} marginPercent={Math.round(MARGIN_GOAL * 10_000) / 100} />
+          </div>
         </div>
 
         {missingReports.length > 0 ? (
@@ -76,7 +80,7 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
                 sub={`${Math.round((t.revenueCents / DAILY_GOAL_CENTS) * 100)}% of the ${formatMoney(DAILY_GOAL_CENTS)} goal`}
                 tone={t.revenueCents >= DAILY_GOAL_CENTS ? "ok" : "warn"}
               />
-              <Stat label="Gross margin" value={pct(m)} sub={`${money(grossMargin(t))} · goal ${MARGIN_GOAL * 100}%`} tone={m === null ? undefined : m >= MARGIN_GOAL ? "ok" : "warn"} />
+              <Stat label="Gross margin" value={pct(m)} sub={`${money(grossMargin(t))} · goal ${pct(MARGIN_GOAL)}`} tone={m === null ? undefined : m >= MARGIN_GOAL ? "ok" : "warn"} />
               <Stat label="Cost of goods" value={formatMoney(t.cogsCents)} />
               <Stat label="Units" value={t.units} />
               <Stat label="Average price" value={money(averagePrice(t))} />

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { saleKey } from "./deduction";
-import { averagePrice, grossMargin, marginRate, morningFigures, type MorningLine, type SoldUnit } from "./morning";
+import { averagePrice, grossMargin, marginRate, morningFigures, readGoal, type MorningLine, type SoldUnit } from "./morning";
 
 const DAY = "2026-10-03";
 const line = (over: Partial<MorningLine> = {}): MorningLine => ({
@@ -119,5 +119,17 @@ describe("the units are the ones stock deduction sees (review, 4 October)", () =
     const r = () => day(lines, sold([[k0, { status: "CANCELLED", costCents: 1_000 }]])).total;
     expect(r()).toMatchObject({ revenueCents: 9_000, cancelledCents: 3_000 });
     expect(r()).toEqual(r());
+  });
+});
+
+describe("the goal, as typed", () => {
+  it("reads dollars and a percentage, written the ways people write them", () => {
+    expect(readGoal("$40,000", "37.5%")).toEqual({ ok: true, goal: { dailyCents: 4_000_000, margin: 0.375 } });
+    expect(readGoal(" 35000 ", "35")).toEqual({ ok: true, goal: { dailyCents: 3_500_000, margin: 0.35 } });
+  });
+  it("refuses a blank, a zero, a typo, an extra zero, and a margin of 100% or more", () => {
+    for (const [r, m] of [["", "35"], ["0", "35"], ["35k", "35"], ["350000000", "35"], ["35000", ""], ["35000", "135"], ["35000", "0"], ["0.004", "35"], ["35000", "0.001"], ["35,5", "35"]]) {
+      expect(readGoal(r, m).ok, `${r} / ${m}`).toBe(false);
+    }
   });
 });

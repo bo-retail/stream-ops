@@ -470,6 +470,12 @@ model BusinessSettings {
   /// Streamer hours with no show attached are paid the watch rate.
   streamerHourlyCents Int @default(0)
 
+  /// The morning numbers' goal (inventory step 6): revenue a show day, in whole
+  /// cents, and gross margin, in basis points (3500 = 35%). Daniel set $35,000
+  /// at 35% for watches; the directors can change it on the screen.
+  dailyGoalCents Int @default(3500000)
+  marginGoalBps  Int @default(3500)
+
   updatedAt DateTime @updatedAt
 }
 

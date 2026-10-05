@@ -8,7 +8,8 @@ of the project; this file is inventory only.
 
 **Status on 4 October 2026: steps 1–6 built, on `main`, not pushed.** Step 6 (the
 morning numbers: revenue, COGS, gross margin, ASP, units per show and the last seven
-days against $35,000 a day at 35%, watches only, admins only) is on Inventory → Morning
+days against the goal — $35,000 a day at 35% until changed on the screen — watches
+only, admins and shipping directors) is on Inventory → Morning
 numbers, checked by `scripts/check-morning.mts`. Each unit is costed at its stock
 snapshot, matched by deduction's own `wantedSales`; before the start date at today's
 cost (said on screen). Returns stay on their sale day (no refund amounts in the
@@ -25,7 +26,7 @@ download fixes what it lists, and "It was not uploaded" frees it. Step 4 (moves,
 adjustments, returns and cancellations, sample prompts, undo) is on Inventory →
 Movements. Not built from the demo yet: a scanned cancelled box saying "do not ship"
 (it is flagged instead), and the prompt to put samples back when a model is restocked.
-Neon needs migrations 20261002…20261010010000 (10).
+Neon needs migrations 20261002…20261010020000 (11).
 
 _Steps 1–3:_
 Step 1 (catalogue, counting, pictures), step 2 (receiving: offer, shipping list,

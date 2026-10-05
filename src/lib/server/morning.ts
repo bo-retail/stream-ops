@@ -1,10 +1,12 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { addDays, datesBetween, fromDbDate, toDbDate } from "@/lib/domain/dates";
-import { emptyFigures, morningFigures, type DayFigures, type MorningLine, type SoldUnit } from "@/lib/domain/morning";
+import { DAILY_GOAL_CENTS, MARGIN_GOAL, emptyFigures, morningFigures, type DayFigures, type Goal, type MorningLine, type SoldUnit } from "@/lib/domain/morning";
+import { formatMoney } from "@/lib/domain/insights";
 import type { DateISO } from "@/lib/domain/types";
 import { getStartDate } from "./deduction";
 import { latestBatchIds } from "./sales-data";
+import { getSettings } from "./settings";
 import { missingReportsOn } from "./show-plan";
 
 export interface MorningDay extends DayFigures {
@@ -83,4 +85,33 @@ export async function latestShowDay(today: DateISO): Promise<DateISO | null> {
     select: { showDate: true },
   });
   return b ? fromDbDate(b.showDate) : null;
+}
+
+/** The watch business's morning goal: Daniel's $35,000 at 35% until somebody changes it. */
+export async function getMorningGoal(): Promise<Goal> {
+  const s = await prisma.businessSettings.findUnique({ where: { business: "WATCH" }, select: { dailyGoalCents: true, marginGoalBps: true } });
+  return s ? { dailyCents: s.dailyGoalCents, margin: s.marginGoalBps / 10_000 } : { dailyCents: DAILY_GOAL_CENTS, margin: MARGIN_GOAL };
+}
+
+export async function saveMorningGoal(userId: string, goal: Goal): Promise<void> {
+  const [before, shared] = await Promise.all([getMorningGoal(), getSettings()]);
+  const data = { dailyGoalCents: goal.dailyCents, marginGoalBps: Math.round(goal.margin * 10_000) };
+  await prisma.$transaction([
+    // The row is seeded by the migrations. Were it ever missing, it is made
+    // with the shared pay rates pay would fall back to, so setting a goal can
+    // never change what a streamer is paid.
+    prisma.businessSettings.upsert({
+      where: { business: "WATCH" },
+      create: { business: "WATCH", streamerCommissionBps: shared.streamerCommissionBps, streamerHourlyCents: shared.streamerHourlyCents, ...data },
+      update: data,
+    }),
+    prisma.auditLog.create({
+      data: {
+        entityType: "BusinessSettings", entityId: "WATCH", action: "MORNING_GOAL_CHANGED", actorId: userId,
+        summary: `Morning goal: ${formatMoney(before.dailyCents)} at ${(Math.round(before.margin * 10_000) / 100).toFixed(2)}% → ${formatMoney(goal.dailyCents)} at ${(data.marginGoalBps / 100).toFixed(2)}%.`,
+        before: { dailyGoalCents: before.dailyCents, marginGoalBps: Math.round(before.margin * 10_000) },
+        after: data,
+      },
+    }),
+  ]);
 }

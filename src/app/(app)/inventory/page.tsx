@@ -42,7 +42,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
               Count
             </LinkButton>
             <LinkButton href="/inventory/plan">The day&apos;s plan</LinkButton>
-            {user.role === "BOSS" ? <LinkButton href="/inventory/morning">Morning numbers</LinkButton> : null}
+            <LinkButton href="/inventory/morning">Morning numbers</LinkButton>
             <LinkButton href="/inventory/sales">Sales</LinkButton>
             <LinkButton href="/inventory/movements">Movements</LinkButton>
             <LinkButton href="/inventory/receiving">Receiving</LinkButton>

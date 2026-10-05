@@ -132,3 +132,25 @@ export function morningFigures(
   for (const day of out.values()) day.total = [...day.byShow.values()].reduce(addFigures, emptyFigures());
   return out;
 }
+
+export interface Goal {
+  dailyCents: number;
+  /** As a share: 0.35 for 35%. */
+  margin: number;
+}
+
+/**
+ * The goal as typed on the screen: revenue in dollars ("35000", "$35,000"),
+ * margin in percent ("35", "35%"). Refused rather than guessed when it is not
+ * a sensible number.
+ */
+export function readGoal(revenue: string, margin: string): { ok: true; goal: Goal } | { ok: false; why: string } {
+  // "35,5" is a decimal comma, not thirty-five hundred and five: refused, not guessed.
+  if (/,\d{1,2}$/.test(String(revenue).trim())) return { ok: false, why: "Write the daily revenue goal in dollars, like 35000 or $35,000." };
+  const dollars = Number(String(revenue).trim().replace(/[$,\s]/g, ""));
+  if (!Number.isFinite(dollars) || dollars < 1) return { ok: false, why: "The daily revenue goal must be at least $1." };
+  if (dollars > 10_000_000) return { ok: false, why: "That daily revenue goal is too large — check for an extra zero." };
+  const percent = Number(String(margin).trim().replace(/[%\s]/g, ""));
+  if (!Number.isFinite(percent) || percent < 1 || percent >= 100) return { ok: false, why: "The margin goal must be a percentage from 1 to 99." };
+  return { ok: true, goal: { dailyCents: Math.round(dollars * 100), margin: Math.round(percent * 100) / 10_000 } };
+}
