@@ -55,6 +55,8 @@ const EMPTY_DAY = "2021-03-21";
 const CLOSED_BEFORE = "2021-04-10";
 const CLOSED_DAY = "2021-04-11";
 const BOTH_DAY = "2021-05-05"; // watch and diamond TikTok in one drop
+const CHECKOUT_DAY = "2021-06-20"; // an order checked out after midnight
+const CHECKOUT_NEXT = "2021-06-21";
 const ONLY_LATE_BEFORE = "2021-07-10";
 const ONLY_LATE_DAY = "2021-07-11"; // no eBay show: the report is all late payers
 const TINY_BEFORE = "2021-08-10";
@@ -69,7 +71,7 @@ const RACES = [0, 15, 30, 60, 120].map((offset, i) => ({
 }));
 const ALL = [
   BEFORE, DAY, EMPTY_BEFORE, EMPTY_DAY, CLOSED_BEFORE, CLOSED_DAY, BOTH_DAY,
-  ONLY_LATE_BEFORE, ONLY_LATE_DAY, TINY_BEFORE, TINY_DAY, SMALL_DAY, SMALL_NEXT,
+  ONLY_LATE_BEFORE, ONLY_LATE_DAY, TINY_BEFORE, TINY_DAY, SMALL_DAY, SMALL_NEXT, CHECKOUT_DAY, CHECKOUT_NEXT,
   ...RACES.flatMap((r) => [r.before, r.day]),
 ];
 
@@ -506,6 +508,43 @@ try {
       ["OK", "OK", ["1101", "1102", "1103", "1104"]],
     );
   }
+
+  /* ---------------- an order checked out after midnight (10/06, record 37378) */
+
+  console.log("\nAn order won in the night show and checked out after midnight.");
+  const checkout = await runImport(
+    [
+      {
+        name: "checkout.csv",
+        text: ebayReport([
+          { srn: "1301", showDay: CHECKOUT_DAY, paidDay: CHECKOUT_DAY },
+          { srn: "1302", showDay: CHECKOUT_DAY, paidDay: CHECKOUT_DAY },
+          // Tagged with the night show it sold in, dated by eBay the next day.
+          { srn: "1303", showDay: CHECKOUT_DAY, saleDay: CHECKOUT_NEXT, paidDay: CHECKOUT_NEXT },
+        ]),
+      },
+    ],
+    boss.id,
+  );
+  check("the report is no longer refused", checkout.status, "OK");
+  check("the order is on the show its tag names", await ebayOrdersOn(CHECKOUT_DAY), ["1301", "1302", "1303"]);
+  check("nothing is made up for the next day", await prisma.importBatch.count({ where: { showDate: toDbDate(CHECKOUT_NEXT) } }), 0);
+  check("and the screen says why", /1303 were checked out after midnight/.test(messages(checkout)), true);
+
+  const wrongTag = await runImport(
+    [
+      {
+        name: "checkout-wrong.csv",
+        text: ebayReport([
+          { srn: "1311", showDay: CHECKOUT_DAY, paidDay: CHECKOUT_DAY },
+          // Dated the next day and tagged the next day: a sale of another day, still refused.
+          { srn: "1312", showDay: CHECKOUT_NEXT, paidDay: CHECKOUT_NEXT },
+        ]),
+      },
+    ],
+    boss.id,
+  );
+  check("an order really of the next day is still refused", wrongTag.status, "BLOCKED");
 
   /* ------------------------------ watches and diamonds in a single drop */
 

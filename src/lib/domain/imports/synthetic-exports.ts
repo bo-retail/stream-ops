@@ -31,6 +31,8 @@ export interface EbayOrder {
   showDay: string;
   /** When the buyer paid. */
   paidDay: string;
+  /** eBay's Sale Date — the checkout. The show day unless the buyer checked out later. */
+  saleDay?: string;
   tracking?: string;
   /** Defaults to one buyer per order. A shared label is one buyer. */
   buyer?: string;
@@ -52,7 +54,7 @@ export function ebayReport(orders: EbayOrder[]): string {
       Quantity: "1",
       "Sold For": o.price ?? "$25.00",
       "Total Price": o.price ?? "$25.00",
-      "Sale Date": ebayDate(o.showDay),
+      "Sale Date": ebayDate(o.saleDay ?? o.showDay),
       "Paid On Date": ebayDate(o.paidDay),
       "Tracking Number": o.tracking ?? `9434608106245552${o.srn.padStart(6, "0")}`,
       "Transaction ID": `12345678${o.srn.padStart(6, "0")}`,
