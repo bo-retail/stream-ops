@@ -22,6 +22,7 @@
 
 import { addDays } from "../dates";
 import type { DateISO } from "../types";
+import { parseShiftTag } from "./types";
 import type { WatchSale } from "./types";
 
 export interface CarryOver {
@@ -39,6 +40,56 @@ export interface CarryOver {
    * Listed here so the upload can say so.
    */
   keptToday: WatchSale[];
+}
+
+/**
+ * eBay orders checked out after midnight, read back to the show they sold in.
+ *
+ * eBay dates an order by its checkout. A buyer who wins several watches in the
+ * night show and checks out for all of them after midnight gets an order dated
+ * the next day — on 10/06, record 37378: four watches tagged "10.05.26 PM",
+ * dated 10/06. Read by that date, the report covered two days and the whole
+ * morning was refused.
+ *
+ * The show tag on each item says which show it sold in, so it is believed —
+ * but only in exactly this shape: the order is dated the day after the rest of
+ * the report, every one of its items is tagged with the report's day, and the
+ * report really does hold that day. Anything else dated another day is left
+ * for the one-day rule, as before.
+ */
+export function lateCheckouts(sales: readonly WatchSale[]): { sales: WatchSale[]; redated: WatchSale[] } {
+  const dates = new Set(sales.map((s) => s.showDate));
+  if (dates.size < 2) return { sales: [...sales], redated: [] };
+
+  const byOrder = new Map<string, WatchSale[]>();
+  for (const s of sales) {
+    if (s.platform !== "EBAY") continue;
+    const list = byOrder.get(s.orderRef) ?? [];
+    list.push(s);
+    byOrder.set(s.orderRef, list);
+  }
+
+  const moveTo = new Map<string, DateISO>();
+  for (const [order, lines] of byOrder) {
+    const dated = lines[0].showDate;
+    if (!lines.every((l) => l.showDate === dated)) continue;
+    const dayBefore = addDays(dated, -1);
+    const taggedDayBefore = lines.every((l) => l.shiftTagValid && parseShiftTag(l.shiftTag)?.dateISO === dayBefore);
+    // The report has to be that day's: other orders in it carry that date.
+    const reportIsThatDay = sales.some((s) => s.orderRef !== order && s.showDate === dayBefore);
+    if (taggedDayBefore && reportIsThatDay) moveTo.set(order, dayBefore);
+  }
+  if (moveTo.size === 0) return { sales: [...sales], redated: [] };
+
+  const redated: WatchSale[] = [];
+  const out = sales.map((s) => {
+    const to = s.platform === "EBAY" ? moveTo.get(s.orderRef) : undefined;
+    if (!to) return s;
+    const moved = { ...s, showDate: to };
+    redated.push(moved);
+    return moved;
+  });
+  return { sales: out, redated };
 }
 
 /** An order paid on a later day than the show it sold in. */

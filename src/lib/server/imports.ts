@@ -6,7 +6,7 @@ import { BUSINESS_SHORT, businessOfEbaySeller } from "@/lib/domain/business";
 import type { Business } from "@/lib/domain/business";
 import { addDays, fromDbDate, toDbDate } from "@/lib/domain/dates";
 import { buildBoxes, checkIntegrity, summariseDay } from "@/lib/domain/imports/boxes";
-import { carryOver, paidLate } from "@/lib/domain/imports/carry-over";
+import { carryOver, lateCheckouts, paidLate } from "@/lib/domain/imports/carry-over";
 import type { Box } from "@/lib/domain/imports/boxes";
 import { parseCsv } from "@/lib/domain/imports/csv";
 import { parseEbayFile, readEbaySeller } from "@/lib/domain/imports/ebay";
@@ -203,10 +203,26 @@ export function readFiles(
     day is decided — so one late payer no longer turns the whole report away.
     They go on to the day they sold in; see `carryOver` and `runImport`.
   */
-  const { kept, carried, keptToday } = carryOver(sales);
-  if (carried.length + keptToday.length > 0) {
+  /*
+    And first, an eBay order checked out after midnight is read back to the show
+    its items are tagged with — see `lateCheckouts`. Otherwise one buyer
+    checking out late turns the whole morning away as "two show days".
+  */
+  const checkedOutLate = lateCheckouts(sales);
+  if (checkedOutLate.redated.length > 0) {
+    const orders = [...new Set(checkedOutLate.redated.map((s) => s.orderRef))];
+    flags.push({
+      severity: "info",
+      message:
+        `eBay order(s) ${orders.join(", ")} were checked out after midnight, so eBay dated them the next day. ` +
+        `Every item in them is tagged with ${checkedOutLate.redated[0].showDate}'s show, so they are counted there.`,
+    });
+  }
+
+  const { kept, carried, keptToday } = carryOver(checkedOutLate.sales);
+  if (carried.length + keptToday.length + checkedOutLate.redated.length > 0) {
     // The parser's own "two Sale Dates in one file" note is explained by these.
-    const late = new Set([...carried, ...keptToday].map((s) => s.sourceFile));
+    const late = new Set([...carried, ...keptToday, ...checkedOutLate.redated].map((s) => s.sourceFile));
     for (let i = flags.length - 1; i >= 0; i--) {
       if ([...late].some((name) => flags[i].message.startsWith(`${name}: rows carry `))) {
         flags.splice(i, 1);
