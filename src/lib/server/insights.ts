@@ -11,6 +11,18 @@ import { latestBatchIds, loadedSpan } from "./sales-data";
 import { getSettings } from "./settings";
 
 /**
+ * A random-pull listing by its own words ("#300 - Invicta Random Pulls",
+ * "Invicta Random Pulls PM Show"): a stand-in for whichever watch was pulled,
+ * so never a stock number to rank or restock. The same words as deduction's.
+ */
+const NOT_RANDOM_PULLS = {
+  NOT: [
+    { stockNumber: { contains: "random", mode: "insensitive" as const } },
+    { stockNumber: { contains: "pull", mode: "insensitive" as const } },
+  ],
+};
+
+/**
  * The figures behind the sales screen.
  *
  * Everything here reads only the most recent upload for each day (see
@@ -235,10 +247,11 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
       where,
       _sum: { netItemPriceCents: true, qty: true },
     }),
-    // Best-selling watches. Diamond pieces are one-offs, not models to restock.
+    // Best-selling watches. Diamond pieces are one-offs, not models to restock,
+    // and a random-pull listing ("Invicta Random Pulls PM Show") is not a model.
     prisma.salesRecord.groupBy({
       by: ["stockNumber"],
-      where: { ...where, business: "WATCH" },
+      where: { ...where, business: "WATCH", ...NOT_RANDOM_PULLS },
       _sum: { netItemPriceCents: true, qty: true },
       orderBy: { _sum: { qty: "desc" } },
       take: 12,
@@ -247,7 +260,7 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
     // because it had one good fortnight.
     prisma.salesRecord.groupBy({
       by: ["stockNumber"],
-      where: { business: "WATCH" },
+      where: { business: "WATCH", ...NOT_RANDOM_PULLS },
       _sum: { qty: true },
     }),
   ]);
