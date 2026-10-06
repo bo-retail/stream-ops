@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { DAY_PLAN_ON } from "@/lib/domain/features";
 import Link from "next/link";
 import { Badge, Card, EmptyState, Input, LinkButton, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
@@ -41,7 +42,7 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
             <LinkButton href="/inventory/count" variant="primary">
               Count
             </LinkButton>
-            <LinkButton href="/inventory/plan">The day&apos;s plan</LinkButton>
+            {DAY_PLAN_ON ? <LinkButton href="/inventory/plan">The day&apos;s plan</LinkButton> : null}
             <LinkButton href="/inventory/morning">Morning numbers</LinkButton>
             <LinkButton href="/inventory/sales">Sales</LinkButton>
             <LinkButton href="/inventory/movements">Movements</LinkButton>

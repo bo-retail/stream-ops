@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { DAY_PLAN_OFF_MESSAGE, DAY_PLAN_ON } from "@/lib/domain/features";
 import Link from "next/link";
 import { Alert, Card, CardHeader, LinkButton, PageHeader, Table, Td, Th } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
@@ -18,6 +19,14 @@ export const metadata: Metadata = { title: "The day's plan" };
  */
 export default async function PlanPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
   const user = await requireShippingDirector();
+  if (!DAY_PLAN_ON) {
+    return (
+      <>
+        <PageHeader title="The day's plan" action={<LinkButton href="/inventory">Back to inventory</LinkButton>} />
+        <Alert tone="info">{DAY_PLAN_OFF_MESSAGE} Shows are listed the way they are today.</Alert>
+      </>
+    );
+  }
   const today = todayISO((await getSettings()).timezone);
   const { date: asked } = await searchParams;
   const date = asked && isDateISO(asked) ? asked : today;

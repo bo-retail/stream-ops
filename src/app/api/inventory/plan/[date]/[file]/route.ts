@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { isDateISO } from "@/lib/domain/dates";
+import { DAY_PLAN_OFF_MESSAGE, DAY_PLAN_ON } from "@/lib/domain/features";
 import { bringStockUpToDateQuietly } from "@/lib/server/deduction";
 import { planFile, type PlanFileKind } from "@/lib/server/show-plan";
 
@@ -12,6 +13,7 @@ const KINDS: PlanFileKind[] = ["ebay-am", "ebay-pm", "tiktok"];
  * plan and the shelf as it is when downloaded.
  */
 export async function GET(_req: Request, { params }: { params: Promise<{ date: string; file: string }> }) {
+  if (!DAY_PLAN_ON) return new NextResponse(DAY_PLAN_OFF_MESSAGE, { status: 404 });
   const user = await getCurrentUser();
   if (!user) return new NextResponse("Not signed in.", { status: 401 });
   const allowed = user.role === "BOSS" || (user.role === "MANAGER" && user.team === "SHIPPING");

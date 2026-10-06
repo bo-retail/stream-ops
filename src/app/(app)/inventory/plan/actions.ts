@@ -1,5 +1,6 @@
 "use server";
 
+import { DAY_PLAN_OFF_MESSAGE, DAY_PLAN_ON } from "@/lib/domain/features";
 import { revalidatePath } from "next/cache";
 import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
 import { isDateISO } from "@/lib/domain/dates";
@@ -15,6 +16,7 @@ export interface PlanState {
 
 /** Saves the day's plan. The server checks it again against the shelf as it is now. */
 export async function savePlanAction(date: string, version: number | null, choices: PlanChoice[]): Promise<PlanState> {
+  if (!DAY_PLAN_ON) return { error: DAY_PLAN_OFF_MESSAGE };
   let user;
   try {
     user = await requireShippingDirectorOrThrow();
@@ -37,6 +39,7 @@ export async function savePlanAction(date: string, version: number | null, choic
 
 /** Frees a downloaded file that was not uploaded, so its numbers can change. */
 export async function releaseFileAction(date: string, key: string): Promise<PlanState> {
+  if (!DAY_PLAN_ON) return { error: DAY_PLAN_OFF_MESSAGE };
   let user;
   try {
     user = await requireShippingDirectorOrThrow();
