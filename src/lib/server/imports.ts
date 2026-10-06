@@ -209,13 +209,17 @@ export function readFiles(
     checking out late turns the whole morning away as "two show days".
   */
   const checkedOutLate = lateCheckouts(sales);
-  if (checkedOutLate.redated.length > 0) {
-    const orders = [...new Set(checkedOutLate.redated.map((s) => s.orderRef))];
+  // One note per day the orders went back to, so each names its own day.
+  const byDay = new Map<string, Set<string>>();
+  for (const s of checkedOutLate.redated) {
+    byDay.set(s.showDate, (byDay.get(s.showDate) ?? new Set<string>()).add(s.orderRef));
+  }
+  for (const [day, orders] of byDay) {
     flags.push({
       severity: "info",
       message:
-        `eBay order(s) ${orders.join(", ")} were checked out after midnight, so eBay dated them the next day. ` +
-        `Every item in them is tagged with ${checkedOutLate.redated[0].showDate}'s show, so they are counted there.`,
+        `eBay order(s) ${[...orders].join(", ")} were checked out after midnight, so eBay dated them the next day. ` +
+        `Every item in them is tagged with ${day}'s show, so they are counted there.`,
     });
   }
 

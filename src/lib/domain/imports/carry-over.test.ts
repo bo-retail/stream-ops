@@ -152,3 +152,38 @@ describe("an eBay order checked out after midnight", () => {
     expect(carryOver(r.sales).kept).toHaveLength(7);
   });
 });
+
+describe("an after-midnight checkout, the awkward cases", () => {
+  const tagged = (orderRef: string, day: string, tag: string, over: Partial<WatchSale> = {}) =>
+    sale({ orderRef, tracking: orderRef, showDate: day, paidOn: day, shiftTag: tag, shiftTagValid: true, ...over });
+
+  it("moves an order won across both of the day before's shows, each item keeping its show", () => {
+    const r = lateCheckouts([
+      tagged("a", "2026-10-05", "10.05.26 PM"),
+      tagged("m", "2026-10-06", "10.05.26 AM", { lineRef: "1" }),
+      tagged("m", "2026-10-06", "10.05.26 PM", { lineRef: "2" }),
+    ]);
+    expect(r.redated.map((s) => [s.showDate, s.shiftTag])).toEqual([
+      ["2026-10-05", "10.05.26 AM"],
+      ["2026-10-05", "10.05.26 PM"],
+    ]);
+  });
+
+  it("still lets two whole days dropped together be refused", () => {
+    const r = lateCheckouts([
+      tagged("a", "2026-10-04", "10.04.26 PM"),
+      tagged("b", "2026-10-05", "10.05.26 PM"),
+      tagged("c", "2026-10-05", "10.05.26 PM"),
+    ]);
+    expect(r.redated).toEqual([]);
+    expect(new Set(carryOver(r.sales).kept.map((s) => s.showDate)).size).toBe(2);
+  });
+
+  it("leaves a late checkout with a blank tag for the one-day rule, as before", () => {
+    const r = lateCheckouts([
+      tagged("a", "2026-10-05", "10.05.26 PM"),
+      tagged("x", "2026-10-06", "", { shiftTagValid: false }),
+    ]);
+    expect(r.redated).toEqual([]);
+  });
+});
