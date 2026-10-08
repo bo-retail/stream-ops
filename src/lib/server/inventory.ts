@@ -6,6 +6,8 @@ import {
   PLACES,
   PLACE_LABEL,
   badModelNumber,
+  catalogueSpelling,
+  spellings,
   countLines,
   detailsFromMasterRow,
   masterChanges,
@@ -592,7 +594,8 @@ export async function picturesFor(stockNumbers: string[]): Promise<Map<string, s
   if (wanted.length > 0) {
     try {
       products = await prisma.product.findMany({
-        where: { model: { in: wanted } },
+        // A number a report lost its leading zeros on ("71") is also looked for as written in the catalogue ("0071").
+        where: { model: { in: wanted.flatMap(spellings) } },
         select: { model: true, imageUrl: true, photo: { select: { updatedAt: true } } },
       });
     } catch (e) {
@@ -600,7 +603,8 @@ export async function picturesFor(stockNumbers: string[]): Promise<Map<string, s
     }
   }
   const byModel = new Map(products.map((p) => [p.model, pictureFor(p.model, p.imageUrl, p.photo?.updatedAt)]));
-  return new Map(stockNumbers.map((s) => [s, byModel.get(normaliseModel(s)) ?? ""]));
+  const spell = catalogueSpelling(byModel.keys());
+  return new Map(stockNumbers.map((s) => [s, byModel.get(spell(normaliseModel(s))) ?? ""]));
 }
 
 /** A model's uploaded photo, for the picture route. */

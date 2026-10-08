@@ -43,6 +43,41 @@ export function normaliseModel(raw: unknown): string {
   return String(raw).trim().toUpperCase();
 }
 
+/**
+ * The catalogue's own spelling of a model a report names.
+ *
+ * Invicta numbers some models with leading zeros ("0071"), and a report that
+ * went through Excel lists them without ("71"). An all-digit number the
+ * catalogue does not have is read as the one model that matches it once the
+ * leading zeros are set aside — never when two would ("071" and "0071"), and
+ * never for a number the catalogue has exactly.
+ */
+export function catalogueSpelling(models: Iterable<string>): (model: string) => string {
+  const exact = new Set(models);
+  const bare = (m: string) => m.replace(/^0+(?=\d)/, "");
+  const byDigits = new Map<string, string | null>();
+  for (const m of exact) {
+    if (!/^\d+$/.test(m)) continue;
+    const k = bare(m);
+    byDigits.set(k, byDigits.has(k) ? null : m);
+  }
+  return (model) => {
+    if (exact.has(model) || !/^\d+$/.test(model)) return model;
+    return byDigits.get(bare(model)) ?? model;
+  };
+}
+
+/**
+ * Every way the catalogue might write a number a report names: as it is, and
+ * for an all-digit one, with up to six leading zeros. For looking a model up
+ * before `catalogueSpelling` picks the one it is.
+ */
+export function spellings(model: string): string[] {
+  if (!/^\d+$/.test(model)) return [model];
+  const bare = model.replace(/^0+(?=\d)/, "");
+  return [...new Set([model, ...[0, 1, 2, 3, 4, 5, 6].map((n) => "0".repeat(n) + bare)])];
+}
+
 export type QtyResult = { kind: "blank" } | { kind: "ok"; qty: number } | { kind: "bad"; why: string };
 
 /**

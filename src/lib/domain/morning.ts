@@ -20,6 +20,7 @@
  * Pure, like everything under `src/lib/domain`.
  */
 import { wantedSales, type SaleLine } from "./deduction";
+import { catalogueSpelling } from "./inventory";
 import type { DateISO } from "./types";
 
 export const DAILY_GOAL_CENTS = 3_500_000;
@@ -98,7 +99,7 @@ export function morningFigures(
   // Each line's money shared over its units, the odd cents on the first one seen.
   const seen = new Map<SaleLine, number>();
 
-  for (const w of wantedSales(lines, new Map(), (m) => costToday.has(m)).wanted) {
+  for (const w of wantedSales(lines, new Map(), (m) => costToday.has(m), catalogueSpelling(costToday.keys())).wanted) {
     const line = w.line as MorningLine;
     if (!wanted.has(line.showDate)) continue;
     const day = out.get(line.showDate)!;

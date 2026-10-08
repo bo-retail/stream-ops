@@ -5,7 +5,7 @@ import { planDeduction, wantedSales } from "@/lib/domain/deduction";
 import type { BoxState, KnownSale, Plan, SaleLine, Stray, Wanted } from "@/lib/domain/deduction";
 import { listingOfNote } from "@/lib/domain/imports/placeholders";
 import { normaliseStockNumber } from "@/lib/domain/imports/tracking";
-import { PLACES } from "@/lib/domain/inventory";
+import { PLACES, catalogueSpelling } from "@/lib/domain/inventory";
 import type { Place } from "@/lib/domain/inventory";
 import type { DateISO } from "@/lib/domain/types";
 import { balancesFor } from "./inventory";
@@ -154,7 +154,7 @@ export async function bringStockUpToDate(actorId: string | null, options: { ifCh
 
       const products = await tx.product.findMany({ select: { id: true, model: true, costCents: true } });
       const byModel = new Map(products.map((p) => [p.model, p]));
-      const all = wantedSales(lines, boxes, (m) => byModel.has(m));
+      const all = wantedSales(lines, boxes, (m) => byModel.has(m), catalogueSpelling(byModel.keys()));
 
       // What stock knows: the look-back window, every watch still waiting, and
       // any row for a key the reports name now (so a key is never created twice).

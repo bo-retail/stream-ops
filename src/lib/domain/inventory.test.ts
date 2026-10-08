@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   badModelNumber,
+  catalogueSpelling,
+  spellings,
   countLines,
   detailsFromMasterRow,
   masterChanges,
@@ -156,5 +158,55 @@ describe("a new model number", () => {
     for (const m of ["", "TOTAL", "4.9888E+4", "LGD #1", "=SUM(A1)", "A".repeat(41)]) {
       expect(badModelNumber(m)).not.toBeNull();
     }
+  });
+});
+
+describe("a report's number, in the catalogue's spelling", () => {
+  const spell = catalogueSpelling(["0069", "0071", "0072", "49888", "ACW8082-014", "071", "00071", "500", "0500"]);
+
+  it("finds 0072 for the 72 a report lost the zeros of — the 10/06 case", () => {
+    expect(spell("72")).toBe("0072");
+    expect(spell("069")).toBe("0069");
+  });
+
+  it("leaves a number the catalogue has exactly as it is", () => {
+    expect(spell("49888")).toBe("49888");
+    expect(spell("500")).toBe("500");
+    expect(spell("0500")).toBe("0500");
+  });
+
+  it("does not guess between two models that differ only by zeros", () => {
+    // 071, 0071 and 00071 are all "71" without their zeros.
+    expect(spell("71")).toBe("71");
+  });
+
+  it("leaves letters, hyphens and unknown numbers alone", () => {
+    expect(spell("ACW8082-14")).toBe("ACW8082-14");
+    expect(spell("12345")).toBe("12345");
+    expect(spell("")).toBe("");
+  });
+
+  it("matches either way round, only when one model fits", () => {
+    // "0049888" is not in the catalogue; it is read as 49888 only because
+    // 49888 is the one model it matches.
+    expect(catalogueSpelling(["49888"])("0049888")).toBe("49888");
+    expect(catalogueSpelling([])("0071")).toBe("0071");
+  });
+});
+
+describe("looking a report's number up in the catalogue", () => {
+  it("asks for 71 with and without its leading zeros", () => {
+    expect(spellings("71")).toEqual(expect.arrayContaining(["71", "071", "0071", "00071"]));
+    expect(spellings("0071")).toEqual(expect.arrayContaining(["0071", "71"]));
+  });
+
+  it("asks for a model with letters only as it is", () => {
+    expect(spellings("ACW8043-006")).toEqual(["ACW8043-006"]);
+  });
+
+  it("finds the picture of 0071 for a listing of 71, the way the box screen asks", () => {
+    const catalogue = ["0071", "49888"];
+    const fetched = catalogue.filter((m) => spellings("71").includes(m));
+    expect(catalogueSpelling(fetched)("71")).toBe("0071");
   });
 });

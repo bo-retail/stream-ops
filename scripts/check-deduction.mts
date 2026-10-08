@@ -25,8 +25,10 @@
  *   - switched off while boxes are packed, then on again: nothing shipped comes back
  *   - a sale older than two weeks whose box closes now: sent
  *   - a page opened with nothing changed: no run, no wait
+ *   - a report that lost a model's leading zeros ("71" for 0071): off 0071, once;
+ *     two models that differ only by zeros: neither guessed, listed
  *
- * Every model it makes starts ZZTEST-, every order ZZ-, every box ZZT; all of
+ * Every model it makes starts ZZTEST- (or is one of the all-digit ZEROS below), every order ZZ-, every box ZZT; all of
  * it is removed at the end and the start date put back as it was. It refuses
  * to run if the development database has real sales in the last two weeks,
  * because setting a start date would take those off too.
@@ -51,6 +53,8 @@ function check(name: string, actual: unknown, expected: unknown) {
 }
 
 const P = "ZZTEST-";
+// All-digit models for the leading-zeros case; no real Invicta number is this long.
+const ZEROS = ["000973117", "000973118", "0000973118"];
 const PULLS = "#300 - Invicta Random Pulls";
 const today = todayISO((await getSettings()).timezone);
 const day = addDays(today, -1);
@@ -72,7 +76,7 @@ if (realSales > 0) {
 const startBefore = await getStartDate();
 
 async function cleanUp() {
-  const products = (await prisma.product.findMany({ where: { model: { startsWith: P } }, select: { id: true } })).map((p) => p.id);
+  const products = (await prisma.product.findMany({ where: { OR: [{ model: { startsWith: P } }, { model: { in: ZEROS } }] }, select: { id: true } })).map((p) => p.id);
   const sales = (await prisma.stockSale.findMany({ where: { OR: [{ productId: { in: products } }, { orderRef: { startsWith: "ZZ-" } }] }, select: { id: true } })).map((s) => s.id);
   await prisma.stockMove.deleteMany({ where: { OR: [{ productId: { in: products } }, { saleId: { in: sales } }] } });
   await prisma.stockSale.deleteMany({ where: { id: { in: sales } } });
@@ -315,6 +319,26 @@ try {
   await upload([{ order: "10", stock: D1, tracking: "ZZT10" }], "WATCH", day, "DAY");
   const ran = await bringStockUpToDate(boss.id, { ifChanged: true });
   check("after a new upload it runs again", [ran.skipped, ran.sold], [false, 1]);
+
+  console.log("\nA report that lost a model's leading zeros.");
+  await saveCount(boss.id, ZEROS.map((model) => ({ model, counted: { SELLABLE: 4 }, allowNew: true })), "check");
+  await upload([
+    { order: "71", stock: "973117", tracking: "ZZT71" },
+    { order: "72", stock: "973118", tracking: "ZZT72" },
+  ], "WATCH", day, "DAY");
+  const z = await bringStockUpToDate(boss.id);
+  check("973117 comes off the catalogue's 000973117, waiting to ship", await stock(ZEROS[0]), { S: 3, R: 0, T: 0, W: 1 });
+  check(
+    "973118 matches two models (000973118, 0000973118): neither touched, listed as not in the catalogue",
+    [await stock(ZEROS[1]), await stock(ZEROS[2]), z.unknown.map((u) => u.model).includes("973118")],
+    [{ S: 4, R: 0, T: 0, W: 0 }, { S: 4, R: 0, T: 0, W: 0 }, true],
+  );
+  check("…and 973117 is not listed as not in the catalogue", z.unknown.some((u) => u.model === "973117" || u.model === ZEROS[0]), false);
+  await bringStockUpToDate(boss.id);
+  check("run again: nothing twice", await stock(ZEROS[0]), { S: 3, R: 0, T: 0, W: 1 });
+  await box("ZZT71", "CLOSED_COMPLETE", { "973117": 1 });
+  await bringStockUpToDate(boss.id);
+  check("its box packed with 973117 scanned: sent", await stock(ZEROS[0]), { S: 3, R: 0, T: 0, W: 0 });
 
   console.log("\nHistory.");
   let blocked = false;

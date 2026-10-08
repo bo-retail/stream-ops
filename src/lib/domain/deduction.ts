@@ -136,6 +136,8 @@ export function wantedSales(
   lines: SaleLine[],
   boxes: ReadonlyMap<string, BoxState>,
   isModel: (model: string) => boolean = () => false,
+  /** The catalogue's spelling of a model ("71" → "0071"); see `catalogueSpelling`. */
+  spell: (model: string) => string = (m) => m,
 ): { wanted: Wanted[]; strays: Stray[] } {
   // Which copy of each order's watches of one stock number is read: the latest
   // show day, then the latest upload of it. Per stock number, not per order:
@@ -271,7 +273,11 @@ export function wantedSales(
       if (n > 0 && !isPlaceholderStock(stock)) strays.push({ tracking, model: stock, qty: n });
     }
   }
-  return { wanted: units.map((u) => result.get(u.key)!), strays };
+  const wanted = units.map((u) => {
+    const w = result.get(u.key)!;
+    return w.model === null ? w : { ...w, model: spell(w.model) };
+  });
+  return { wanted, strays };
 }
 
 /**

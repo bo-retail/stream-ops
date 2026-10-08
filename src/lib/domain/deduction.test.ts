@@ -289,3 +289,26 @@ describe("one order seen on two show days (review, 4 October)", () => {
     expect(units([{ ...own, qty: 2, uploadedAt: 9 }, kept])).toEqual([`${k(0)}=49888@${D3}/T9`]);
   });
 });
+
+describe("a report that lost a model's leading zeros", () => {
+  const spell = (m: string) => (m === "71" ? "0071" : m);
+
+  it("takes the watch off the catalogue's 0071, not an unknown 71", () => {
+    const w = wantedSales([line({ stockNumber: "71" })], boxes(), () => false, spell).wanted;
+    expect(w[0].model).toBe("0071");
+    const plan = planDeduction(w, new Map(), cat("0071"), new Map([["0071", stock({ SELLABLE: 3 })]]));
+    expect(plan.unknown).toEqual([]);
+    expect(plan.changes.map((c) => c.kind === "sell" && [c.model, c.place])).toEqual([["0071", "SELLABLE"]]);
+  });
+
+  it("keeps the same key, so a sale already taken off as 71 is not taken off twice", () => {
+    const before = wantedSales([line({ stockNumber: "71" })], boxes()).wanted[0];
+    const after = wantedSales([line({ stockNumber: "71" })], boxes(), () => false, spell).wanted[0];
+    expect(after.key).toBe(before.key);
+  });
+
+  it("leaves a random pull with no Model # unnamed", () => {
+    const w = wantedSales([line({ stockNumber: PULLS })], boxes(), () => false, spell).wanted;
+    expect(w[0].model).toBeNull();
+  });
+});
