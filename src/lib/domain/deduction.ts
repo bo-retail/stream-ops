@@ -212,6 +212,9 @@ export function wantedSales(
     return box && CLOSED.includes(box.status) ? box : undefined;
   };
 
+  // The same watch however its zeros are written: a Model # of 71, a tag of 0071.
+  const same = (a: string, b: string) => a === b || spell(a) === spell(b);
+
   const result = new Map<string, Wanted>();
   // Random pulls first take the piece equal to their own Model #, so two in one
   // box are never flagged for having been scanned in the other order.
@@ -219,7 +222,7 @@ export function wantedSales(
     if (!isPlaceholderStock(u.line.stockNumber) || !u.reported) continue;
     const box = closedBox(u.line.tracking);
     const left = box ? piecesLeft.get(u.line.tracking)![u.stock] : undefined;
-    const i = left ? left.findIndex((p) => normaliseModel(p) === u.reported) : -1;
+    const i = left ? left.findIndex((p) => same(normaliseModel(p), u.reported)) : -1;
     if (i >= 0) {
       left!.splice(i, 1);
       result.set(u.key, { key: u.key, line: u.line, model: u.reported, sent: true, note: "" });
@@ -233,15 +236,16 @@ export function wantedSales(
       const piece = box ? piecesLeft.get(u.line.tracking)![u.stock]?.shift() : undefined;
       if (piece) {
         const model = normaliseModel(piece);
-        const note = u.reported && model !== u.reported ? `Packed as ${model}, but the report's Model # said ${u.reported}.` : "";
+        const note = u.reported && !same(model, u.reported) ? `Packed as ${model}, but the report's Model # said ${u.reported}.` : "";
         result.set(u.key, { key: u.key, line: u.line, model, sent: true, note });
         continue;
       }
       const model = u.reported || u.inName || null;
       // A box packed before its report ("Pack it anyway") has the watch as a
       // plain scan, not a piece: it went if that model was scanned into it.
-      if (box && model && (b![model] ?? 0) > 0) {
-        b![model] -= 1;
+      const scannedAs = model ? (Object.keys(b ?? {}).find((k) => same(k, model) && b![k] > 0) ?? model) : null;
+      if (box && model && scannedAs && (b![scannedAs] ?? 0) > 0) {
+        b![scannedAs] -= 1;
         result.set(u.key, { key: u.key, line: u.line, model, sent: true, note: "" });
         continue;
       }

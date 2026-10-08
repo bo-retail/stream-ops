@@ -312,3 +312,25 @@ describe("a report that lost a model's leading zeros", () => {
     expect(w[0].model).toBeNull();
   });
 });
+
+describe("a random pull whose Model # and tag write the zeros differently", () => {
+  const spell = (m: string) => (m === "71" || m === "071" ? "0071" : m);
+
+  it("Model # 71, the piece scanned as 0071: the same watch, sent, no note", () => {
+    const b = boxes(["T1", box("CLOSED_COMPLETE", {}, { [P]: ["0071"] })]);
+    const w = wantedSales([line({ stockNumber: PULLS, modelNumber: "71" })], b, () => false, spell).wanted[0];
+    expect([w.model, w.sent, w.note]).toEqual(["0071", true, ""]);
+  });
+
+  it("…a real different piece still gets its note", () => {
+    const b = boxes(["T1", box("CLOSED_COMPLETE", {}, { [P]: ["49888"] })]);
+    const w = wantedSales([line({ stockNumber: PULLS, modelNumber: "71" })], b, () => false, spell).wanted[0];
+    expect([w.model, w.note]).toEqual(["49888", "Packed as 49888, but the report's Model # said 71."]);
+  });
+
+  it("packed before its report as a plain scan of 0071: sent", () => {
+    const b = boxes(["T1", box("CLOSED_COMPLETE", { "0071": 1 })]);
+    const w = wantedSales([line({ stockNumber: PULLS, modelNumber: "71" })], b, () => false, spell).wanted[0];
+    expect([w.model, w.sent]).toEqual(["0071", true]);
+  });
+});

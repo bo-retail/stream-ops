@@ -16,6 +16,7 @@ import {
   normaliseStockNumber,
 } from "@/lib/domain/imports/tracking";
 import type { DateISO } from "@/lib/domain/types";
+import { catalogueSpelling } from "@/lib/domain/inventory";
 import { packingDayISO } from "./settings";
 
 /**
@@ -398,7 +399,7 @@ export async function packItem(
   packageId: string,
   rawScan: string,
 ): Promise<ScanOutcome> {
-  const stockNumber = normaliseStockNumber(rawScan);
+  let stockNumber = normaliseStockNumber(rawScan);
   if (stockNumber === "") return { kind: "error", message: "Nothing was scanned." };
 
   const box = await getBoxById(packageId);
@@ -472,6 +473,10 @@ export async function packItem(
     return reload(packageId);
   }
 
+  // The tag can carry a model's leading zeros the report left off (0071 for a
+  // listing of 71), or the other way round: the same watch, so it is the line.
+  // Invicta's numbering only — a diamond's piece number is left exactly as scanned.
+  if (box.business === "WATCH") stockNumber = catalogueSpelling(box.items.map((i) => i.stockNumber))(stockNumber);
   const line = box.items.find((i) => i.stockNumber === stockNumber);
   if (!line) {
     // A box sold under a placeholder listing expects "a piece", not a number,
