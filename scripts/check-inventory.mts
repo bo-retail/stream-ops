@@ -10,10 +10,13 @@
  *   - a watch on the shelf that is not on the list: added, flagged, later
  *     given its details by the master
  *   - the count sheet downloaded, filled in, uploaded
- *   - a count sheet with a typo, or a model on two rows: nothing saved
+ *   - a count sheet with a typo in a number: nothing saved
+ *   - a model on two rows: the rows added together, and said so
+ *   - a watch not in the catalogue written on the Count tab: added, flagged,
+ *     counted (Samuel, 10/08); one counted as none: not added
  *   - two people saving the same model at the same moment
  *   - stock history cannot be deleted by deleting the model
- *   - a totals row, a typo, or a number Excel mangled on the Count tab: refused,
+ *   - a totals row or a number Excel mangled on the Count tab: refused,
  *     never made into a model that can never be removed
  *   - a renamed column, a formula with no value: refused, not skipped
  *   - the same sheet uploaded twice; an old sheet after a newer count
@@ -219,7 +222,7 @@ try {
   check("and saves them", [(await stock(`${P}TM-525003`)).SELLABLE, (await stock(`${P}TM-525003`)).DAMAGED], [5, 2]);
   check("adding the one not on the list", saved.added, [`${P}99001`]);
 
-  // A typo and a model on two rows: nothing saved, every problem named.
+  // A typo in a number: nothing saved, the problem named.
   ws.eachRow((row) => {
     if (row.getCell(1).value === `${P}TM-525003`) row.getCell(4).value = "five";
     if (row.getCell(1).value === `${P}49888`) row.getCell(5).value = 2;
@@ -227,7 +230,10 @@ try {
   sheet.getWorksheet("Models not on the list")!.addRow([`${P}49888`, "again", 1]);
   const bad = await readCountSheet((await sheet.xlsx.writeBuffer()) as ArrayBuffer);
   check("a typo is named", bad.problems.some((p) => p.includes(`${P}TM-525003`) && p.includes("five")), true);
-  check("a model on two rows is named", bad.problems.some((p) => p.includes("counted twice")), true);
+  check("a model on two rows is not a problem…", bad.problems.some((p) => p.includes(`${P}49888`)), false);
+  const twice = bad.entries.find((e) => e.model === `${P}49888`);
+  check("…its rows are added together, place by place", [twice?.counted.SELLABLE, twice?.counted.SAMPLE_EBAY], [1, 2]);
+  check("…and it is said", bad.notes.some((n) => n.includes(`${P}49888`) && n.includes("two rows")), true);
 
   console.log("\nWhat Excel and tired fingers do to a count sheet.");
   const fresh = async () => {
@@ -242,12 +248,41 @@ try {
   };
   const before = await prisma.product.count();
 
-  for (const [what, model] of [["a totals row", "Total"], ["a typo", `${P}4988`], ["a number Excel changed", "4.9888E+4"]] as const) {
+  for (const [what, model] of [["a totals row", "Total"], ["a number Excel changed", "4.9888E+4"], ["a label with a space", "TOTAL 2"]] as const) {
     const wb = await fresh();
     wb.getWorksheet("Count")!.addRow([model, "", "", 5]);
     const r = await upload(wb);
     check(`${what} on the Count tab is refused`, r.ok, false);
     check(`and nothing is created for it`, await prisma.product.count(), before);
+  }
+  {
+    // The opening count: watches found on the shelf typed onto the Count tab.
+    const wb = await fresh();
+    wb.getWorksheet("Count")!.addRow([`${P}70095`, "", "", 12, 1, 1]);
+    wb.getWorksheet("Count")!.addRow([`${P}70096`, "", "", 0, 0, 0]);
+    const r = await upload(wb);
+    check("a watch not in the catalogue on the Count tab is added and counted", [r.ok, "added" in r ? r.added : null, (await stock(`${P}70095`)).SELLABLE], [true, [`${P}70095`], 12]);
+    check("…one counted as none is not added", await prisma.product.count({ where: { model: `${P}70096` } }), 0);
+    check("…and the new one is flagged for its details", (await prisma.product.findUnique({ where: { model: `${P}70095` }, select: { needsDetails: true } }))?.needsDetails, true);
+  }
+  {
+    const wb = await fresh();
+    wb.getWorksheet("Count")!.addRow([`${P}48370`, "", "", 1]);
+    wb.getWorksheet("Count")!.addRow([`${P}48370`, "Pro Diver", "", 1, null, 1]);
+    const r = await upload(wb);
+    check("a new model on two rows of the Count tab: one model, the two added together", [r.ok, (await stock(`${P}48370`)).SELLABLE, (await stock(`${P}48370`)).SAMPLE_TIKTOK], [true, 2, 1]);
+    check("…keeping the description from the row that had one", (await prisma.product.findUnique({ where: { model: `${P}48370` }, select: { description: true } }))?.description, "Pro Diver");
+  }
+  {
+    const wb = await fresh();
+    wb.getWorksheet("Count")!.addRow([`${P}70097`, "", "", 0]);
+    const r = await upload(wb);
+    check("a sheet whose only numbers are a new model counted as none: refused, nothing added", [r.ok, await prisma.product.count({ where: { model: `${P}70097` } })], [false, 0]);
+  }
+  {
+    // The count screen's "add a model" form, at 0: it is still added, as asked.
+    const r = await saveCount(boss.id, [{ model: `${P}70098`, counted: { SELLABLE: 0 }, allowNew: true }], "count screen");
+    check("the count screen adds a model counted as none, as it says it did", [r.ok, r.added], [true, [`${P}70098`]]);
   }
   {
     const wb = await fresh();
@@ -401,6 +436,7 @@ try {
   if (countPath && existsSync(countPath)) {
     const real = await readCountSheet(readFileSync(countPath).buffer as ArrayBuffer);
     check("the opening count sheet already made is read without problems", real.problems, []);
+    check("…with every model on it, the ones not in the catalogue included", real.entries.length > 0 && real.entries.every((e) => e.allowNew), true);
   } else {
     console.log("SKIP  real count sheet: set STREAMOPS_COUNT_SHEET.");
   }

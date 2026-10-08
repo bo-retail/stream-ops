@@ -262,11 +262,20 @@ export interface CountEntry {
   /**
    * Whether this entry may add a model that is not in the catalogue.
    *
-   * Only the "not on the list" form and tab may. A model added can never be
-   * removed (its history is kept for good), so an unknown model anywhere else —
-   * a typo, a totals row, a number Excel mangled — is refused, not created.
+   * The count sheet always may, on either tab (Samuel, 10/08: a watch found
+   * on the shelf is added wherever it was written). The count screen's own
+   * form for a known model may not. A model added can never be removed (its
+   * history is kept for good), so a number that cannot be a model — a totals
+   * row, a number Excel mangled, a label with a space — is still refused, and
+   * one counted as none anywhere is not added at all.
    */
   allowNew?: boolean;
+  /**
+   * A model not in the catalogue counted as none: not added at all. For the
+   * count sheet, whose every row reaches here; the count screen's own "add a
+   * model" form adds what it is asked to.
+   */
+  skipNewIfNone?: boolean;
   /** Where it came from, for the message: "Count, row 14". */
   where?: string;
 }
@@ -309,8 +318,16 @@ export async function saveCount(userId: string, entries: CountEntry[], source: s
         ),
       );
 
+      // A model the catalogue lacks, counted as none anywhere: nothing to add.
+      const counting = clean.filter(
+        (e) => known.has(e.model) || !e.skipNewIfNone || Object.values(e.counted).some((q) => (q ?? 0) > 0),
+      );
+      if (counting.length === 0) {
+        return { ok: false, models: 0, changed: 0, added: [], problems: ["Nothing was counted: the only models are new ones counted as none."] };
+      }
+
       const problems: string[] = [];
-      for (const e of clean) {
+      for (const e of counting) {
         if (known.has(e.model)) continue;
         const at = e.where ? `${e.where}: ` : "";
         if (!e.allowNew) {
@@ -326,7 +343,7 @@ export async function saveCount(userId: string, entries: CountEntry[], source: s
       if (problems.length > 0) return { ok: false, models: 0, changed: 0, added: [], problems };
 
       const added: string[] = [];
-      for (const e of clean) {
+      for (const e of counting) {
         if (known.has(e.model)) continue;
         const created = await tx.product.create({
           data: { model: e.model, description: e.description?.trim() ?? "", needsDetails: true },
@@ -338,7 +355,7 @@ export async function saveCount(userId: string, entries: CountEntry[], source: s
 
       const current = await balancesFor(tx, [...known.values()]);
       let changed = 0;
-      const lines = clean.flatMap((e) => {
+      const lines = counting.flatMap((e) => {
         const productId = known.get(e.model)!;
         return countLines(current.get(productId) ?? zero(), e.counted).map((l) => {
           if (l.qty !== 0) changed++;
@@ -359,7 +376,7 @@ export async function saveCount(userId: string, entries: CountEntry[], source: s
       // A model ordered but not counted in as a shipment yet, found on the
       // shelf: it is here, so it is active.
       // Damaged pieces alone do not make it a model we can sell.
-      const found = clean
+      const found = counting
         .filter((e) => Object.entries(e.counted).some(([place, q]) => place !== "DAMAGED" && (q ?? 0) > 0))
         .map((e) => known.get(e.model)!);
       if (found.length > 0) await tx.product.updateMany({ where: { id: { in: found }, active: false }, data: { active: true } });
@@ -371,12 +388,12 @@ export async function saveCount(userId: string, entries: CountEntry[], source: s
           action: "COUNT",
           actorId: userId,
           summary:
-            `Counted ${clean.length} model(s) (${source}): ${changed} place(s) changed` +
+            `Counted ${counting.length} model(s) (${source}): ${changed} place(s) changed` +
             (added.length > 0 ? `, ${added.length} new model(s) added: ${added.join(", ")}` : ""),
         },
       });
 
-      return { ok: true, models: clean.length, changed, added, problems: [] };
+      return { ok: true, models: counting.length, changed, added, problems: [] };
     },
     { timeout: 120_000, maxWait: 30_000 },
   );
@@ -386,23 +403,32 @@ export async function saveCount(userId: string, entries: CountEntry[], source: s
  * Reads a filled-in count sheet.
  *
  * Any sheet with a "Model" column must also have all five place columns, so a
- * renamed column is refused rather than quietly skipped. Only the "Models not
- * on the list" tab may add a model. Every problem is listed and nothing is
- * saved until there are none, so a count is never half-loaded.
+ * renamed column is refused rather than quietly skipped. Every problem is
+ * listed and nothing is saved until there are none, so a count is never
+ * half-loaded.
+ *
+ * Read the way it was filled in, not the way it should have been (Samuel,
+ * 10/08 — the opening count came back with both): a watch that is not in the
+ * catalogue is added from whichever tab it was written on, and a model written
+ * on two rows was counted in two spots, so the rows are added together. Both
+ * are said in `notes`, for the message after the upload.
  */
-export async function readCountSheet(buffer: ArrayBuffer): Promise<{ entries: CountEntry[]; problems: string[] }> {
+export async function readCountSheet(
+  buffer: ArrayBuffer,
+): Promise<{ entries: CountEntry[]; problems: string[]; notes: string[] }> {
   let sheets: SheetRows;
   try {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(buffer);
     sheets = sheetRows(wb, (c) => /^model$/i.test(c));
   } catch {
-    return { entries: [], problems: ["That is not an Excel (.xlsx) file. Download the count sheet and fill that in."] };
+    return { entries: [], problems: ["That is not an Excel (.xlsx) file. Download the count sheet and fill that in."], notes: [] };
   }
-  if (sheets.length === 0) return { entries: [], problems: ['No sheet has a "Model" column. Is this the count sheet?'] };
+  if (sheets.length === 0) return { entries: [], problems: ['No sheet has a "Model" column. Is this the count sheet?'], notes: [] };
 
   const problems: string[] = [];
   const byModel = new Map<string, CountEntry>();
+  const notes: string[] = [];
   for (const { sheet, rows } of sheets) {
     const headings = new Set(rows.flatMap((r) => Object.keys(r.values)).map((h) => h.trim().toLowerCase()));
     const missing = PLACES.filter((p) => !headings.has(PLACE_LABEL[p].toLowerCase()));
@@ -414,7 +440,6 @@ export async function readCountSheet(buffer: ArrayBuffer): Promise<{ entries: Co
       );
       continue;
     }
-    const allowNew = /not on the list/i.test(sheet);
     for (const { line, values } of rows) {
       const key = (name: string) => Object.keys(values).find((k) => k.trim().toLowerCase() === name.toLowerCase());
       const modelKey = key("Model");
@@ -433,7 +458,16 @@ export async function readCountSheet(buffer: ArrayBuffer): Promise<{ entries: Co
       if (Object.keys(counted).length === 0) continue;
       const seen = byModel.get(model);
       if (seen) {
-        problems.push(`${model} is counted twice (${seen.where} and ${where}). Put it on one row.`);
+        // Two spots of one model: the totals added, place by place.
+        for (const place of PLACES) {
+          if (counted[place] !== undefined) seen.counted[place] = (seen.counted[place] ?? 0) + counted[place]!;
+        }
+        const noteKey = key("Notes") ?? key("Note");
+        const whatKey = key("What it is") ?? key("Description");
+        if (!seen.description?.trim() && whatKey) seen.description = String(values[whatKey] ?? "");
+        const note = noteKey ? String(values[noteKey] ?? "").trim() : "";
+        if (note) seen.note = seen.note?.trim() ? `${seen.note.trim()}; ${note}` : note;
+        notes.push(`${model} was on two rows (${seen.where} and ${where}): they were added together.`);
         continue;
       }
       const noteKey = key("Notes") ?? key("Note");
@@ -442,13 +476,14 @@ export async function readCountSheet(buffer: ArrayBuffer): Promise<{ entries: Co
         model,
         counted,
         where,
-        allowNew,
+        allowNew: true,
+        skipNewIfNone: true,
         note: noteKey ? String(values[noteKey] ?? "") : "",
         description: whatKey ? String(values[whatKey] ?? "") : "",
       });
     }
   }
-  return { entries: [...byModel.values()], problems };
+  return { entries: [...byModel.values()], problems, notes };
 }
 
 /* ---------------------------------------------------------------- templates */

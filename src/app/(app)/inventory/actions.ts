@@ -110,7 +110,7 @@ export async function uploadCount(_prev: FormState, formData: FormData): Promise
   const got = await fileFrom(formData);
   if ("error" in got) return { error: got.error };
 
-  const { entries, problems } = await readCountSheet(got.buffer);
+  const { entries, problems, notes } = await readCountSheet(got.buffer);
   if (problems.length > 0) {
     return { error: "Nothing was saved. Fix these and upload it again:", details: problems.slice(0, 50) };
   }
@@ -121,10 +121,12 @@ export async function uploadCount(_prev: FormState, formData: FormData): Promise
   refresh();
   return {
     ok: `Saved the count of ${result.models} model(s): ${result.changed} place(s) changed.`,
-    details:
-      result.added.length > 0
-        ? [`Added and flagged for their details (not on the list before): ${result.added.join(", ")}.`]
-        : undefined,
+    details: [
+      ...(result.added.length > 0
+        ? [`Added ${result.added.length} model(s) that were not in the catalogue, flagged for their details: ${result.added.join(", ")}.`]
+        : []),
+      ...notes,
+    ],
   };
 }
 
