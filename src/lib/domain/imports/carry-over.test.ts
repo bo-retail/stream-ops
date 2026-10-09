@@ -187,3 +187,67 @@ describe("an after-midnight checkout, the awkward cases", () => {
     expect(r.redated).toEqual([]);
   });
 });
+
+describe("the 10/09 report: labels with a date but no show, and stragglers with none", () => {
+  const order = (orderRef: string, day: string, tag: string, valid = false) =>
+    sale({ orderRef, tracking: orderRef, showDate: day, paidOn: day, shiftTag: valid ? tag : `${day.slice(5, 7)}.${day.slice(8)}.${day.slice(2, 4)} PM`, rawShiftTag: tag, shiftTagValid: valid });
+  const night = (n: number, tag = "10.08.26 AM-PM") => Array.from({ length: n }, (_, i) => order(`d${i}`, "2026-10-08", tag));
+
+  it("an order tagged 10.08.26 AM-PM, checked out on 10/09, is read back to 10/08", () => {
+    const r = lateCheckouts([...night(5), order("38294", "2026-10-09", "10.08.26 AM-PM")]);
+    expect(r.redated.map((s) => [s.orderRef, s.showDate])).toEqual([["38294", "2026-10-08"]]);
+  });
+
+  it("…and one tagged 10.08.26 NUEVO", () => {
+    const r = lateCheckouts([...night(5, "10.08.26 NUEVO"), order("38179", "2026-10-09", "10.08.26 NUEVO")]);
+    expect(r.redated.map((s) => s.orderRef)).toEqual(["38179"]);
+  });
+
+  it("an order with a blank label, one among many: a straggler, read back", () => {
+    const r = lateCheckouts([...night(20), order("x", "2026-10-09", "")]);
+    expect(r.redated.map((s) => s.orderRef)).toEqual(["x"]);
+  });
+
+  it("blank labels on a real share of the next day: not stragglers, left for the one-day rule", () => {
+    const next = [1, 2, 3].map((i) => order(`n${i}`, "2026-10-09", ""));
+    expect(lateCheckouts([...night(20), ...next]).redated).toEqual([]);
+  });
+
+  it("an order whose label names the next day stays there, however few", () => {
+    expect(lateCheckouts([...night(20), order("y", "2026-10-09", "10.09.26 AM", true)]).redated).toEqual([]);
+  });
+
+  it("an order whose label names a third day is not moved", () => {
+    expect(lateCheckouts([...night(20), order("z", "2026-10-09", "10.01.26 AM-PM")]).redated).toEqual([]);
+  });
+
+  it("two whole days dropped together, labels unreadable, are still two days", () => {
+    const next = Array.from({ length: 15 }, (_, i) => order(`n${i}`, "2026-10-09", "10.09.26 AM-PM"));
+    const r = lateCheckouts([...night(20), ...next]);
+    expect(r.redated).toEqual([]);
+    expect(new Set(carryOver(r.sales).kept.map((s) => s.showDate)).size).toBe(2);
+  });
+});
+
+describe("a straggler is only read back onto a day the report really is", () => {
+  it("a morning of late payers from 10/10 and one blank-label 10/11 sale: the sale stays on 10/11", () => {
+    const late = Array.from({ length: 10 }, (_, i) =>
+      sale({ orderRef: `L${i}`, tracking: `L${i}`, showDate: "2026-10-10", paidOn: "2026-10-11", rawShiftTag: "", shiftTagValid: false }),
+    );
+    const own = sale({ orderRef: "N1", tracking: "N1", showDate: "2026-10-11", paidOn: "2026-10-11", rawShiftTag: "", shiftTagValid: false });
+    const r = lateCheckouts([...late, own]);
+    expect(r.redated).toEqual([]);
+    // …and the late payers are still carried back on their own, as before.
+    expect(carryOver(r.sales).carried).toHaveLength(10);
+  });
+
+  it("a straggler next to the day's own orders and some late payers from the day before: still read back", () => {
+    const own = Array.from({ length: 20 }, (_, i) => sale({ orderRef: `d${i}`, tracking: `d${i}`, showDate: "2026-10-08", paidOn: "2026-10-08", rawShiftTag: "10.08.26 AM-PM" }));
+    const before = sale({ orderRef: "b", tracking: "b", showDate: "2026-10-07", paidOn: "2026-10-08", rawShiftTag: "10.07.26 AM-PM" });
+    const straggler = sale({ orderRef: "s", tracking: "s", showDate: "2026-10-09", paidOn: "2026-10-09", rawShiftTag: "" });
+    const r = lateCheckouts([...own, before, straggler]);
+    expect(r.redated.map((x) => x.orderRef)).toEqual(["s"]);
+    const c = carryOver(r.sales);
+    expect([c.carried.map((x) => x.orderRef), new Set(c.kept.map((x) => x.showDate))]).toEqual([["b"], new Set(["2026-10-08"])]);
+  });
+});

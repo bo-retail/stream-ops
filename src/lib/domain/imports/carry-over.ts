@@ -22,7 +22,6 @@
 
 import { addDays } from "../dates";
 import type { DateISO } from "../types";
-import { parseShiftTag } from "./types";
 import type { WatchSale } from "./types";
 
 export interface CarryOver {
@@ -56,6 +55,13 @@ export interface CarryOver {
  * the report, every one of its items is tagged with the report's day, and the
  * report really does hold that day. Anything else dated another day is left
  * for the one-day rule, as before.
+ *
+ * The tag's date is enough, even when the rest of it is not a show
+ * ("10.08.26 AM-PM", "10.08.26 NUEVO" — the 10/09 report, where every label was
+ * like that and two orders checked out after midnight). And an order with no
+ * dated tag at all is still read back when it is plainly a straggler: the next
+ * day holds no more than a tenth as many orders as the report's own day. Two
+ * whole days dropped together are never that lopsided, and are still refused.
  */
 export function lateCheckouts(sales: readonly WatchSale[]): { sales: WatchSale[]; redated: WatchSale[] } {
   const dates = new Set(sales.map((s) => s.showDate));
@@ -69,15 +75,27 @@ export function lateCheckouts(sales: readonly WatchSale[]): { sales: WatchSale[]
     byOrder.set(s.orderRef, list);
   }
 
+  // How many eBay orders each day holds, for telling a straggler from a day.
+  // Only orders paid on their own day: late payers from the day before (see
+  // `carryOver`) do not make a morning that day's report.
+  const ordersOn = new Map<DateISO, number>();
+  for (const lines of byOrder.values()) {
+    if (lines.some(paidLate)) continue;
+    ordersOn.set(lines[0].showDate, (ordersOn.get(lines[0].showDate) ?? 0) + 1);
+  }
+  const straggler = (late: DateISO, day: DateISO) => (ordersOn.get(day) ?? 0) > 0 && (ordersOn.get(late) ?? 0) * 10 <= (ordersOn.get(day) ?? 0);
+
   const moveTo = new Map<string, DateISO>();
   for (const [order, lines] of byOrder) {
     const dated = lines[0].showDate;
     if (!lines.every((l) => l.showDate === dated)) continue;
     const dayBefore = addDays(dated, -1);
-    const taggedDayBefore = lines.every((l) => l.shiftTagValid && parseShiftTag(l.shiftTag)?.dateISO === dayBefore);
+    const days = lines.map((l) => tagDate(l.rawShiftTag ?? l.shiftTag));
+    const taggedDayBefore = days.every((d) => d === dayBefore);
+    const untagged = days.every((d) => d === null);
     // The report has to be that day's: other orders in it carry that date.
     const reportIsThatDay = sales.some((s) => s.orderRef !== order && s.showDate === dayBefore);
-    if (taggedDayBefore && reportIsThatDay) moveTo.set(order, dayBefore);
+    if (reportIsThatDay && (taggedDayBefore || (untagged && straggler(dated, dayBefore)))) moveTo.set(order, dayBefore);
   }
   if (moveTo.size === 0) return { sales: [...sales], redated: [] };
 
@@ -90,6 +108,15 @@ export function lateCheckouts(sales: readonly WatchSale[]): { sales: WatchSale[]
     return moved;
   });
   return { sales: out, redated };
+}
+
+/** The date a show tag starts with ("10.08.26 …"), whatever follows it; null when it has none. */
+export function tagDate(raw: string): DateISO | null {
+  const m = /^(\d{2})\.(\d{2})\.(\d{2})(?!\d)/.exec(raw.trim());
+  if (!m) return null;
+  const [, mm, dd, yy] = m;
+  if (Number(mm) < 1 || Number(mm) > 12 || Number(dd) < 1 || Number(dd) > 31) return null;
+  return `20${yy}-${mm}-${dd}` as DateISO;
 }
 
 /** An order paid on a later day than the show it sold in. */

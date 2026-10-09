@@ -106,7 +106,7 @@ export function UploadForm({ targets }: { targets: UploadTarget[] }) {
             {chosen.loaded
               ? " It already has a report — uploading again replaces it, leaving any box already packed alone."
               : chosen.partial
-                ? ` It has a report, but it is missing ${chosen.partial}. Upload all of that day's files together — a new upload replaces the last one, so the missing file on its own is refused.`
+                ? ` It has a report, but it is missing ${chosen.partial}. Upload the missing file on its own — what is already loaded for that day stays as it is.`
                 : ""}
           </p>
         ) : day !== "" ? (

@@ -33,6 +33,8 @@ export interface EbayOrder {
   paidDay: string;
   /** eBay's Sale Date — the checkout. The show day unless the buyer checked out later. */
   saleDay?: string;
+  /** The Custom Label, when it is not the plain show tag ("10.08.26 AM-PM"). */
+  label?: string;
   tracking?: string;
   /** Defaults to one buyer per order. A shared label is one buyer. */
   buyer?: string;
@@ -50,7 +52,7 @@ export function ebayReport(orders: EbayOrder[]): string {
       "Ship To State": "IL",
       "Item Number": `4071972${o.srn.padStart(5, "0")}`,
       "Item Title": `W${o.srn}`,
-      "Custom Label": `${tagDate(o.showDay)} PM`,
+      "Custom Label": o.label ?? `${tagDate(o.showDay)} PM`,
       Quantity: "1",
       "Sold For": o.price ?? "$25.00",
       "Total Price": o.price ?? "$25.00",

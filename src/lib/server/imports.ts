@@ -220,7 +220,7 @@ export function readFiles(
       severity: "info",
       message:
         `eBay order(s) ${[...orders].join(", ")} were checked out after midnight, so eBay dated them the next day. ` +
-        `Every item in them is tagged with ${day}'s show, so they are counted there.`,
+        `Their items are tagged with ${day}, or they are the only orders dated the next day, so they are counted on ${day} with the rest of the report.`,
     });
   }
 

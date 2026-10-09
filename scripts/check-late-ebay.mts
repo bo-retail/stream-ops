@@ -20,6 +20,11 @@
  *   - a morning and a corrected day-before uploaded at the same moment
  *   - a late order whose box on the day before is already closed
  *   - watch and diamond TikTok files in one drop go up as two uploads
+ *   - 10/09: labels with a date but no show ("AM-PM", "NUEVO") and one order
+ *     checked out after midnight: accepted, on the labelled day
+ *   - the eBay file alone, for a day whose TikTok is already in: added, TikTok kept
+ *   - a morning of late payers plus one blank-label sale of its own day: that
+ *     sale is not pulled back onto the day before
  *
  * Every file is synthetic and every date years in the past, so nothing here
  * can touch a real day. It refuses to run against anything but a local
@@ -57,6 +62,11 @@ const CLOSED_DAY = "2021-04-11";
 const BOTH_DAY = "2021-05-05"; // watch and diamond TikTok in one drop
 const CHECKOUT_DAY = "2021-06-20"; // an order checked out after midnight
 const CHECKOUT_NEXT = "2021-06-21";
+const LABEL_DAY = "2021-06-25"; // every label "06.25.21 AM-PM", one order checked out after midnight
+const LABEL_NEXT = "2021-06-26";
+const LONE_DAY = "2021-06-28"; // TikTok first, the eBay file on its own later
+const PAYERS_BEFORE = "2021-07-01"; // a morning of late payers, plus one blank-label sale of its own day
+const PAYERS_DAY = "2021-07-02";
 const ONLY_LATE_BEFORE = "2021-07-10";
 const ONLY_LATE_DAY = "2021-07-11"; // no eBay show: the report is all late payers
 const TINY_BEFORE = "2021-08-10";
@@ -71,7 +81,7 @@ const RACES = [0, 15, 30, 60, 120].map((offset, i) => ({
 }));
 const ALL = [
   BEFORE, DAY, EMPTY_BEFORE, EMPTY_DAY, CLOSED_BEFORE, CLOSED_DAY, BOTH_DAY,
-  ONLY_LATE_BEFORE, ONLY_LATE_DAY, TINY_BEFORE, TINY_DAY, SMALL_DAY, SMALL_NEXT, CHECKOUT_DAY, CHECKOUT_NEXT,
+  ONLY_LATE_BEFORE, ONLY_LATE_DAY, TINY_BEFORE, TINY_DAY, SMALL_DAY, SMALL_NEXT, CHECKOUT_DAY, CHECKOUT_NEXT, LABEL_DAY, LABEL_NEXT, LONE_DAY, PAYERS_BEFORE, PAYERS_DAY,
   ...RACES.flatMap((r) => [r.before, r.day]),
 ];
 
@@ -545,6 +555,59 @@ try {
     boss.id,
   );
   check("an order really of the next day is still refused", wrongTag.status, "BLOCKED");
+
+  /* ------------- 10/09: labels with a date but no show, a checkout after midnight */
+
+  console.log("\nLabels like 10.08.26 AM-PM, and one order checked out after midnight.");
+  const labelled = await runImport(
+    [
+      {
+        name: "labels.csv",
+        text: ebayReport([
+          ...Array.from({ length: 12 }, (_, i) => ({
+            srn: String(1401 + i), showDay: LABEL_DAY, paidDay: LABEL_DAY, label: i % 2 ? "06.25.21 AM-PM" : "06.25.21 NUEVO",
+          })),
+          { srn: "1420", showDay: LABEL_DAY, saleDay: LABEL_NEXT, paidDay: LABEL_NEXT, label: "06.25.21 AM-PM" },
+        ]),
+      },
+    ],
+    boss.id,
+  );
+  check("the report goes in", labelled.status, "OK");
+  check("the late order is on the day its label names", (await ebayOrdersOn(LABEL_DAY)).includes("1420"), true);
+  check("nothing is made up for the next day", await prisma.importBatch.count({ where: { showDate: toDbDate(LABEL_NEXT) } }), 0);
+
+  console.log("\nLate payers from the day before, and one blank-label sale of the morning's own day.");
+  await runImport([{ name: "payers-before.csv", text: ebayReport([1, 2, 3].map((i) => ({ srn: String(1600 + i), showDay: PAYERS_BEFORE, paidDay: PAYERS_BEFORE }))) }], boss.id);
+  const payers = await runImport(
+    [
+      {
+        name: "payers.csv",
+        text: ebayReport([
+          ...Array.from({ length: 10 }, (_, i) => ({ srn: String(1610 + i), showDay: PAYERS_BEFORE, paidDay: PAYERS_DAY, label: "" })),
+          { srn: "1630", showDay: PAYERS_DAY, paidDay: PAYERS_DAY, label: "" },
+        ]),
+      },
+    ],
+    boss.id,
+  );
+  check("the payers' morning goes in", payers.status, "OK");
+  check("its own sale stays on its own day", await ebayOrdersOn(PAYERS_DAY), ["1630"]);
+  check("the late payers join the day before", (await ebayOrdersOn(PAYERS_BEFORE)).filter((o) => o >= "1610").length, 10);
+
+  /* ----------------------- the eBay file on its own, TikTok already in */
+
+  console.log("\nThe eBay file on its own, for a day whose TikTok is already in.");
+  const tt = await runImport([{ name: "lone-tiktok.csv", text: tiktokReport("vaultshowlive", LONE_DAY, 3, "57800001") }], boss.id);
+  const lone = await runImport([{ name: "lone-ebay.csv", text: ebayReport([{ srn: "1501", showDay: LONE_DAY, paidDay: LONE_DAY }, { srn: "1502", showDay: LONE_DAY, paidDay: LONE_DAY }]) }], boss.id);
+  check("both go in", [tt.status, lone.status], ["OK", "OK"]);
+  const loneIds = await latestBatchIds(LONE_DAY as never, LONE_DAY as never);
+  check(
+    "the day reads both: the TikTok sales are kept",
+    (await prisma.importBatch.findMany({ where: { id: { in: loneIds } }, select: { platform: true, _count: { select: { sales: true } } }, })).map((b) => [b.platform, b._count.sales]).sort(),
+    [["EBAY", 2], ["TIKTOK", 3]],
+  );
+  check("and every box of both", await prisma.package.count({ where: { showDate: toDbDate(LONE_DAY) } }), 5);
 
   /* ------------------------------ watches and diamonds in a single drop */
 
