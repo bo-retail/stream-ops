@@ -85,8 +85,12 @@ describe("one diamond export for a day of two diamond shows", () => {
 });
 
 describe("telling a whole-day file from a day show's own", () => {
-  it("a day show running past the night's start is not the whole day", () => {
-    expect(coversNight(at("23:20:00"), NIGHT)).toBe(false);
+  it("a file that stops before the night show is the day's alone", () => {
+    expect(coversNight(at("22:59:59"), NIGHT)).toBe(false);
+  });
+  it("any order from the night show's start makes it the whole day (10/10: 7:57 PM Eastern)", () => {
+    expect(coversNight(at("23:00:00"), NIGHT)).toBe(true);
+    expect(coversNight(at("23:59:53"), NIGHT)).toBe(true);
   });
   it("a file running hours into the night show is", () => {
     expect(coversNight(new Date("2026-10-12T04:42:00Z"), NIGHT)).toBe(true);

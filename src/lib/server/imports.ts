@@ -1441,8 +1441,8 @@ export async function runImport(
     orders twice once the schedule changed.
 
     What makes it the whole day is what it covers, cancelled orders included:
-    placed on the day show by its first order, with orders well into the night
-    show. So a correction whose night orders were all cancelled still replaces
+    placed on the day show by its first order, with any order from the night
+    show's scheduled start on (`coversNight`). So a correction whose night orders were all cancelled still replaces
     the night's half, while an export of the morning alone replaces only the
     morning's. With no night show on the schedule any more, a file the day's
     two lines had shared goes to the day show whole, and the night's is emptied.
@@ -1494,26 +1494,36 @@ export async function runImport(
       });
     } else if (diamondTiktok.length === 1 && placedOnDay(diamondTiktok[0])) {
       const file = diamondTiktok[0];
-      if (whole.length === 1) wholeDay = { file, night: night!.startsAt, onNightLine: true };
-      else if (wasShared && nightShow === null) wholeDay = { file, night: null, onNightLine: false };
-      else if (wasShared) {
-        /*
-          The day's two lines hold one shared file, and this one no longer
-          reaches an hour into the night show — the night show moved later, or
-          its last orders are gone from the export. A correction of the whole
-          day if it has any of the night's orders: shared out by the night
-          show's start as it is now, so nothing stays on the night line twice.
-          An export of the morning alone has none, and replaces the morning's.
-        */
-        const nightBatch = current.find((b) => b.slot === "NIGHT");
-        const theirs = nightBatch
-          ? await prisma.salesRecord.findMany({ where: { batchId: nightBatch.id }, select: { orderRef: true } })
-          : [];
-        const ours = new Set([
-          ...sales.filter((s) => s.sourceFile === file).map((s) => s.orderRef),
-          ...dropped.filter((d) => d.sourceFile === file).map((d) => d.orderRef),
-        ]);
-        if (theirs.some((r) => ours.has(r.orderRef))) wholeDay = { file, night: nightShow!.startsAt, onNightLine: true };
+      /*
+        Whether this file holds the night line's current orders — sold or
+        cancelled since. The night line can only be replaced by a file that
+        has them, or when it holds nothing yet.
+      */
+      const nightBatch = current.find((b) => b.slot === "NIGHT");
+      const theirs = nightBatch
+        ? await prisma.salesRecord.findMany({ where: { batchId: nightBatch.id }, select: { orderRef: true } })
+        : [];
+      const ours = new Set([
+        ...sales.filter((s) => s.sourceFile === file).map((s) => s.orderRef),
+        ...dropped.filter((d) => d.sourceFile === file).map((d) => d.orderRef),
+      ]);
+      const hasNights = theirs.some((r) => ours.has(r.orderRef));
+
+      if (whole.length === 1 && (theirs.length === 0 || hasNights)) {
+        // Reaches the night show, and the night line is empty or this file's own.
+        // A day export with an order or two past the night's start, uploaded
+        // beside a night that already has its orders, stays the day's: written
+        // to both, it would have emptied the night of orders it never had.
+        wholeDay = { file, night: night!.startsAt, onNightLine: true };
+      } else if (wasShared && nightShow === null) {
+        wholeDay = { file, night: null, onNightLine: false };
+      } else if (wasShared && hasNights) {
+        // The day's two lines hold one shared file, and this one no longer
+        // reaches the night show — it moved later, or its last orders are gone
+        // from the export. It has the night's orders, so it is a correction of
+        // the whole day, shared out by the night show's start as it is now.
+        // An export of the morning alone has none, and replaces the morning's.
+        wholeDay = { file, night: nightShow!.startsAt, onNightLine: true };
       }
     }
   }

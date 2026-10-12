@@ -57,9 +57,12 @@ const FIX_OVERRUN = "2022-07-28"; // a day show running 20 minutes over
 // Found by the third review.
 const FIX_MOVED = "2022-07-30"; // night show moved later, file uploaded again
 const FIX_NO_DAY = "2022-08-01"; // day show called off after the split
+// Found by the fifth review: no margin must not let a day file empty the night.
+const FIX_Q = "2022-08-03"; // morning export with one order after the night start
+const FIX_R = "2022-08-05"; // separate night file, then a day file a minute over
 const ALL = [
   BOTH, DAY_ONLY, OVERRUN, TWO_FILES, CANCELLED, FIX_NIGHT, FIX_SCHED, FIX_MORNING, FIX_LABEL,
-  FIX_MORNING_ONLY, FIX_CHECKLIST, FIX_TOGETHER, FIX_OVERRUN, FIX_MOVED, FIX_NO_DAY,
+  FIX_MORNING_ONLY, FIX_CHECKLIST, FIX_TOGETHER, FIX_OVERRUN, FIX_MOVED, FIX_NO_DAY, FIX_Q, FIX_R,
 ];
 const PREFIX = "check: diamond day ";
 
@@ -188,14 +191,15 @@ try {
     check("all of it stays on the day show", await byShow(DAY_ONLY), { day: 5, night: 0, nightOnNightLine: true, nightTags: [] });
   }
 
-  console.log("\nBoth scheduled; a day-show export with an order a few minutes after 4 PM.");
+  console.log("\nBoth scheduled; one file with an order a minute after the night show starts.");
   {
     await schedule(OVERRUN, [{ business: "DIAMOND", slot: "DAY" }, { business: "DIAMOND", slot: "NIGHT" }]);
     await upload([diamondFile("d-day.csv", OVERRUN, [
       { n: 3, base: "96200001", time: "10:33:00 AM" },
       { n: 1, base: "96200002", time: "04:01:00 PM" },
     ])]);
-    check("the late order stays with the show that sold it", await byShow(OVERRUN), { day: 4, night: 0, nightOnNightLine: true, nightTags: [] });
+    // Since 10/12 the schedule decides: from the night show's start is the night's.
+    check("an order from the night show's start goes to the night show", await byShow(OVERRUN), { day: 3, night: 1, nightOnNightLine: true, nightTags: ["07.08.22 PM"] });
   }
 
   console.log("\nBoth scheduled; the shop sends one file per show after all.");
@@ -323,14 +327,15 @@ try {
     check("and what was there stays", await byShow(FIX_TOGETHER), { day: 3, night: 2, nightOnNightLine: true, nightTags: ["07.26.22 PM"] });
   }
 
-  console.log("\n[review 2] A diamond day show running 20 minutes into the night show's time.");
+  console.log("\n[10/10] The night show selling only in its first 20 minutes, in one file with the day.");
   {
     await twoShows(FIX_OVERRUN);
     await upload([diamondFile("d-day.csv", FIX_OVERRUN, [
       { n: 3, base: "97200001", time: "10:33:00 AM" },
       { n: 1, base: "97200002", time: "04:20:00 PM" },
     ])]);
-    check("still all the day show's", await byShow(FIX_OVERRUN), { day: 4, night: 0, nightOnNightLine: true, nightTags: [] });
+    check("the night show's first-hour order is the night's (10/10)", await byShow(FIX_OVERRUN), { day: 3, night: 1, nightOnNightLine: true, nightTags: ["07.28.22 PM"] });
+    check("and the day is complete", await missing(FIX_OVERRUN), null);
   }
 
   console.log("\n[review 3] Split, then the night show moved to 9 PM, then the same file again.");
@@ -363,6 +368,37 @@ try {
     await upload([{ ...file, name: "d-again.csv" }]);
     check("the night show keeps its own orders", (await byShow(FIX_NO_DAY)).night, 2);
     check("no order counted twice", await twice(FIX_NO_DAY), 0);
+  }
+
+  console.log("\n[review 4] Whole-day file in, then a morning export with one order at 4:05 PM.");
+  {
+    await twoShows(FIX_Q);
+    await upload([diamondFile("d.csv", FIX_Q, [
+      { n: 3, base: "97500001", time: "10:33:00 AM" },
+      { n: 2, base: "97500002", time: "07:05:00 PM" },
+    ])]);
+    await upload([diamondFile("d-morning.csv", FIX_Q, [
+      { n: 3, base: "97500001", time: "10:33:00 AM" },
+      { n: 1, base: "97500003", time: "04:05:00 PM" },
+    ])]);
+    check("the night keeps its two orders; the 4:05 order stays with the morning file", [await byShow(FIX_Q), await dayBoxes(FIX_Q)], [
+      { day: 4, night: 2, nightOnNightLine: true, nightTags: ["08.03.22 PM"] },
+      6,
+    ]);
+  }
+
+  console.log("\n[review 4] A separate night file first, then a day file running one minute over.");
+  {
+    await twoShows(FIX_R);
+    await upload([diamondFile("d-night.csv", FIX_R, [{ n: 2, base: "97600002", time: "07:05:00 PM" }])]);
+    await upload([diamondFile("d-day.csv", FIX_R, [
+      { n: 3, base: "97600001", time: "10:33:00 AM" },
+      { n: 1, base: "97600003", time: "04:01:00 PM" },
+    ])]);
+    check("the night file's orders and boxes stay", [await byShow(FIX_R), await dayBoxes(FIX_R)], [
+      { day: 4, night: 2, nightOnNightLine: true, nightTags: ["08.05.22 PM"] },
+      6,
+    ]);
   }
 } catch (error) {
   failures++;

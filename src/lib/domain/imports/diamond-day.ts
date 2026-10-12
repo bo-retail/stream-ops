@@ -18,21 +18,20 @@ import { defaultShiftTag } from "./types";
 import type { WatchSale } from "./types";
 
 /**
- * How far into the night show a day-placed file must run to be the whole day.
- *
- * A day-show export can carry orders from after the night show's start — on
- * 09/15 the diamond day show ran to 16:01 — and those stay with the show that
- * sold them. A whole-day file runs hours past this (10/11: to 9:42 PM).
- */
-export const WHOLE_DAY_MARGIN_MS = 60 * 60 * 1000;
-
-/**
  * Whether a file whose last order — cancelled or not — was at `latest` covers
  * the night show. What a file covers, not what it sold: a correction whose
  * night orders were all cancelled still covers the night.
+ *
+ * Any order from the night show's scheduled start on is the night's. This
+ * used to need an hour into the night show, to keep a day show running a few
+ * minutes over with the pair who sold it. The diamond shop now always sends
+ * the day as one file, and on 10/10 the night show's only two orders came at
+ * 7:57 and 7:59 PM Eastern: an hour's margin gave them to the day pair and
+ * left the night show "missing" for good. The schedule decides (Samuel,
+ * 10/12): an order from a day show running over goes to the night pair.
  */
 export function coversNight(latest: Date | null, nightStartsAt: Date): boolean {
-  return latest !== null && latest.getTime() >= nightStartsAt.getTime() + WHOLE_DAY_MARGIN_MS;
+  return latest !== null && latest.getTime() >= nightStartsAt.getTime();
 }
 
 /**
