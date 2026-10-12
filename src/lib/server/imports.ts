@@ -295,7 +295,7 @@ async function reconcileDayBoxes(
     supersededIds: string[];
     splitOrigins: string[];
   },
-): Promise<{ untouchedClosedBoxes: number }> {
+): Promise<{ untouchedClosedBoxes: number; packedWithout: string[] }> {
 
   /*
     What this business's day now holds, across every line of its checklist.
@@ -342,14 +342,70 @@ async function reconcileDayBoxes(
       batchId: true,
     },
   });
-  const dayBoxes = buildBoxes(
-    dayRows.map((r) => ({
-      ...r,
-      showDate: fromDbDate(r.showDate),
-      show: r.show as WatchSale["show"],
-    })),
-  );
+  const asSource = (r: (typeof dayRows)[number]) => ({
+    ...r,
+    showDate: fromDbDate(r.showDate),
+    show: r.show as WatchSale["show"],
+  });
+  const dayBoxes = buildBoxes(dayRows.map(asSource));
   const dayTrackings = dayBoxes.map((b) => b.tracking);
+
+  // The current lines of other days, and of the other business, with sales on
+  // these labels. Nearly always none.
+  const elsewhere = await currentLinesElsewhere(tx, business, showDate, dayTrackings);
+
+  /*
+    What goes in each box: everything every current report puts on its label.
+
+    One label is one parcel, whoever's report names it. On 10/11 chrism2525
+    bought two watches and a diamond and TikTok put all three on one label, but
+    each business's upload built the box from its own sales alone — so the
+    packer was shown whichever report went in last, and the rest of the parcel
+    was not on the screen at all. A buyer's orders from two days on one label
+    lost the earlier day's piece the same way.
+
+    An order is taken once. A late payer can be on two days' exports, and
+    counting it from both would ask the packer for a piece nobody bought.
+  */
+  const sharedRows =
+    elsewhere.size === 0
+      ? []
+      : await tx.salesRecord.findMany({
+          where: {
+            tracking: { in: [...elsewhere.keys()] },
+            batchId: { in: [...new Set([...elsewhere.values()].flatMap((lines) => [...lines]))] },
+          },
+          orderBy: [{ showDate: "asc" }, { id: "asc" }],
+          select: {
+            tracking: true,
+            platform: true,
+            buyer: true,
+            shipToName: true,
+            state: true,
+            showDate: true,
+            show: true,
+            stockNumber: true,
+            qty: true,
+            orderRef: true,
+            batchId: true,
+            batch: { select: { business: true } },
+          },
+        });
+  const sharedOnce = ordersOnce(dayRows, sharedRows);
+  /*
+    A box any watch report names is a watch box, whichever report made it:
+    the packer is shown watch photos, and a watch tag with its model's leading
+    zeros (0071 for 71) still finds its line. A diamond's number has letters,
+    so the leading-zero match never reaches it.
+  */
+  const watchLabels = new Set([
+    ...(business === "WATCH" ? dayRows.map((r) => r.tracking) : []),
+    ...sharedOnce.filter((r) => r.batch.business === "WATCH").map((r) => r.tracking),
+  ]);
+  const boxBusiness = (tracking: string): Business => (watchLabels.has(tracking) ? "WATCH" : business);
+  const contentsOf = new Map(
+    buildBoxes([...dayRows, ...sharedOnce].map(asSource)).map((b) => [b.tracking, b.items]),
+  );
 
   // Which current lines have sales in each box — usually one, two for a buyer
   // who bought in both shows on one label.
@@ -383,15 +439,30 @@ async function reconcileDayBoxes(
   const closed = existing.filter((p) => p.status !== "OPEN");
   const closedTracking = new Set(closed.map((p) => p.trackingNumber));
 
-  // Boxes filed under a line from outside this day. Nearly always none.
-  const elsewhere = await currentLinesElsewhere(
-    tx,
-    business,
-    showDate,
-    existing
-      .filter((p) => p.batchId !== null && !liveBatchIds.includes(p.batchId))
-      .map((p) => p.trackingNumber),
-  );
+  /*
+    Parcels already packed that a report now adds a piece to.
+
+    A closed box is never changed by an upload. So when the watches on a
+    shared label are packed before the diamond report goes up, the box
+    closed complete without the diamond, and nothing would ever say so. Named
+    here, so whoever uploads can stop that parcel before it leaves.
+
+    Only a stock number the box has no line for at all — a box closed short
+    of a watch it knew about is already on the director's list. A piece sold
+    under a placeholder is named only later, so a placeholder line, and the
+    real pieces scanned against one, are not counted as new.
+  */
+  const packedWithout = closed
+    .filter((p) => {
+      const has = new Set([
+        ...p.items.map((i) => i.stockNumber),
+        ...p.scans.filter((sc) => sc.kind === "ITEM_PLACEHOLDER" && sc.stockNumber).map((sc) => sc.stockNumber!),
+      ]);
+      return (contentsOf.get(p.trackingNumber) ?? []).some(
+        (i) => !has.has(i.stockNumber) && !isPlaceholderStock(i.stockNumber),
+      );
+    })
+    .map((p) => p.trackingNumber);
 
   /*
     The line a box is filed under: the one it already has while that line is
@@ -413,7 +484,7 @@ async function reconcileDayBoxes(
     await tx.package.createMany({
       data: fresh.map((b) => ({
         trackingNumber: b.tracking,
-        business: business,
+        business: boxBusiness(b.tracking),
         platform: b.platform,
         showDate: toDbDate(b.showDate),
         buyer: b.buyer,
@@ -433,7 +504,7 @@ async function reconcileDayBoxes(
     const idOf = new Map(created.map((p) => [p.trackingNumber, p.id]));
     await tx.packageItem.createMany({
       data: fresh.flatMap((b) =>
-        b.items.map((i) => ({
+        contentsOf.get(b.tracking)!.map((i) => ({
           packageId: idOf.get(b.tracking)!,
           stockNumber: i.stockNumber,
           expectedQty: i.expected,
@@ -456,12 +527,13 @@ async function reconcileDayBoxes(
         buyer: box.buyer,
         shipToName: box.shipToName,
         shipToState: box.state,
+        business: boxBusiness(box.tracking),
         batchId: ownerFor(box.tracking, row.batchId),
         isUnrecognised: false,
       },
     });
 
-    const wanted = new Map(box.items.map((i) => [i.stockNumber, i.expected]));
+    const wanted = new Map(contentsOf.get(box.tracking)!.map((i) => [i.stockNumber, i.expected]));
 
     /*
       A placeholder the report has now replaced with the real SKU.
@@ -593,38 +665,74 @@ async function reconcileDayBoxes(
       trackingNumber: { notIn: dayTrackings.length > 0 ? dayTrackings : ["-"] },
       scans: { none: {} },
     },
-    select: { id: true, trackingNumber: true },
+    select: { id: true, trackingNumber: true, batchId: true },
   });
+
+  /*
+    A shared label this line has just let go of, filed under another line.
+
+    A parcel of watches and a diamond is filed under one business's report.
+    When the diamond is cancelled and its file corrected, that box is neither
+    this day's any more nor filed here, so nothing above would touch it, and
+    the packer would still be asked for the cancelled diamond. It is rebuilt
+    from the lines that still have it, below, whatever is already in it.
+  */
+  const letGo =
+    supersededIds.length === 0
+      ? []
+      : (
+          await tx.salesRecord.findMany({
+            where: { batchId: { in: supersededIds }, tracking: { notIn: ["", ...dayTrackings] } },
+            select: { tracking: true },
+            distinct: ["tracking"],
+          })
+        ).map((r) => r.tracking);
+  const staleIds = new Set(stale.map((p) => p.id));
+  const leftBehind =
+    letGo.length === 0
+      ? []
+      : (
+          await tx.package.findMany({
+            where: { trackingNumber: { in: letGo }, status: "OPEN" },
+            select: { id: true, trackingNumber: true, batchId: true },
+          })
+        ).filter((p) => !staleIds.has(p.id));
+
   /*
     And against every other day too: a label this day no longer has may be
     on the next day's report, and that day's packer still needs the box. It
     passes to that day's line, so that day's own correction can sweep it —
     and is made over as that day's box: its date, its buyer, and the pieces
     that day sold, not the ones just cancelled here. Nobody has scanned it,
-    so there is nothing in it to keep.
+    so there is nothing in it to keep. A shared label let go of (`leftBehind`)
+    may have been scanned; whatever was scanned stays, expecting nothing.
   */
   const wantedElsewhere = await currentLinesElsewhere(
     tx,
     business,
     showDate,
-    stale.map((p) => p.trackingNumber),
+    [...stale, ...leftBehind].map((p) => p.trackingNumber),
   );
   const sweep = stale.filter((p) => !wantedElsewhere.has(p.trackingNumber)).map((p) => p.id);
-  const refile = stale.filter((p) => wantedElsewhere.has(p.trackingNumber));
+  const refile = [...stale, ...leftBehind].filter((p) => wantedElsewhere.has(p.trackingNumber));
   if (refile.length > 0) {
     const theirRows = await tx.salesRecord.findMany({
       where: {
         tracking: { in: refile.map((p) => p.trackingNumber) },
         batchId: { in: [...new Set(refile.flatMap((p) => [...wantedElsewhere.get(p.trackingNumber)!]))] },
       },
+      orderBy: [{ showDate: "asc" }, { id: "asc" }],
       select: {
         tracking: true, platform: true, buyer: true, shipToName: true, state: true,
-        showDate: true, show: true, stockNumber: true, qty: true, orderRef: true,
+        showDate: true, show: true, stockNumber: true, qty: true, orderRef: true, batchId: true,
+        batch: { select: { business: true } },
       },
     });
+    const theirOnce = ordersOnce([], theirRows);
+    const theirWatchLabels = new Set(theirOnce.filter((r) => r.batch.business === "WATCH").map((r) => r.tracking));
     const theirs = new Map(
       buildBoxes(
-        theirRows.map((r) => ({ ...r, showDate: fromDbDate(r.showDate), show: r.show as WatchSale["show"] })),
+        theirOnce.map((r) => ({ ...r, showDate: fromDbDate(r.showDate), show: r.show as WatchSale["show"] })),
       ).map((b) => [b.tracking, b]),
     );
     for (const p of refile) {
@@ -637,7 +745,12 @@ async function reconcileDayBoxes(
           buyer: box.buyer,
           shipToName: box.shipToName,
           shipToState: box.state,
-          batchId: [...wantedElsewhere.get(p.trackingNumber)!][0],
+          business: theirWatchLabels.has(p.trackingNumber) ? "WATCH" : "DIAMOND",
+          // Left where it is while that line still has it.
+          batchId:
+            p.batchId !== null && wantedElsewhere.get(p.trackingNumber)!.has(p.batchId)
+              ? p.batchId
+              : [...wantedElsewhere.get(p.trackingNumber)!][0],
         },
       });
       // Only lines nothing was scanned against, in case a scan landed since.
@@ -665,7 +778,40 @@ async function reconcileDayBoxes(
     await tx.package.deleteMany({ where: { id: { in: sweep }, scans: { none: {} } } });
   }
 
-  return { untouchedClosedBoxes: closedTracking.size };
+  return { untouchedClosedBoxes: closedTracking.size, packedWithout };
+}
+
+/** Said at upload: packed parcels a report has since added a piece to. */
+function packedWithoutFlag(labels: string[]): ImportFlag[] {
+  if (labels.length === 0) return [];
+  return [
+    {
+      severity: "warning",
+      message:
+        `${labels.length} parcel(s) were packed before this report added a piece to them: ` +
+        `${labels.slice(0, 5).join(", ")}${labels.length > 5 ? ` and ${labels.length - 5} more` : ""}. ` +
+        `They closed without it — find each one before it ships; the shipping director can reopen it from the log, and the piece is scanned in as an extra.`,
+    },
+  ];
+}
+
+/**
+ * The rows of `more` whose orders are in neither `taken` nor an earlier line.
+ *
+ * A late payer can be on two days' exports. Each order is counted from the
+ * first line that has it — `taken` first, then `more` in the order given — so
+ * a box asks for its pieces once, not once per report that mentions them.
+ */
+function ordersOnce<T extends { platform: string; orderRef: string; batchId: string }>(
+  taken: readonly { platform: string; orderRef: string }[],
+  more: readonly T[],
+): T[] {
+  const key = (r: { platform: string; orderRef: string }) => `${r.platform}|${r.orderRef}`;
+  const lineOf = new Map<string, string | null>(taken.map((r) => [key(r), null]));
+  return more.filter((r) => {
+    if (!lineOf.has(key(r))) lineOf.set(key(r), r.batchId);
+    return lineOf.get(key(r)) === r.batchId;
+  });
 }
 
 /**
@@ -683,6 +829,15 @@ async function reconcileDayBoxes(
  * waits for.
  */
 async function lockDay(tx: Prisma.TransactionClient, business: Business, day: DateISO) {
+  /*
+    Every upload's boxes, one at a time. One label can be on the watch report
+    and the diamond report, or on two days', so two uploads that share no day
+    can still be rewriting the same box: side by side, one deleted a line the
+    other was about to update, and that whole upload failed. Taken again by
+    the same upload it does not wait (advisory locks are re-entrant), and it
+    is always first, so no order between the locks below can deadlock.
+  */
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('import-boxes'))`;
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`import-day:${business}:${day}`}))`;
 }
 
@@ -1522,7 +1677,7 @@ export async function runImport(
 
       // Nothing of this day's own — an eBay report of nothing but the day
       // before's late payers — and there is no day to bring in line.
-      const { untouchedClosedBoxes } =
+      const { untouchedClosedBoxes, packedWithout } =
         keys.length > 0
           ? await reconcileDayBoxes(tx, {
               business: business ?? "WATCH",
@@ -1531,7 +1686,7 @@ export async function runImport(
               supersededIds,
               splitOrigins,
             })
-          : { untouchedClosedBoxes: 0 };
+          : { untouchedClosedBoxes: 0, packedWithout: [] as string[] };
 
       // The day before's eBay report gets its late orders.
       const late = await updateEarlierReport(
@@ -1548,6 +1703,7 @@ export async function runImport(
       return {
         batchId: firstBatchId || late?.batchId || null,
         untouchedClosedBoxes,
+        packedWithout,
         late,
       };
     },
@@ -1560,7 +1716,7 @@ export async function runImport(
     // An all-late report went to the day before, and says so.
     showDate: lateDay ? carried[0].showDate : showDate,
     business,
-    flags: [...flags, ...notes],
+    flags: [...flags, ...notes, ...packedWithoutFlag(written.packedWithout)],
     watchCount: sales.length > 0 ? summary.watches : (written.late?.pieces ?? 0),
     boxCount: sales.length > 0 ? summary.boxes : (written.late?.newBoxes ?? 0),
     droppedCount: dropped.length,

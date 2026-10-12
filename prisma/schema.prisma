@@ -799,8 +799,10 @@ model Package {
   /// Which show's box this is, for the log and the day's counts.
   ///
   /// It does not gate scanning. The floor packs both piles off one table, and a
-  /// tracking number is unique across both, so a scanned label always resolves
-  /// to exactly one box whoever is holding it.
+  /// scanned label always resolves to exactly one box whoever is holding it.
+  /// One label can carry both businesses' pieces (10/11: two watches and a
+  /// diamond to one buyer); the box then holds both, and this is the business
+  /// whose report made it.
   business       Business @default(WATCH)
   platform       Platform
   showDate       DateTime @db.Date

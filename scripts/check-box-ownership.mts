@@ -89,10 +89,23 @@ const XC_2 = "2021-12-12";
 const PH_FLIP = "2021-12-14"; // placeholder renamed, reverted, renamed again
 const PH_SWAP = "2021-12-16"; // two placeholder listings, names swapped
 const PH_OVR = "2021-12-18"; // an override on a SKU before its placeholder piece is carried
+// 10/12: watches and diamonds on one label.
+const MIX_A = "2021-12-20"; // watches first
+const MIX_B = "2021-12-22"; // diamonds first
+const MIX_C = "2021-12-24"; // each cancelled in turn
+const MIX_D = "2021-12-26"; // watches packed before the diamond report
+const MIX_E = "2021-12-28"; // both uploaded at once
+const MIX_F1 = "2021-12-30"; // a watch one day, a diamond the next
+const MIX_F2 = "2021-12-31";
+const MIX_RACE = ["2022-01-02", "2022-01-03", "2022-01-04", "2022-01-05", "2022-01-06", "2022-01-07"];
+const MIX_ZERO = "2022-01-09"; // diamond first, then a watch tag with leading zeros
+const MIX_PH = "2022-01-11"; // a placeholder diamond packed, then watches
+const MIX_SCANNED = "2022-01-13"; // a scanned diamond cancelled
 const ALL = [
   CROSS, LATE_BEFORE, LATE_DAY, DROP, SPAN, PACKED, LEGACY, TWICE, PLACEHOLDER, AT_ONCE,
   PH_ORDER, XDAY_1, XDAY_2, BIZ, BLANK, UNKNOWN, ALL_LATE_BEFORE, ALL_LATE_DAY, SAME_LINE,
   RACE_BEFORE, RACE_DAY, XC_1, XC_2, PH_FLIP, PH_SWAP, PH_OVR,
+  MIX_A, MIX_B, MIX_C, MIX_D, MIX_E, MIX_F1, MIX_F2, ...MIX_RACE, MIX_ZERO, MIX_PH, MIX_SCANNED,
 ];
 
 async function clean() {
@@ -527,13 +540,12 @@ try {
     ];
     await upload([tiktok("d1-night.csv", XC_1, 2, "81000001", { time: NIGHT, tracking: [undefined, label], buyer: "buyer.xc" })]);
     await upload([tiktok("d2-day.csv", XC_2, 1, "81000002", { tracking: label, buyer: "buyer.xc" })]);
-    // KNOWN, older than this change: a day builds the box from its own sales
-    // only, so it expects one day's piece, not both. Printed, not checked,
-    // until that is fixed separately.
-    void both;
-    console.log("      KNOWN after the second day, the box reads:", JSON.stringify((await contents())?.items));
+    // Since 10/12 a box holds every current report's pieces on its label.
+    check("after the second day, the box asks for both days' pieces", (await contents())?.items, both);
     await upload([ebay("d1-ebay.csv", XC_1, ["811"])]);
-    console.log("      KNOWN after the first day's eBay, the box reads:", JSON.stringify((await contents())?.items));
+    check("and still both after the first day's eBay", (await contents())?.items, both);
+    await upload([tiktok("d2-day-again.csv", XC_2, 1, "81000002", { tracking: label, buyer: "buyer.xc" })]);
+    check("the second day uploaded twice: still one of each", (await contents())?.items, both);
     await upload([tiktok("d1-night-corrected.csv", XC_1, 1, "81000001", { time: NIGHT, buyer: "buyer.xc" })]);
     check("first day's order cancelled: the box is the second day's, holding its piece", await contents(), {
       day: XC_2,
@@ -608,6 +620,186 @@ try {
     check("carried once; the override stays as scanned", (await box(label))?.items, after);
     await upload([ebay("ebay.csv", PH_OVR, ["841"])]);
     check("unchanged by another upload", (await box(label))?.items, after);
+  }
+
+  /* ------------------- 10/12: watches and diamonds in one parcel */
+
+  /*
+    On 10/11 chrism2525 bought two watches and a diamond, and TikTok put all
+    three on one label. Each business's upload built the box from its own
+    sales, so the packer saw only whichever went up last.
+  */
+  const diamonds = (name: string, day: string, n: number, base: string, options: TiktokOptions = {}) => ({
+    name,
+    text: tiktokReport("caratclublive", day, n, base, options),
+  });
+  const items = async (label: string) =>
+    (await box(label))?.items.map((i) => `${i.stockNumber} ${i.scannedQty}/${i.expectedQty}`) ?? null;
+  const MIXED = ["W90001 0/1", "W90002 0/1", "E93557 0/1"].sort();
+  const watchesOn = (label: string) => ({ names: ["W90001", "W90002", "W90003"], tracking: [label, label, undefined], buyer: "buyer.mix" });
+  const diamondOn = (label: string) => ({ names: ["E93557", "E90009"], tracking: [label, undefined], buyer: "buyer.mix" });
+
+  console.log("\n[10/12] Watches and a diamond on one label, watches uploaded first.");
+  {
+    const label = "GFUS01077818636164";
+    await upload([tiktok("w.csv", MIX_A, 3, "90000001", watchesOn(label))]);
+    check("before the diamond report: the two watches", await items(label), ["W90001 0/1", "W90002 0/1"]);
+    await upload([diamonds("d.csv", MIX_A, 2, "90000002", diamondOn(label))]);
+    check("after it: the watches and the diamond", (await items(label))?.sort(), MIXED);
+    await upload([tiktok("w-again.csv", MIX_A, 3, "90000001", watchesOn(label))]);
+    await upload([diamonds("d-again.csv", MIX_A, 2, "90000002", diamondOn(label))]);
+    await upload([diamonds("d-again-2.csv", MIX_A, 2, "90000002", diamondOn(label))]);
+    check("each file uploaded again: nothing doubled, nothing lost", (await items(label))?.sort(), MIXED);
+    check("still one box for the label", await prisma.package.count({ where: { trackingNumber: label } }), 1);
+
+    const opened = await openBoxByScan(boss.id, label);
+    const id = opened.kind === "box" ? opened.box.id : "";
+    check("the label opens it", opened.kind, "box");
+    const w1 = await packItem(boss.id, id, "W90001");
+    const w2 = await packItem(boss.id, id, "W90002");
+    check("both watches go in and the box stays open for the diamond", [
+      w1.kind, w2.kind, w2.kind === "box" ? w2.box.status : null,
+    ], ["box", "box", "OPEN"]);
+    const d = await packItem(boss.id, id, "E93557");
+    check("the diamond's tag goes in and closes it", [d.kind, d.kind === "box" ? d.autoClosed : null], ["box", true]);
+  }
+
+  console.log("\n[10/12] The same parcel with the diamond report uploaded first.");
+  {
+    const label = "GFUS01077818636165";
+    await upload([diamonds("d.csv", MIX_B, 2, "90000004", diamondOn(label))]);
+    check("before the watch report: the diamond", await items(label), ["E93557 0/1"]);
+    await upload([tiktok("w.csv", MIX_B, 3, "90000003", watchesOn(label))]);
+    check("after it: all three", (await items(label))?.sort(), MIXED);
+  }
+
+  console.log("\n[10/12] The diamond order cancelled, then the watch orders.");
+  {
+    const label = "GFUS01077818636166";
+    await upload([tiktok("w.csv", MIX_C, 3, "90000005", watchesOn(label))]);
+    await upload([diamonds("d.csv", MIX_C, 2, "90000006", { ...diamondOn(label), names: ["E90009", "E93557"], tracking: [undefined, label] })]);
+    await upload([diamonds("d-corrected.csv", MIX_C, 1, "90000006", { names: ["E90009"], buyer: "buyer.mix" })]);
+    check("diamond cancelled: the box is the two watches", (await items(label))?.sort(), ["W90001 0/1", "W90002 0/1"]);
+    await upload([diamonds("d-back.csv", MIX_C, 2, "90000006", { ...diamondOn(label), names: ["E90009", "E93557"], tracking: [undefined, label] })]);
+    await upload([tiktok("w-corrected.csv", MIX_C, 1, "90000005", { names: ["W90003"], buyer: "buyer.mix" })]);
+    check("diamond back, watches cancelled: the box stays, holding the diamond", await items(label), ["E93557 0/1"]);
+  }
+
+  console.log("\n[10/12] The watches packed and closed before the diamond report went up.");
+  {
+    const label = "GFUS01077818636167";
+    await upload([tiktok("w.csv", MIX_D, 3, "90000007", watchesOn(label))]);
+    const opened = await openBoxByScan(boss.id, label);
+    const id = opened.kind === "box" ? opened.box.id : "";
+    await packItem(boss.id, id, "W90001");
+    const last = await packItem(boss.id, id, "W90002");
+    check("two watches: it closes itself", last.kind === "box" ? last.autoClosed : null, true);
+    const late = await upload([diamonds("d.csv", MIX_D, 2, "90000008", diamondOn(label))]);
+    check(
+      "the diamond upload names the packed parcel it now belongs in",
+      late.flags.some((f) => f.severity === "warning" && f.message.includes(label)),
+      true,
+    );
+    check("and leaves the packed box as it was", (await items(label))?.sort(), ["W90001 1/1", "W90002 1/1"]);
+    const again = await upload([diamonds("d-again.csv", MIX_D, 2, "90000008", diamondOn(label))]);
+    check(
+      "uploaded again, it says so again — the parcel is still short",
+      again.flags.some((f) => f.message.includes(label)),
+      true,
+    );
+  }
+
+  console.log("\n[10/12] The watch and diamond reports uploaded by two people at the same moment.");
+  {
+    const label = "GFUS01077818636168";
+    const both = await Promise.allSettled([
+      runImport([tiktok("w.csv", MIX_E, 3, "90000009", watchesOn(label))], boss.id),
+      runImport([diamonds("d.csv", MIX_E, 2, "90000010", diamondOn(label))], boss.id),
+    ]);
+    check(
+      "both go in",
+      both.map((r) => (r.status === "fulfilled" ? r.value.status : String(r.reason))),
+      ["OK", "OK"],
+    );
+    check("the box holds all three", (await items(label))?.sort(), MIXED);
+  }
+
+  // Found by the review of the 10/12 change.
+  console.log("\n[10/12 review] An existing shared box: diamond corrected while the watches go up again, 6 times.");
+  {
+    const results: string[] = [];
+    for (let k = 0; k < 6; k++) {
+      const day = MIX_RACE[k];
+      const label = `GFUS0107781900000${k}`;
+      await upload([tiktok("w.csv", day, 3, `9100000${k}`, watchesOn(label))]);
+      await upload([diamonds("d.csv", day, 2, `9200000${k}`, diamondOn(label))]);
+      const both = await Promise.allSettled([
+        runImport([diamonds("d2.csv", day, 2, `9200000${k}`, { ...diamondOn(label), names: ["E77777", "E90009"] })], boss.id),
+        runImport([tiktok("w2.csv", day, 3, `9100000${k}`, watchesOn(label))], boss.id),
+      ]);
+      const st = both.map((r) => (r.status === "fulfilled" ? r.value.status : "THREW"));
+      results.push(`${st.join("+")} ${JSON.stringify((await items(label))?.sort())}`);
+    }
+    check(
+      "every time: both go in, and the box is the new diamond and the two watches",
+      results,
+      Array(6).fill(`OK+OK ${JSON.stringify(["E77777 0/1", "W90001 0/1", "W90002 0/1"])}`),
+    );
+  }
+
+  console.log("\n[10/12 review] Diamond report first, then a watch listed 71; the tag reads 0071.");
+  {
+    const label = "GFUS01077819100001";
+    await upload([diamonds("d.csv", MIX_ZERO, 2, "93000001", diamondOn(label))]);
+    await upload([tiktok("w.csv", MIX_ZERO, 1, "93000002", { names: ["71"], tracking: label, buyer: "buyer.mix" })]);
+    const b = await prisma.package.findUniqueOrThrow({ where: { trackingNumber: label }, select: { business: true } });
+    check("a watch is in it, so it is a watch box", b.business, "WATCH");
+    const opened = await openBoxByScan(boss.id, label);
+    const scan = await packItem(boss.id, opened.kind === "box" ? opened.box.id : "", "0071");
+    check("0071 finds the 71 line", (await items(label))?.sort(), ["71 1/1", "E93557 0/1"]);
+    check("and is not refused", scan.kind, "box");
+  }
+
+  console.log("\n[10/12 review] A diamond sold under a placeholder, packed and closed, then watches on its label.");
+  {
+    const label = "GFUS01077819100002";
+    await upload([diamonds("d.csv", MIX_PH, 1, "94000001", { names: ["LGD - As seen on screen"], tracking: label, buyer: "buyer.mix" })]);
+    const opened = await openBoxByScan(boss.id, label);
+    const piece = await packItem(boss.id, opened.kind === "box" ? opened.box.id : "", "E55501");
+    check("the piece's tag closes it", piece.kind === "box" ? piece.box.status : piece.kind, "CLOSED_COMPLETE");
+    const w = await upload([tiktok("w.csv", MIX_PH, 3, "94000002", watchesOn(label))]);
+    check("the watch upload names the packed parcel", w.flags.some((f) => f.severity === "warning" && f.message.includes(label)), true);
+    const d = await upload([diamonds("d-renamed.csv", MIX_PH, 1, "94000001", { names: ["E55501"], tracking: label, buyer: "buyer.mix" })]);
+    check(
+      "the placeholder later renamed to the piece scanned: that alone is not called missing",
+      d.flags.filter((f) => f.message.includes(label)).length,
+      1, // still short of the two watches, so still named once
+    );
+  }
+
+  console.log("\n[10/12 review] A shared box whose diamond was scanned in, then the diamond order cancelled.");
+  {
+    const label = "GFUS01077819100003";
+    await upload([tiktok("w.csv", MIX_SCANNED, 3, "95000001", watchesOn(label))]);
+    await upload([diamonds("d.csv", MIX_SCANNED, 2, "95000002", diamondOn(label))]);
+    const opened = await openBoxByScan(boss.id, label);
+    await packItem(boss.id, opened.kind === "box" ? opened.box.id : "", "E93557");
+    await upload([diamonds("d-corrected.csv", MIX_SCANNED, 1, "95000002", { names: ["E90009"], buyer: "buyer.mix" })]);
+    check(
+      "the scanned diamond stays on record expecting nothing; the watches are still asked for",
+      (await items(label))?.sort(),
+      ["E93557 1/0", "W90001 0/1", "W90002 0/1"],
+    );
+  }
+
+  console.log("\n[10/12] One label for a watch one day and a diamond the next.");
+  {
+    const label = "GFUS01077818636169";
+    await upload([tiktok("w.csv", MIX_F1, 3, "90000011", watchesOn(label))]);
+    await upload([diamonds("d.csv", MIX_F2, 2, "90000012", diamondOn(label))]);
+    check("the box asks for both days' pieces", (await items(label))?.sort(), MIXED);
+    await upload([tiktok("w-again.csv", MIX_F1, 3, "90000011", watchesOn(label))]);
+    check("the first day uploaded again: unchanged", (await items(label))?.sort(), MIXED);
   }
 } catch (error) {
   failures++;
