@@ -82,6 +82,26 @@ export function toInstant(wall: WallClock): Date {
   );
 }
 
+/**
+ * When a TikTok export's last order was placed, cancelled ones included.
+ *
+ * What a file covers, not what it sold: a corrected whole-day diamond file
+ * whose night orders were all cancelled still covers the night show, and has
+ * to replace what the night show was given before. Null when no time reads.
+ */
+export function latestOrderAt(text: string): Date | null {
+  const rows = parseCsv(text);
+  if (rows.length < 2) return null;
+  let latest: number | null = null;
+  for (const r of toRecords(rows[0], rows.slice(1))) {
+    const wall = parseTikTokDateTime(r["Created Time"] ?? "");
+    if (!wall) continue;
+    const t = toInstant(wall).getTime();
+    if (latest === null || t > latest) latest = t;
+  }
+  return latest === null ? null : new Date(latest);
+}
+
 const pad = (n: number) => String(n).padStart(2, "0");
 const dateOf = (wall: WallClock): DateISO =>
   `${wall.year}-${pad(wall.month)}-${pad(wall.day)}`;

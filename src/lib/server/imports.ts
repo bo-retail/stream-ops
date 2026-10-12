@@ -10,6 +10,8 @@ import { carryOver, lateCheckouts, paidLate } from "@/lib/domain/imports/carry-o
 import type { Box } from "@/lib/domain/imports/boxes";
 import { parseCsv } from "@/lib/domain/imports/csv";
 import { parseEbayFile, readEbaySeller } from "@/lib/domain/imports/ebay";
+import { coversNight, shareDiamondDay } from "@/lib/domain/imports/diamond-day";
+import { latestOrderAt } from "@/lib/domain/imports/tiktok";
 import { ebayFallback, placeEbayFile } from "@/lib/domain/imports/ebay-business";
 import type { EbayPlacement } from "@/lib/domain/imports/ebay-business";
 import { isPlaceholderStock, listingOfNote } from "@/lib/domain/imports/placeholders";
@@ -1368,6 +1370,7 @@ export async function runImport(
   const { dropped, flags, showDate, business, fileInfo, keptToday } = read;
   let { sales, boxes, carried } = read;
 
+
   /*
     The file and the schedule disagree about whose eBay show this was.
 
@@ -1426,6 +1429,95 @@ export async function runImport(
     line, so there is nothing left to protect against. Files go up one at a time,
     in any order, whenever each is ready.
   */
+  /*
+    One diamond export for the whole day, on a day of two diamond shows.
+
+    The diamond shop sends one file for the day (10/11: orders 10:33 AM to
+    9:42 PM) where the watch shop sends one per show. Such a file is shared
+    out between the two shows (`shareDiamondDay`) and written to both diamond
+    TikTok lines every time, one of them empty if it has nothing left: a
+    corrected copy written to one line only left the other holding the first
+    copy's half — paying commission on orders cancelled since, or on the same
+    orders twice once the schedule changed.
+
+    What makes it the whole day is what it covers, cancelled orders included:
+    placed on the day show by its first order, with orders well into the night
+    show. So a correction whose night orders were all cancelled still replaces
+    the night's half, while an export of the morning alone replaces only the
+    morning's. With no night show on the schedule any more, a file the day's
+    two lines had shared goes to the day show whole, and the night's is emptied.
+
+    Two diamond TikTok files in one upload on such a day are refused: one of
+    them is the whole day, and with the other beside it every order in both
+    would be paid twice.
+  */
+  let wholeDay: { file: string; night: Date | null; onNightLine: boolean } | null = null;
+  const diamondTiktok = [
+    ...new Set(sales.filter((s) => s.business === "DIAMOND" && s.platform === "TIKTOK").map((s) => s.sourceFile)),
+  ];
+  if (business === "DIAMOND" && showDate && diamondTiktok.length > 0) {
+    const [shows, current] = await Promise.all([
+      prisma.show.findMany({
+        where: {
+          date: toDbDate(showDate),
+          business: "DIAMOND",
+          platform: "TIKTOK",
+          status: { not: "CANCELLED" },
+          release: { scheduleStatus: "PUBLISHED" },
+        },
+        select: { slot: true, startsAt: true },
+      }),
+      prisma.importBatch.findMany({
+        where: { business: "DIAMOND", showDate: toDbDate(showDate), status: "OK", platform: "TIKTOK" },
+        orderBy: { uploadedAt: "desc" },
+        select: { id: true, slot: true, files: true },
+      }),
+    ]);
+    const nightShow = shows.find((sh) => sh.slot === "NIGHT") ?? null;
+    // A first upload is shared out only on a day of both shows.
+    const night = shows.some((sh) => sh.slot === "DAY") ? nightShow : null;
+    const shasOf = (slot: "DAY" | "NIGHT") =>
+      ((current.find((b) => b.slot === slot)?.files ?? []) as { sha256?: string }[]).map((f) => f.sha256).filter(Boolean);
+    const wasShared = shasOf("DAY").some((sha) => shasOf("NIGHT").includes(sha));
+    const placedOnDay = (name: string) => sales.some((s) => s.sourceFile === name && s.show === "TikTok AM");
+    const covers = (name: string) =>
+      night !== null && coversNight(latestOrderAt(files.find((f) => f.name === name)?.text ?? ""), night.startsAt);
+    const whole = diamondTiktok.filter((name) => placedOnDay(name) && covers(name));
+
+    if (diamondTiktok.length > 1 && (whole.length > 0 || wasShared)) {
+      flags.push({
+        severity: "blocking",
+        message:
+          `${diamondTiktok.join(" and ")} are both diamond TikTok exports for ${showDate}, and the diamond shop's ` +
+          `file covers the whole day — both shows. Uploaded together, every order in both would be counted twice. ` +
+          `Upload the whole-day file on its own.`,
+      });
+    } else if (diamondTiktok.length === 1 && placedOnDay(diamondTiktok[0])) {
+      const file = diamondTiktok[0];
+      if (whole.length === 1) wholeDay = { file, night: night!.startsAt, onNightLine: true };
+      else if (wasShared && nightShow === null) wholeDay = { file, night: null, onNightLine: false };
+      else if (wasShared) {
+        /*
+          The day's two lines hold one shared file, and this one no longer
+          reaches an hour into the night show — the night show moved later, or
+          its last orders are gone from the export. A correction of the whole
+          day if it has any of the night's orders: shared out by the night
+          show's start as it is now, so nothing stays on the night line twice.
+          An export of the morning alone has none, and replaces the morning's.
+        */
+        const nightBatch = current.find((b) => b.slot === "NIGHT");
+        const theirs = nightBatch
+          ? await prisma.salesRecord.findMany({ where: { batchId: nightBatch.id }, select: { orderRef: true } })
+          : [];
+        const ours = new Set([
+          ...sales.filter((s) => s.sourceFile === file).map((s) => s.orderRef),
+          ...dropped.filter((d) => d.sourceFile === file).map((d) => d.orderRef),
+        ]);
+        if (theirs.some((r) => ours.has(r.orderRef))) wholeDay = { file, night: nightShow!.startsAt, onNightLine: true };
+      }
+    }
+  }
+
   const blocked = flags.some((f) => f.severity === "blocking");
 
   /*
@@ -1522,6 +1614,26 @@ export async function runImport(
     };
   }
 
+  /*
+    A whole-day diamond export, shared out between the day's two diamond shows
+    by the time each order was placed — decided above, done here, after the
+    refusals, so a refused file is still recorded against its own line.
+  */
+  const forcedLines: string[] = [];
+  if (wholeDay) {
+    const shared = shareDiamondDay(sales, wholeDay.file, wholeDay.night);
+    sales = shared.sales;
+    forcedLines.push("TIKTOK|DAY", "TIKTOK|NIGHT");
+    flags.push({
+      severity: "info",
+      message: wholeDay.night
+        ? `${wholeDay.file}: one diamond export for both diamond shows. ${shared.night} piece(s) ordered from the ` +
+          `night show's start were credited to the night show, the rest to the day show.`
+        : `${wholeDay.file}: one diamond export for the day. No diamond night show is on the schedule now, so all ` +
+          `of it was credited to the day show, and what the night show was given before was taken off.`,
+    });
+  }
+
   // The whole upload's figures, for what this call reports back. Each line's
   // own counts are worked out per line below.
   const summary = summariseDay(sales, boxes);
@@ -1537,7 +1649,7 @@ export async function runImport(
     One upload is one line. Anything that would fill two at once was refused
     above, so there is exactly one here.
   */
-  const lines = new Set(sales.map(lineKey));
+  const lines = new Set([...sales.map(lineKey), ...forcedLines]);
 
   /*
     An upload may still carry several files at once — three most mornings — and
@@ -1549,8 +1661,20 @@ export async function runImport(
     the exceptions list rather than anything anybody is paid from.
   */
   const lineOf = lineKey;
-  const fileLine = new Map<string, string>();
-  for (const s of sales) fileLine.set(s.sourceFile, lineOf(s));
+  // A file's lines — two for a diamond export shared between the day's shows.
+  // Its cancelled rows go with the first.
+  const fileLines = new Map<string, string[]>();
+  for (const s of sales) {
+    const lines = fileLines.get(s.sourceFile) ?? [];
+    if (!lines.includes(lineOf(s))) lines.push(lineOf(s));
+    fileLines.set(s.sourceFile, lines);
+  }
+  // A whole-day diamond file is on both of its lines, empty or not — which is
+  // also how its next correction knows to replace both.
+  // With no night show, the night line is emptied but the file is not on it:
+  // the checklist counts files, and it was not that show's export.
+  if (wholeDay) fileLines.set(wholeDay.file, wholeDay.onNightLine ? [...forcedLines] : ["TIKTOK|DAY"]);
+  const fileLine = new Map([...fileLines].map(([file, lines]) => [file, lines[0]]));
 
   const keys = [...lines];
   // What the write found out that nothing could know beforehand.
@@ -1576,9 +1700,7 @@ export async function runImport(
         const myDrops = dropped.filter(
           (d) => (fileLine.get(d.sourceFile) ?? keys[0]) === key,
         );
-        const myFiles = fileInfo.filter(
-          (f) => (fileLine.get(f.name) ?? keys[0]) === key,
-        );
+        const myFiles = fileInfo.filter((f) => (fileLines.get(f.name) ?? [keys[0]]).includes(key));
         const myBoxes = buildBoxes(mine);
 
         /*
