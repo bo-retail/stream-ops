@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireUserOrThrow } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { formatDateRange, fromDbDate, isDateISO, toDbDate } from "@/lib/domain/dates";
+import { isSlot } from "@/lib/domain/types";
 import type { Slot } from "@/lib/domain/types";
 import { businessOfRelease } from "@/lib/server/business";
 import { takenElsewhere } from "@/lib/server/availability";
@@ -21,7 +22,8 @@ function refresh() {
   revalidatePath("/admin/schedule");
 }
 
-const SLOT = z.enum(["DAY", "NIGHT"]);
+// "DAY", "NIGHT", or an extra show the release added ("EARLY AM").
+const SLOT = z.string().refine(isSlot, "That is not one of this request's shows.");
 
 /**
  * Confirms the release is taking answers at all.
@@ -187,8 +189,9 @@ export async function fillPeriod(
   const blocked = await assertEditable(user.id, d.releaseId);
   if (blocked) return { error: blocked };
 
-  const slots: Slot[] = d.slot === "BOTH" ? ["DAY", "NIGHT"] : [d.slot as Slot];
   const shows = await releaseShows(d.releaseId);
+  // "BOTH" is every show the request has — day, night and any extra one.
+  const slots: Slot[] = d.slot === "BOTH" ? [...new Set(shows.map((s) => s.slot))] : [d.slot as Slot];
 
   // Days already booked off are skipped: offering a show on a day you cannot
   // work would put a contradiction in front of the boss.

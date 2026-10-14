@@ -5,7 +5,7 @@ import { useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Check, CopyPlus, Eraser, Send, Wand2, X } from "lucide-react";
 import { Alert, Badge, Button, Card, CardHeader, Input, Select } from "@/components/ui";
-import { SLOT_SHORT } from "@/lib/domain/types";
+import { slotShort } from "@/lib/domain/types";
 import type { Slot } from "@/lib/domain/types";
 import {
   clearRelease,
@@ -255,7 +255,7 @@ export function ReleaseActions({
     priorityNames: string[];
     maxShowsPerPerson: number | null;
   };
-  slotHours: Record<Slot, { start: string; end: string }>;
+  slotHours: { slot: Slot; start: string; end: string }[];
 }) {
   const [publishState, publishAction] = useActionState<ActionState, FormData>(publishRelease, {});
   const [copyState, copyAction] = useActionState<ActionState, FormData>(copyLastRelease, {});
@@ -406,10 +406,22 @@ export function ReleaseActions({
         <div className="space-y-3 p-4">
           <form action={hoursAction} className="space-y-2">
             <input type="hidden" name="releaseId" value={releaseId} />
-            <Select name="slot" defaultValue="DAY" aria-label="Which slot">
-              {(["DAY", "NIGHT"] as const).map((slot) => (
+            <Select
+              name="slot"
+              defaultValue={slotHours[0]?.slot ?? "DAY"}
+              aria-label="Which slot"
+              onChange={(e) => {
+                // The hour boxes follow the show picked, so they start on its hours.
+                const picked = slotHours.find((h) => h.slot === e.target.value);
+                const form = e.target.form;
+                if (!picked || !form) return;
+                (form.elements.namedItem("start") as HTMLInputElement).value = picked.start;
+                (form.elements.namedItem("end") as HTMLInputElement).value = picked.end;
+              }}
+            >
+              {slotHours.map(({ slot }) => (
                 <option key={slot} value={slot}>
-                  Every {SLOT_SHORT[slot].toLowerCase()} show
+                  Every {slotShort(slot).toLowerCase()} show
                 </option>
               ))}
             </Select>
@@ -417,7 +429,7 @@ export function ReleaseActions({
               <Input
                 name="start"
                 type="time"
-                defaultValue={slotHours.DAY.start}
+                defaultValue={slotHours[0]?.start}
                 aria-label="Start time"
                 required
               />
@@ -425,7 +437,7 @@ export function ReleaseActions({
               <Input
                 name="end"
                 type="time"
-                defaultValue={slotHours.DAY.end}
+                defaultValue={slotHours[0]?.end}
                 aria-label="End time"
                 required
               />
@@ -433,8 +445,8 @@ export function ReleaseActions({
             <Submit label="Apply to the release" busy="Applying…" variant="secondary" />
           </form>
           <p className="text-xs text-ink-muted">
-            Currently {slotHours.DAY.start}–{slotHours.DAY.end} days,{" "}
-            {slotHours.NIGHT.start}–{slotHours.NIGHT.end} nights.
+            Currently{" "}
+            {slotHours.map((h) => `${slotShort(h.slot).toLowerCase()} ${h.start}–${h.end}`).join(", ")}.
           </p>
           <Result state={hoursState} />
         </div>

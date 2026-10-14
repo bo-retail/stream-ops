@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Check, CopyPlus, Eraser } from "lucide-react";
 import { Alert, Badge, Button, Card, CardHeader, Select } from "@/components/ui";
 import { formatDate } from "@/lib/domain/dates";
-import { SLOT_SHORT } from "@/lib/domain/types";
+import { slotShort, slotsInOrder } from "@/lib/domain/types";
 import type { DateISO, Slot } from "@/lib/domain/types";
 import { cn } from "@/lib/utils";
 import {
@@ -112,7 +112,7 @@ function SlotTile({
           className="flex w-full items-center justify-between gap-2 text-left disabled:cursor-not-allowed"
         >
           <span className="min-w-0">
-            <span className="block text-sm font-medium text-ink">{SLOT_SHORT[option.slot]}</span>
+            <span className="block text-sm font-medium text-ink">{slotShort(option.slot)}</span>
             <span className="block text-xs text-ink-muted">
               {option.startHM}–{option.endHM}
             </span>
@@ -222,6 +222,8 @@ export function AvailabilityEditor({
   locked: boolean;
 }) {
   const [fillState, fillAction] = useActionState<AvailabilityState, FormData>(fillPeriod, {});
+  // The shows this request asks about, in the order they run each day.
+  const fillSlots = slotsInOrder(options).filter((slot) => options.some((o) => o.slot === slot));
   const [clearState, clearAction] = useActionState<AvailabilityState, FormData>(
     clearPeriodAvailability,
     {},
@@ -243,9 +245,12 @@ export function AvailabilityEditor({
             <form action={fillAction} className="flex flex-wrap items-end gap-2">
               <input type="hidden" name="releaseId" value={releaseId} />
               <Select name="slot" defaultValue="BOTH" aria-label="Which shows" className="w-auto">
-                <option value="BOTH">Both shows, every day</option>
-                <option value="DAY">Day shows only</option>
-                <option value="NIGHT">Night shows only</option>
+                <option value="BOTH">{fillSlots.length > 2 ? "Every show, every day" : "Both shows, every day"}</option>
+                {fillSlots.map((slot) => (
+                  <option key={slot} value={slot}>
+                    {slotShort(slot)} shows only
+                  </option>
+                ))}
               </Select>
               <Submit label="Offer these" busy="Saving…" />
             </form>

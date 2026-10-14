@@ -5,7 +5,7 @@ import { getCurrentUser } from "@/lib/auth/guards";
 import { BUSINESS_SHORT } from "@/lib/domain/business";
 import { formatDate, isDateISO, minutesToHours } from "@/lib/domain/dates";
 import { formatPeriod, periodFor } from "@/lib/domain/periods";
-import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORM_SHORT, slotShort } from "@/lib/domain/types";
 import { getEmployeePeriod } from "@/lib/server/schedule";
 import { getWeekContext } from "@/lib/server/settings";
 
@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
       // Named for both kinds, not just diamonds. A printed sheet is read away
       // from the app by somebody who cannot hover anything to find out which
       // shop a shift was for.
-      show: `${BUSINESS_SHORT[show.business]} ${PLATFORM_SHORT[show.platform]} ${SLOT_SHORT[show.slot]}`,
+      show: `${BUSINESS_SHORT[show.business]} ${PLATFORM_SHORT[show.platform]} ${slotShort(show.slot)}`,
       start: show.startHM,
       end: show.endHM,
       // A cancelled shift is shown so nobody wonders where it went, but it

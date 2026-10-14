@@ -11,14 +11,18 @@ import type { Box } from "@/lib/domain/imports/boxes";
 import { parseCsv } from "@/lib/domain/imports/csv";
 import { parseEbayFile, readEbaySeller } from "@/lib/domain/imports/ebay";
 import { coversNight, shareDiamondDay } from "@/lib/domain/imports/diamond-day";
-import { latestOrderAt } from "@/lib/domain/imports/tiktok";
+import { earliestOrderAt, latestOrderAt } from "@/lib/domain/imports/tiktok";
+import { hasExtraShow, placeOnExtraShows, replacesAnotherShowsFile } from "@/lib/domain/imports/extra-shows";
+import type { TikTokShowWindow } from "@/lib/domain/imports/extra-shows";
 import { ebayFallback, placeEbayFile } from "@/lib/domain/imports/ebay-business";
 import type { EbayPlacement } from "@/lib/domain/imports/ebay-business";
 import { isPlaceholderStock, listingOfNote } from "@/lib/domain/imports/placeholders";
 import { parseTikTokFile } from "@/lib/domain/imports/tiktok";
-import { detectPlatform } from "@/lib/domain/imports/types";
+import { detectPlatform, slotOfSalesShow } from "@/lib/domain/imports/types";
 import type { DroppedRow, ImportFlag, WatchSale } from "@/lib/domain/imports/types";
+import { slotShort } from "@/lib/domain/types";
 import type { DateISO } from "@/lib/domain/types";
+import { getSettings } from "./settings";
 
 /**
  * Taking a morning's exports and turning them into the day's boxes.
@@ -1262,9 +1266,10 @@ function ebaySellerBusiness(text: string): Business | null {
 
 /** Which line of a day's checklist a sale fills. */
 function lineKey(sale: WatchSale): string {
+  // Read by the whole name: "TikTok EARLY AM" ends in "AM" and is its own show.
   return sale.platform === "EBAY"
     ? "EBAY|"
-    : `TIKTOK|${sale.show.endsWith("AM") ? "DAY" : "NIGHT"}`;
+    : `TIKTOK|${slotOfSalesShow(sale.show)}`;
 }
 
 /**
@@ -1275,15 +1280,152 @@ function lineKey(sale: WatchSale): string {
  */
 function linesIn(sales: readonly WatchSale[]): {
   platform: "TIKTOK" | "EBAY";
-  slot: "DAY" | "NIGHT" | null;
+  slot: string | null;
 } | null {
   const keys = new Set(sales.map(lineKey));
   if (keys.size !== 1) return null;
   const [platform, slot] = [...keys][0].split("|");
   return {
     platform: platform as "TIKTOK" | "EBAY",
-    slot: (slot || null) as "DAY" | "NIGHT" | null,
+    slot: (slot || null) as string | null,
   };
+}
+
+/** A refusal found only once the day was locked — see `anotherShowsFileGuard`. */
+class AnotherShowsFile extends Error {
+  constructor(readonly flags: ImportFlag[]) {
+    super("another show's file");
+  }
+}
+
+/**
+ * Every TikTok show on a date, in any release — published or still a draft —
+ * cancelled ones marked.
+ *
+ * Drafts count because the hours are the boss's plan either way, and a morning
+ * file uploaded before the schedule went out must not be taken for the day
+ * show's. Cancelled ones count because a file uploaded while the show was on
+ * still sits on its line.
+ */
+async function tiktokShowsOn(showDate: DateISO): Promise<TikTokShowWindow[]> {
+  const rows = await prisma.show.findMany({
+    where: { date: toDbDate(showDate), platform: "TIKTOK" },
+    select: { business: true, slot: true, startsAt: true, endsAt: true, status: true },
+  });
+  return rows.map(({ status, ...s }) => ({ ...s, cancelled: status === "CANCELLED" }));
+}
+
+/**
+ * On a day with an extra TikTok show, the lines this upload would overwrite
+ * with a different show's file — see `replacesAnotherShowsFile`. One refusal
+ * per such line. Diamonds are left to their own whole-day rules.
+ *
+ * An extra-show day is one whose schedule has an extra show — draft, running
+ * or called off — or whose uploads already hold one's file. The second is for
+ * an extra show deleted from the release after its file went in: the day then
+ * looks plain again, and a corrected copy of that file would go to the day
+ * show by the old rule and replace the day show's file.
+ *
+ * Asked twice: once before anything is written, so the refusal can be shown,
+ * and again inside the write after the day is locked (`db` is then the
+ * transaction), so two shows' files uploaded at the same moment cannot both
+ * pass the first time and overwrite each other.
+ */
+async function anotherShowsFileGuard(
+  business: Business,
+  showDate: DateISO,
+  sales: readonly WatchSale[],
+  dropped: readonly DroppedRow[],
+  db: Prisma.TransactionClient = prisma,
+): Promise<ImportFlag[]> {
+  if (business !== "WATCH") return [];
+  const tiktok = sales.filter((s) => s.platform === "TIKTOK" && s.business === business);
+  if (tiktok.length === 0) return [];
+
+  // What this upload brings to each line: its files' orders, sold or cancelled.
+  const incoming = new Map<string, Set<string>>();
+  const filesOn = new Map<string, Set<string>>();
+  for (const s of tiktok) {
+    const slot = slotOfSalesShow(s.show);
+    (incoming.get(slot) ?? incoming.set(slot, new Set()).get(slot)!).add(s.orderRef);
+    (filesOn.get(slot) ?? filesOn.set(slot, new Set()).get(slot)!).add(s.sourceFile);
+  }
+  for (const d of dropped) {
+    for (const [slot, files] of filesOn) if (files.has(d.sourceFile)) incoming.get(slot)!.add(d.orderRef);
+  }
+
+  // What each TikTok line holds now: its newest good upload's orders.
+  const batches = await db.importBatch.findMany({
+    where: { business, showDate: toDbDate(showDate), status: "OK", platform: "TIKTOK" },
+    orderBy: { uploadedAt: "desc" },
+    select: {
+      slot: true,
+      files: true,
+      sales: { select: { orderRef: true } },
+      drops: { select: { orderRef: true } },
+    },
+  });
+  const current = new Map<string, { orders: string[]; files: string[] }>();
+  for (const b of batches) {
+    if (b.slot === null || current.has(b.slot)) continue;
+    current.set(b.slot, {
+      orders: [...new Set([...b.sales, ...b.drops].map((r) => r.orderRef))],
+      files: [...fileNames(b.files)],
+    });
+  }
+  const holdsExtraFile = [...current.keys()].some((slot) => slot !== "DAY" && slot !== "NIGHT");
+  if (!holdsExtraFile) {
+    const shows = await db.show.findMany({
+      where: { date: toDbDate(showDate), platform: "TIKTOK", business },
+      select: { business: true, slot: true, startsAt: true, endsAt: true },
+    });
+    if (!hasExtraShow(shows, business)) return [];
+  }
+
+  const flags: ImportFlag[] = [];
+  for (const [slot, orders] of incoming) {
+    const now = current.get(slot);
+    if (!now) continue;
+    // Safe elsewhere: on a line this upload leaves alone, or arriving on another line now.
+    const elsewhere = new Set<string>();
+    for (const [other, held] of current) if (other !== slot && !incoming.has(other)) held.orders.forEach((o) => elsewhere.add(o));
+    for (const [other, arriving] of incoming) if (other !== slot) arriving.forEach((o) => elsewhere.add(o));
+    if (!replacesAnotherShowsFile(orders, now.orders, elsewhere)) continue;
+    flags.push({
+      severity: "blocking",
+      message:
+        `${[...(filesOn.get(slot) ?? [])].join(", ")} would go on the TikTok ${slotShort(slot)} show, which already has ` +
+        `${now.files.join(", ") || "a file"} — and the two share no orders, so they are different shows' exports. ` +
+        `Nothing was changed. Check that each show's file is its own export and that the schedule has the right ` +
+        `shows and hours for ${showDate}, then upload again. If the file already there belongs to another show, ` +
+        `upload both shows' files together in one go and each will go to its own show.`,
+    });
+  }
+  return flags;
+}
+
+/**
+ * The day's TikTok files, placed on the published schedule's shows when that
+ * schedule has an extra show — see `placeOnExtraShows`. `sales` is null when
+ * nothing moved, which is every day without one.
+ */
+async function placeOnScheduledShows(
+  sales: WatchSale[],
+  files: UploadedFile[],
+  showDate: DateISO,
+): Promise<{ sales: WatchSale[] | null; flags: ImportFlag[] }> {
+  if (!sales.some((s) => s.platform === "TIKTOK")) return { sales: null, flags: [] };
+  const shows = await tiktokShowsOn(showDate);
+  if (!shows.some((s) => s.slot !== "DAY" && s.slot !== "NIGHT")) return { sales: null, flags: [] };
+
+  const timezone = (await getSettings()).timezone;
+  const placed = placeOnExtraShows(
+    sales,
+    shows,
+    (name) => earliestOrderAt(files.find((f) => f.name === name)?.text ?? ""),
+    timezone,
+  );
+  return { sales: placed.sales, flags: placed.flags };
 }
 
 /**
@@ -1369,6 +1511,20 @@ export async function runImport(
   const read = readFiles(files, ebayBusiness.kind === "ambiguous" ? "WATCH" : ebayBusiness.business);
   const { dropped, flags, showDate, business, fileInfo, keptToday } = read;
   let { sales, boxes, carried } = read;
+
+  /*
+    A day with an extra TikTok show — the early morning one — places each
+    TikTok file on the show its first order falls in, by the published hours.
+    Every other day is untouched and reads exactly as it always has.
+  */
+  if (showDate) {
+    const extra = await placeOnScheduledShows(sales, files, showDate);
+    flags.push(...extra.flags);
+    if (extra.sales !== null) {
+      sales = extra.sales;
+      boxes = buildBoxes(sales);
+    }
+  }
 
 
   /*
@@ -1527,6 +1683,9 @@ export async function runImport(
       }
     }
   }
+
+  // On a day with an extra show, never overwrite another show's file.
+  if (showDate && business) flags.push(...(await anotherShowsFileGuard(business, showDate, sales, dropped)));
 
   const blocked = flags.some((f) => f.severity === "blocking");
 
@@ -1694,6 +1853,13 @@ export async function runImport(
       // Before anything about the day is read.
       if (keys.length > 0) await lockDay(tx, business ?? "WATCH", showDate);
 
+      // Asked again now the day is locked: another upload may have landed
+      // since the first asking. Thrown, so nothing below is written.
+      if (business) {
+        const late = await anotherShowsFileGuard(business, showDate, sales, dropped, tx);
+        if (late.some((f) => f.severity === "blocking")) throw new AnotherShowsFile(late);
+      }
+
       const supersededIds: string[] = [];
       const splitOrigins: string[] = [];
       const writtenIds: string[] = [];
@@ -1703,7 +1869,7 @@ export async function runImport(
         const [platform, slot] = key.split("|");
         const line = {
           platform: (platform || null) as "TIKTOK" | "EBAY" | null,
-          slot: (slot || null) as "DAY" | "NIGHT" | null,
+          slot: (slot || null) as string | null,
         };
 
         const mine = sales.filter((s) => lineOf(s) === key);
@@ -1840,7 +2006,40 @@ export async function runImport(
       };
     },
     { timeout: 120_000, maxWait: 20_000 },
-  );
+  ).catch((error: unknown) => (error instanceof AnotherShowsFile ? error : Promise.reject(error)));
+
+  // Refused once the day was locked: recorded as any refusal is, nothing written.
+  if (written instanceof AnotherShowsFile) {
+    const all = [...flags, ...written.flags];
+    const refusedLine = linesIn(sales);
+    const batch = await prisma.importBatch.create({
+      data: {
+        business: business ?? "WATCH",
+        platform: refusedLine?.platform ?? null,
+        slot: refusedLine?.slot ?? null,
+        showDate: toDbDate(showDate),
+        status: "BLOCKED",
+        uploadedById,
+        files: fileInfo,
+        flags: all as unknown as object[],
+        watchCount: 0,
+        boxCount: 0,
+        droppedCount: 0,
+      },
+      select: { id: true },
+    });
+    return {
+      batchId: batch.id,
+      status: "BLOCKED",
+      showDate,
+      business,
+      flags: all,
+      watchCount: 0,
+      boxCount: 0,
+      droppedCount: 0,
+      untouchedClosedBoxes: 0,
+    };
+  }
 
   return {
     batchId: written.batchId,

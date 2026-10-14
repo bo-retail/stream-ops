@@ -5,7 +5,7 @@ import { Badge, Card, CardHeader, LinkButton, PageHeader, Stat } from "@/compone
 import { requireBoss } from "@/lib/auth/guards";
 import { BUSINESS_LABEL, BUSINESS_SHORT } from "@/lib/domain/business";
 import { checkCandidate } from "@/lib/domain/schedule";
-import { SEATS } from "@/lib/domain/types";
+import { SEATS, SUGGESTED_HOURS, slotsInOrder } from "@/lib/domain/types";
 import {
   getReleaseView,
   toAssignmentInput,
@@ -157,12 +157,13 @@ export default async function BuildSchedulePage({
 
   // The hours the bulk-edit box starts on: whatever this release's shows
   // actually run, rather than a default that may be nothing like them.
-  const firstDay = view.shows.find((s) => s.slot === "DAY");
-  const firstNight = view.shows.find((s) => s.slot === "NIGHT");
-  const slotHours = {
-    DAY: { start: firstDay?.startHM ?? "13:00", end: firstDay?.endHM ?? "19:00" },
-    NIGHT: { start: firstNight?.startHM ?? "19:00", end: firstNight?.endHM ?? "01:00" },
-  };
+  // Every show time the release has — day, night, and any extra — in the
+  // order they run.
+  const slotHours = slotsInOrder(view.shows).map((slot) => {
+    const first = view.shows.find((s) => s.slot === slot);
+    const fallback = slot === "NIGHT" ? SUGGESTED_HOURS.NIGHT : SUGGESTED_HOURS.DAY;
+    return { slot, start: first?.startHM ?? fallback.start, end: first?.endHM ?? fallback.end };
+  });
 
   return (
     <>

@@ -90,16 +90,30 @@ export function toInstant(wall: WallClock): Date {
  * to replace what the night show was given before. Null when no time reads.
  */
 export function latestOrderAt(text: string): Date | null {
+  return orderTimes(text)?.latest ?? null;
+}
+
+/**
+ * A file's first order, cancelled or not — the moment the file is placed on a
+ * show by, exactly as the parse places it.
+ */
+export function earliestOrderAt(text: string): Date | null {
+  return orderTimes(text)?.earliest ?? null;
+}
+
+function orderTimes(text: string): { earliest: Date; latest: Date } | null {
   const rows = parseCsv(text);
   if (rows.length < 2) return null;
+  let earliest: number | null = null;
   let latest: number | null = null;
   for (const r of toRecords(rows[0], rows.slice(1))) {
     const wall = parseTikTokDateTime(r["Created Time"] ?? "");
     if (!wall) continue;
     const t = toInstant(wall).getTime();
     if (latest === null || t > latest) latest = t;
+    if (earliest === null || t < earliest) earliest = t;
   }
-  return latest === null ? null : new Date(latest);
+  return earliest === null || latest === null ? null : { earliest: new Date(earliest), latest: new Date(latest) };
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");

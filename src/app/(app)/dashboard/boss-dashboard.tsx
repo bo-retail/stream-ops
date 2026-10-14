@@ -10,12 +10,12 @@ import {
   PageHeader,
   Stat,
 } from "@/components/ui";
-import { BusinessBadge, PlatformBadge } from "@/components/show-labels";
+import { BusinessBadge, PlatformBadge, slotTone } from "@/components/show-labels";
 import { MissingReports } from "@/components/missing-reports";
 import { cn } from "@/lib/utils";
 import { prisma } from "@/lib/db";
 import { formatDate, toDbDate } from "@/lib/domain/dates";
-import { SLOT_SHORT } from "@/lib/domain/types";
+import { slotShort } from "@/lib/domain/types";
 import { getReleaseView } from "@/lib/server/schedule";
 import { listReleases } from "@/lib/server/releases";
 import { getSettings, getWeekContext } from "@/lib/server/settings";
@@ -288,8 +288,8 @@ export async function BossDashboard() {
                           the diamond ones have to be tellable at a glance. */}
                       <BusinessBadge business={show.business} />
                       <PlatformBadge platform={show.platform} />
-                      <Badge tone={show.slot === "DAY" ? "warn" : "brand"}>
-                        {SLOT_SHORT[show.slot]}
+                      <Badge tone={slotTone(show.slot)}>
+                        {slotShort(show.slot)}
                       </Badge>
                       {show.live ? <Badge tone="danger">Live</Badge> : null}
                       {!show.published ? <Badge tone="neutral">Not published</Badge> : null}

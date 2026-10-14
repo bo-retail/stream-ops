@@ -3,10 +3,10 @@
 import { useActionState, useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Ban, Clock, RotateCcw, X } from "lucide-react";
-import { PlatformBadge } from "@/components/show-labels";
+import { PlatformBadge, slotTone } from "@/components/show-labels";
 import { Alert, Badge, Button, Card, CardHeader, Input, Select } from "@/components/ui";
 import { formatDate, formatMinutes } from "@/lib/domain/dates";
-import { SLOT_SHORT } from "@/lib/domain/types";
+import { slotShort } from "@/lib/domain/types";
 import type { DateISO, Platform, ShowStatus, Slot } from "@/lib/domain/types";
 import { cn } from "@/lib/utils";
 import { assignToShow, clearSeat, toggleShowCancelled, updateShowHours } from "./actions";
@@ -279,7 +279,7 @@ function ShowCard({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <PlatformBadge platform={show.platform} />
-          <Badge tone={show.slot === "DAY" ? "warn" : "brand"}>{SLOT_SHORT[show.slot]}</Badge>
+          <Badge tone={slotTone(show.slot)}>{slotShort(show.slot)}</Badge>
           {cancelled ? <Badge tone="neutral">Cancelled</Badge> : null}
         </div>
 

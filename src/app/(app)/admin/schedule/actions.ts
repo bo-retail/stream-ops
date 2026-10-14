@@ -14,7 +14,7 @@ import {
 } from "@/lib/domain/dates";
 import { blockerFor, rankCandidates } from "@/lib/domain/assign";
 import type { Candidate } from "@/lib/domain/assign";
-import { PLATFORM_SHORT, SEATS, SEATS_PER_SHOW, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORM_SHORT, SEATS, SEATS_PER_SHOW, isSlot, platformRunsSlot, slotShort } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
 import { businessOfRelease } from "@/lib/server/business";
 import { busyPeriods, getReleaseView, planCopyLastRelease } from "@/lib/server/schedule";
@@ -51,7 +51,7 @@ async function loadShow(showId: string) {
 }
 
 function labelFor(show: { date: Date; platform: Platform; slot: Slot }) {
-  return `${PLATFORM_SHORT[show.platform]} ${SLOT_SHORT[show.slot]} on ${formatDate(fromDbDate(show.date))}`;
+  return `${PLATFORM_SHORT[show.platform]} ${slotShort(show.slot)} on ${formatDate(fromDbDate(show.date))}`;
 }
 
 /* ------------------------------------------------------------- assignments */
@@ -343,10 +343,10 @@ const AddShowSchema = z.object({
   releaseId: z.string().min(1),
   dateISO: z.string().refine(isDateISO, "Pick a valid date."),
   platform: z.enum(["TIKTOK", "EBAY"]),
-  slot: z.enum(["DAY", "NIGHT"]),
+  slot: z.string().refine(isSlot, "That is not a show name the app can keep."),
   start: z.string().refine(isTimeHM, "Use 24-hour times like 13:00."),
   end: z.string().refine(isTimeHM, "Use 24-hour times like 19:00."),
-});
+}).refine((d) => platformRunsSlot(d.platform, d.slot), "An extra show can only be a TikTok show.");
 
 /** Recreates a show that was deleted outright. */
 export async function addShow(_prev: ActionState, formData: FormData): Promise<ActionState> {
@@ -396,6 +396,8 @@ export async function addShow(_prev: ActionState, formData: FormData): Promise<A
   const created = await prisma.show.create({
     data: {
       releaseId,
+      // Without it a show added to a diamond release was saved as a watch show.
+      business,
       date: toDbDate(d.dateISO),
       platform: d.platform,
       slot: d.slot,
@@ -411,18 +413,18 @@ export async function addShow(_prev: ActionState, formData: FormData): Promise<A
       entityId: created.id,
       action: "CREATE",
       actorId: boss.id,
-      summary: `Added ${PLATFORM_SHORT[d.platform]} ${SLOT_SHORT[d.slot]} on ${formatDate(d.dateISO)}`,
+      summary: `Added ${PLATFORM_SHORT[d.platform]} ${slotShort(d.slot)} on ${formatDate(d.dateISO)}`,
     },
   });
 
   refresh();
-  return { ok: `Added ${PLATFORM_SHORT[d.platform]} ${SLOT_SHORT[d.slot].toLowerCase()}.` };
+  return { ok: `Added ${PLATFORM_SHORT[d.platform]} ${slotShort(d.slot).toLowerCase()}.` };
 }
 
 const ReleaseSchema = z.object({ releaseId: z.string().min(1) });
 
 const BulkHoursSchema = ReleaseSchema.extend({
-  slot: z.enum(["DAY", "NIGHT"]),
+  slot: z.string().refine(isSlot, "That is not a show name the app can keep."),
   start: z.string().refine(isTimeHM, "Use 24-hour times like 13:00."),
   end: z.string().refine(isTimeHM, "Use 24-hour times like 19:00."),
 });
@@ -459,7 +461,7 @@ export async function setSlotHoursForRelease(
     where: { releaseId: release.id, slot: d.slot },
     select: { id: true, date: true },
   });
-  if (shows.length === 0) return { error: `There are no ${SLOT_SHORT[d.slot].toLowerCase()} shows in this release.` };
+  if (shows.length === 0) return { error: `There are no ${slotShort(d.slot).toLowerCase()} shows in this release.` };
 
   await prisma.$transaction([
     ...shows.map((show) => {
@@ -477,13 +479,13 @@ export async function setSlotHoursForRelease(
         entityId: release.id,
         action: "SET_SLOT_HOURS",
         actorId: boss.id,
-        summary: `Every ${SLOT_SHORT[d.slot].toLowerCase()} show set to ${d.start}–${d.end} (${shows.length} shows)`,
+        summary: `Every ${slotShort(d.slot).toLowerCase()} show set to ${d.start}–${d.end} (${shows.length} shows)`,
       },
     }),
   ]);
 
   refresh();
-  return { ok: `${shows.length} ${SLOT_SHORT[d.slot].toLowerCase()} show(s) now run ${d.start}–${d.end}.` };
+  return { ok: `${shows.length} ${slotShort(d.slot).toLowerCase()} show(s) now run ${d.start}–${d.end}.` };
 }
 
 /** Publishes a release's schedule, so the team can see it. */
@@ -761,7 +763,7 @@ async function buildProposal(releaseId: string): Promise<Proposal | null> {
 
   for (const show of view.shows) {
     if (show.status === "CANCELLED") continue;
-    const label = `${PLATFORM_SHORT[show.platform]} ${SLOT_SHORT[show.slot]} on ${formatDate(show.dateISO)}`;
+    const label = `${PLATFORM_SHORT[show.platform]} ${slotShort(show.slot)} on ${formatDate(show.dateISO)}`;
 
     for (const seat of SEATS) {
       totalSeats++;

@@ -7,7 +7,8 @@
  */
 
 import type { Business } from "../business";
-import type { DateISO } from "../types";
+import { isSlot, isStandardSlot } from "../types";
+import type { DateISO, Slot } from "../types";
 
 export type ImportPlatform = "TIKTOK" | "EBAY";
 
@@ -15,7 +16,54 @@ export type ImportPlatform = "TIKTOK" | "EBAY";
  * Where a watch sold. Not the same thing as who is paid for it — see
  * `shiftTag`. An item listed for the morning show can sell in the evening one.
  */
-export type ShowKey = "TikTok AM" | "TikTok PM" | "eBay AM" | "eBay PM";
+export type ShowKey =
+  | "TikTok AM"
+  | "TikTok PM"
+  | "eBay AM"
+  | "eBay PM"
+  /** An extra show a release added, by its name: "TikTok EARLY AM". */
+  | `TikTok ${string}`
+  | `eBay ${string}`;
+
+/**
+ * What a sales record calls a show: "TikTok AM" for the day show, "TikTok PM"
+ * for the night, and the show's own name for an extra one — "TikTok EARLY AM".
+ */
+export function showNameFor(platform: ImportPlatform, slot: Slot): ShowKey {
+  const where = platform === "TIKTOK" ? "TikTok" : "eBay";
+  if (slot === "DAY") return `${where} AM`;
+  if (slot === "NIGHT") return `${where} PM`;
+  return `${where} ${slot}`;
+}
+
+/**
+ * The slot a sales record's show name means — the reverse of `showNameFor`.
+ *
+ * Read whole, never by its last two letters: "TikTok EARLY AM" ends in "AM"
+ * and is not the day show. Null for a name that is not a show at all.
+ */
+export function slotOfShowName(show: string): { platform: ImportPlatform; slot: Slot } | null {
+  const match = /^(tiktok|ebay)\s+(.+)$/i.exec(show.trim());
+  if (!match) return null;
+  const platform: ImportPlatform = match[1].toLowerCase() === "tiktok" ? "TIKTOK" : "EBAY";
+  const rest = match[2].replace(/\s+/g, " ").toUpperCase();
+  if (rest === "AM") return { platform, slot: "DAY" };
+  if (rest === "PM") return { platform, slot: "NIGHT" };
+  // Only a name an extra show could have: anything else (a stray "TikTok Day")
+  // is no show name the app writes, and reads as it always did.
+  return isSlot(rest) && !isStandardSlot(rest) ? { platform, slot: rest } : null;
+}
+
+/**
+ * The slot of a stored sales record's show, always answering.
+ *
+ * A name `slotOfShowName` cannot read is placed the way every record was before
+ * extra shows existed — by whether it ends in AM — so nothing already stored
+ * reads differently than it did.
+ */
+export function slotOfSalesShow(show: string): Slot {
+  return slotOfShowName(show)?.slot ?? (show.trim().toUpperCase().endsWith("AM") ? "DAY" : "NIGHT");
+}
 
 /**
  * One paid watch. The unified record every downstream view is built from —

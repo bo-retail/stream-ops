@@ -4,7 +4,7 @@ import type { NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth/guards";
 import { BUSINESS_LABEL } from "@/lib/domain/business";
 import { formatDate, minutesToHours } from "@/lib/domain/dates";
-import { DAILY_SHOWS, PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORMS, PLATFORM_SHORT, slotShort, slotsInOrder } from "@/lib/domain/types";
 import { getReleaseView } from "@/lib/server/schedule";
 
 /**
@@ -66,8 +66,15 @@ export async function GET(request: NextRequest) {
       : "DRAFT — not yet published to the team";
   sub.font = { italic: true, size: 10, color: { argb: "FF5B6472" } };
 
-  // One column per show: TikTok Day, TikTok Night, eBay Day, eBay Night.
-  const columns = DAILY_SHOWS.map(({ platform, slot }) => ({ platform, slot }));
+  // One column per show: TikTok Day, TikTok Night, eBay Day, eBay Night, and any
+  // extra show this release runs (an early morning TikTok) where its hours put it.
+  // An extra column only on the platform that has it.
+  const slots = slotsInOrder(view.shows);
+  const columns = PLATFORMS.flatMap((platform) =>
+    slots
+      .filter((slot) => slot === "DAY" || slot === "NIGHT" || view.shows.some((s) => s.platform === platform && s.slot === slot))
+      .map((slot) => ({ platform, slot })),
+  );
 
   grid.columns = [
     { key: "day", width: 20 },
@@ -83,7 +90,7 @@ export async function GET(request: NextRequest) {
 
   const headerBottom = grid.getRow(4);
   columns.forEach((c, i) => {
-    headerBottom.getCell(i + 2).value = `${SLOT_SHORT[c.slot]} show`;
+    headerBottom.getCell(i + 2).value = `${slotShort(c.slot)} show`;
   });
   headerBottom.font = { bold: true, size: 10 };
   headerBottom.fill = { type: "pattern", pattern: "solid", fgColor: { argb: MUTED_FILL } };
@@ -146,7 +153,7 @@ export async function GET(request: NextRequest) {
     const row = shows.addRow({
       date: formatDate(show.dateISO),
       platform: PLATFORM_SHORT[show.platform],
-      slot: SLOT_SHORT[show.slot],
+      slot: slotShort(show.slot),
       start: show.startHM,
       end: show.endHM,
       hours: Number(minutesToHours(show.minutes)),
@@ -198,7 +205,7 @@ export async function GET(request: NextRequest) {
       detail: theirs
         .map(
           (show) =>
-            `${formatDate(show.dateISO, "short")} ${PLATFORM_SHORT[show.platform]} ${SLOT_SHORT[show.slot]}`,
+            `${formatDate(show.dateISO, "short")} ${PLATFORM_SHORT[show.platform]} ${slotShort(show.slot)}`,
         )
         .join(", "),
     });

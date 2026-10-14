@@ -10,11 +10,12 @@
 import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client";
-import type { Platform, Slot } from "../src/generated/prisma/enums";
+import type { Platform } from "../src/generated/prisma/enums";
 import { hashPassword } from "../src/lib/auth/password";
 import { resolveSlotInstants, toDbDate, todayISO } from "../src/lib/domain/dates";
 import { nextPeriod, periodDates, periodFor } from "../src/lib/domain/periods";
-import { PLATFORMS, SLOTS } from "../src/lib/domain/types";
+import { PLATFORMS, STANDARD_SLOTS } from "../src/lib/domain/types";
+import type { Slot } from "../src/lib/domain/types";
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
@@ -161,7 +162,7 @@ async function main() {
     // Four shows a day: both platforms, day and night.
     const showRows = dates.flatMap((dateISO) =>
       PLATFORMS.flatMap((platform) =>
-        SLOTS.map((slot) => {
+        STANDARD_SLOTS.map((slot) => {
           const [start, end] = hoursFor(slot as Slot);
           const { startsAt, endsAt } = resolveSlotInstants(dateISO, start, end, TZ);
           return {
@@ -182,7 +183,7 @@ async function main() {
     const availability = [];
     for (const [index, employee] of employees.entries()) {
       for (const dateISO of dates) {
-        for (const slot of SLOTS) {
+        for (const slot of STANDARD_SLOTS) {
           if (random() < 0.35) continue; // not free for this one
           availability.push({
             userId: employee.id,

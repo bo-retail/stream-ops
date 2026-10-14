@@ -185,9 +185,9 @@ describe("reading the stored file list", () => {
 });
 
 describe("the day's upload checklist", () => {
-  const label = (b: "WATCH" | "DIAMOND", p: "TIKTOK" | "EBAY", s: "DAY" | "NIGHT" | null) =>
+  const label = (b: "WATCH" | "DIAMOND", p: "TIKTOK" | "EBAY", s: string | null) =>
     `${b === "WATCH" ? "" : "Diamond "}${p === "TIKTOK" ? "TikTok" : "eBay"}${
-      s ? ` ${s === "DAY" ? "Day" : "Night"}` : ""
+      s ? ` ${s === "DAY" ? "Day" : s === "NIGHT" ? "Night" : s}` : ""
     }`;
 
   it("lists one line per TikTok show and one per seller account on eBay", () => {

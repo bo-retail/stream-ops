@@ -4,7 +4,7 @@ import { fromDbDate, toDbDate } from "@/lib/domain/dates";
 import { paidWindow, showClampsPay } from "@/lib/domain/hours";
 import { periodFor } from "@/lib/domain/periods";
 import type { Period } from "@/lib/domain/periods";
-import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORM_SHORT, slotShort } from "@/lib/domain/types";
 import type { DateISO } from "@/lib/domain/types";
 import { getSettings } from "./settings";
 
@@ -123,7 +123,7 @@ type Row = {
     date: Date;
     business: "WATCH" | "DIAMOND";
     platform: "TIKTOK" | "EBAY";
-    slot: "DAY" | "NIGHT";
+    slot: string;
     startsAt: Date;
     endsAt: Date;
     status: "SCHEDULED" | "CANCELLED";
@@ -185,7 +185,7 @@ function toView(row: Row, timezone: string): TimeEntryView {
     shift: row.show
       ? {
           label:
-            `${PLATFORM_SHORT[row.show.platform]} ${SLOT_SHORT[row.show.slot]}` +
+            `${PLATFORM_SHORT[row.show.platform]} ${slotShort(row.show.slot)}` +
             (row.show.status === "CANCELLED" ? " (cancelled)" : ""),
           startHM: clock.format(row.show.startsAt),
           endHM: clock.format(row.show.endsAt),

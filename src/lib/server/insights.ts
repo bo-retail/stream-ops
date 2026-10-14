@@ -5,7 +5,9 @@ import type { Business } from "@/lib/domain/business";
 import { addDays, datesBetween, fromDbDate, toDbDate, todayISO } from "@/lib/domain/dates";
 import { change, hotThreshold, previousRange } from "@/lib/domain/insights";
 import type { Change } from "@/lib/domain/insights";
+import { slotShort } from "@/lib/domain/types";
 import type { DateISO } from "@/lib/domain/types";
+import { slotOfSalesShow } from "@/lib/domain/imports/types";
 import { picturesFor } from "./inventory";
 import { latestBatchIds, loadedSpan } from "./sales-data";
 import { getSettings } from "./settings";
@@ -333,7 +335,8 @@ export async function getSalesInsights(from: DateISO, to: DateISO): Promise<Sale
   // same reason as the shows above.
   const slots = new Map<string, { revenueCents: number; units: number }>();
   for (const row of byShowRows) {
-    const time = row.show.trim().toUpperCase().endsWith("AM") ? "Day" : "Night";
+    // Read whole: "TikTok EARLY AM" is its own show, not the day show.
+    const time = slotShort(slotOfSalesShow(row.show));
     const slot = row.business === "WATCH" ? time : `${BUSINESS_SHORT[row.business]} ${time}`;
     const found = slots.get(slot) ?? { revenueCents: 0, units: 0 };
     found.revenueCents += row._sum.netItemPriceCents ?? 0;

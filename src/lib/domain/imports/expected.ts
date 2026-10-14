@@ -16,6 +16,7 @@
  */
 
 import type { Business } from "../business";
+import { compareSlots } from "../types";
 import type { Platform, Slot } from "../types";
 
 /** One show that ran, and therefore one thing the day's reports must account for. */
@@ -26,6 +27,8 @@ export interface DayShow {
   platform: Platform;
   slot: Slot;
   cancelled: boolean;
+  /** When it starts, if known — places an extra show among the day's lines. */
+  startsAt?: Date;
 }
 
 export interface ExpectedFiles {
@@ -72,11 +75,29 @@ export function expectedLinesFor(
     });
   }
 
-  // Watches before diamonds, TikTok before eBay, day before night — the order
-  // the morning actually happens in.
-  const rank = (l: ExpectedLine) =>
-    `${l.business === "WATCH" ? 0 : 1}${l.platform === "TIKTOK" ? 0 : 1}${l.slot === "NIGHT" ? 1 : 0}`;
-  return [...lines.values()].sort((a, b) => rank(a).localeCompare(rank(b)));
+  /*
+    Watches before diamonds, TikTok before eBay, and the shows in the order
+    they run — an early morning show before the day show, the day before the
+    night. By start time where the schedule gave one; otherwise day, night,
+    then any extra show by name.
+  */
+  const firstStart = new Map<string, number>();
+  for (const show of live) {
+    const t = show.startsAt?.getTime();
+    if (t === undefined) continue;
+    const key = `${show.business}|${show.platform}|${show.slot}`;
+    firstStart.set(key, Math.min(firstStart.get(key) ?? t, t));
+  }
+  const group = (l: ExpectedLine) => (l.business === "WATCH" ? 0 : 2) + (l.platform === "TIKTOK" ? 0 : 1);
+  const start = (l: ExpectedLine) =>
+    l.slot === null ? undefined : firstStart.get(`${l.business}|${l.platform}|${l.slot}`);
+  return [...lines.values()].sort((a, b) => {
+    if (group(a) !== group(b)) return group(a) - group(b);
+    const sa = start(a);
+    const sb = start(b);
+    if (sa !== undefined && sb !== undefined && sa !== sb) return sa - sb;
+    return compareSlots(a.slot ?? "", b.slot ?? "");
+  });
 }
 
 export function expectedFilesFor(shows: readonly DayShow[]): ExpectedFiles {

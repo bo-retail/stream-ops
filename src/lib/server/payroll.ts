@@ -5,9 +5,10 @@ import { payFor, showKey } from "@/lib/domain/payroll";
 import type { PersonPay, Rates, ShowKey } from "@/lib/domain/payroll";
 import { BUSINESS_SHORT } from "@/lib/domain/business";
 import type { Business } from "@/lib/domain/business";
-import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORM_SHORT, slotShort } from "@/lib/domain/types";
 import type { DateISO, Platform, Slot } from "@/lib/domain/types";
 import { fieldsToPosition, positionName } from "@/app/(app)/admin/team/position";
+import { slotOfSalesShow } from "@/lib/domain/imports/types";
 import { latestBatchIds } from "./sales-data";
 import { getSettings } from "./settings";
 import { getEntriesInRange, totalsByPerson } from "./timeclock";
@@ -79,7 +80,7 @@ export interface PayrollPeriod {
  * exception keeps every other line exactly as it was.
  */
 function labelFor(business: Business, platform: Platform, slot: Slot): string {
-  const show = `${PLATFORM_SHORT[platform]} ${SLOT_SHORT[slot]}`;
+  const show = `${PLATFORM_SHORT[platform]} ${slotShort(slot)}`;
   return business === "WATCH" ? show : `${BUSINESS_SHORT[business]} ${show}`;
 }
 
@@ -110,8 +111,9 @@ async function salesByShow(from: DateISO, to: DateISO): Promise<Map<string, Show
       business: row.business,
       dateISO: fromDbDate(row.showDate),
       platform: row.platform,
-      // "TikTok AM" / "eBay PM" — the half is the last two characters.
-      slot: row.show.trim().toUpperCase().endsWith("AM") ? "DAY" : "NIGHT",
+      // "TikTok AM" / "eBay PM" / "TikTok EARLY AM" — read whole, because an
+      // extra show's name can end in AM too and is not the day show.
+      slot: slotOfSalesShow(row.show),
     };
 
     const id = showKey(key);

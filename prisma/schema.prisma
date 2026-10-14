@@ -65,13 +65,6 @@ enum Platform {
   EBAY
 }
 
-/// Which of the day's two shows. Times come from settings and can be overridden
-/// on any individual show.
-enum Slot {
-  DAY
-  NIGHT
-}
-
 enum ShowStatus {
   SCHEDULED
   CANCELLED
@@ -277,7 +270,10 @@ model Show {
   business  Business   @default(WATCH)
   date      DateTime   @db.Date
   platform  Platform
-  slot      Slot
+  /// "DAY" or "NIGHT" for the standard two shows, or the capitalised name of
+  /// an extra show the boss added to the release ("EARLY AM"). Text rather than
+  /// an enum since 2026-10-14, so a release can run as many shows as it likes.
+  slot      String
   startsAt  DateTime
   endsAt    DateTime
   status    ShowStatus @default(SCHEDULED)
@@ -340,7 +336,7 @@ model Availability {
   /// Denormalised from the release, for the unique key below.
   business  Business @default(WATCH)
   date      DateTime @db.Date
-  slot      Slot
+  slot      String
   createdAt DateTime @default(now())
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -658,7 +654,7 @@ model ImportBatch {
   /// the day — which is why uploading one missing file would have taken every
   /// other sale and every unpacked box with it.
   platform Platform?
-  slot     Slot?
+  slot     String?
 
   uploadedById String?
   uploadedAt   DateTime @default(now())

@@ -10,7 +10,7 @@ import {
 import type { DayShow, ExpectedFiles } from "@/lib/domain/imports/expected";
 import { BUSINESS_SHORT } from "@/lib/domain/business";
 import type { Business } from "@/lib/domain/business";
-import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORM_SHORT, slotShort } from "@/lib/domain/types";
 import type { DateISO, Platform, Slot } from "@/lib/domain/types";
 import { latestBatchIds } from "./sales-data";
 import { getSettings } from "./settings";
@@ -36,7 +36,7 @@ export const LOOK_BACK_DAYS = 14;
  * slot — its one export covers the whole day however many eBay shows ran.
  */
 function labelLine(business: Business, platform: Platform, slot: Slot | null): string {
-  const what = `${PLATFORM_SHORT[platform]}${slot ? ` ${SLOT_SHORT[slot]}` : ""}`;
+  const what = `${PLATFORM_SHORT[platform]}${slot ? ` ${slotShort(slot)}` : ""}`;
   return `${BUSINESS_SHORT[business]} ${what}`;
 }
 
@@ -135,7 +135,7 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
         date: { gte: toDbDate(from), lte: toDbDate(today) },
         release: { scheduleStatus: "PUBLISHED" },
       },
-      select: { date: true, business: true, platform: true, slot: true, status: true },
+      select: { date: true, business: true, platform: true, slot: true, status: true, startsAt: true },
       orderBy: [{ date: "asc" }, { platform: "asc" }, { slot: "asc" }],
     }),
     prisma.importBatch.findMany({
@@ -188,6 +188,7 @@ export async function listShowDays(lookBackDays = LOOK_BACK_DAYS): Promise<ShowD
       platform: row.platform,
       slot: row.slot,
       cancelled: row.status === "CANCELLED",
+      startsAt: row.startsAt,
     });
     showsByDate.set(key, list);
   }

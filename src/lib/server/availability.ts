@@ -2,7 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { BUSINESS_SHORT } from "@/lib/domain/business";
 import { addDays, datesBetween, fromDbDate, instantsOverlap, toDbDate } from "@/lib/domain/dates";
-import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORM_SHORT, slotShort } from "@/lib/domain/types";
 import type { DateISO, Slot } from "@/lib/domain/types";
 import { getSettings } from "./settings";
 import type { ReleaseSummary } from "./releases";
@@ -73,7 +73,7 @@ export async function takenElsewhere(userId: string, releaseId: string): Promise
     if (!taken.has(key)) {
       taken.set(
         key,
-        `${BUSINESS_SHORT[other.show.business]} ${PLATFORM_SHORT[other.show.platform]} ${SLOT_SHORT[other.show.slot]}`,
+        `${BUSINESS_SHORT[other.show.business]} ${PLATFORM_SHORT[other.show.platform]} ${slotShort(other.show.slot)}`,
       );
     }
   }
@@ -174,7 +174,10 @@ export async function getAvailabilityForRelease(
   // a slot is described by whichever of its shows is still scheduled.
   const options: ShowOption[] = [];
   for (const date of dates) {
-    for (const slot of ["DAY", "NIGHT"] as const) {
+    // Every show time the day has, in the order they start — an early morning
+    // show before the day show.
+    const slotsToday = [...new Set(showRows.filter((s) => fromDbDate(s.date) === date).map((s) => s.slot))];
+    for (const slot of slotsToday) {
       const inSlot = showRows.filter((s) => fromDbDate(s.date) === date && s.slot === slot);
       if (inSlot.length === 0) continue;
       const live = inSlot.filter((s) => s.status === "SCHEDULED");

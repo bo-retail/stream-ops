@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/auth/guards";
 import { prisma } from "@/lib/db";
 import { formatMinutes } from "@/lib/domain/dates";
 import { formatPeriod, periodFor } from "@/lib/domain/periods";
-import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORM_SHORT, slotShort } from "@/lib/domain/types";
 import {
   getEntriesInRange,
   getOpenEntry,
@@ -61,7 +61,7 @@ export default async function TimeClockPage() {
     });
     if (upcoming) {
       nextShift = {
-        label: `${PLATFORM_SHORT[upcoming.show.platform]} ${SLOT_SHORT[upcoming.show.slot]}`,
+        label: `${PLATFORM_SHORT[upcoming.show.platform]} ${slotShort(upcoming.show.slot)}`,
         hours: `${clock.format(upcoming.show.startsAt)}–${clock.format(upcoming.show.endsAt)}`,
         dateISO: upcoming.show.date.toISOString().slice(0, 10),
       };

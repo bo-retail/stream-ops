@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui";
 import { BUSINESS_SHORT } from "@/lib/domain/business";
 import type { Business } from "@/lib/domain/business";
-import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORM_SHORT, slotShort } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
 
 export function PlatformBadge({ platform }: { platform: Platform }) {
@@ -26,6 +26,11 @@ export function BusinessBadge({ business }: { business: Business }) {
   );
 }
 
+/** Day amber, night blue, and an extra show (an early morning one) green. */
+export function slotTone(slot: Slot): "warn" | "brand" | "ok" {
+  return slot === "DAY" ? "warn" : slot === "NIGHT" ? "brand" : "ok";
+}
+
 export function SlotBadge({ slot }: { slot: Slot }) {
-  return <Badge tone={slot === "DAY" ? "warn" : "brand"}>{SLOT_SHORT[slot]}</Badge>;
+  return <Badge tone={slotTone(slot)}>{slotShort(slot)}</Badge>;
 }

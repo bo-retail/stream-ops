@@ -17,7 +17,7 @@ import { MissingReports } from "@/components/missing-reports";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { BUSINESS_SHORT } from "@/lib/domain/business";
 import { formatDate } from "@/lib/domain/dates";
-import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORM_SHORT, slotShort } from "@/lib/domain/types";
 import { listShowDays, missingReports } from "@/lib/server/shipping";
 import type { DayShow } from "@/lib/server/shipping";
 import { RemoveReport } from "./remove-report";
@@ -41,7 +41,7 @@ function shows(list: DayShow[]) {
         <span key={`${s.business}-${s.platform}-${s.slot}`}>
           {i > 0 ? <span className="text-ink-subtle"> · </span> : null}
           <span className={s.cancelled ? "text-ink-subtle line-through" : "text-ink"}>
-            {BUSINESS_SHORT[s.business]} {PLATFORM_SHORT[s.platform]} {SLOT_SHORT[s.slot]}
+            {BUSINESS_SHORT[s.business]} {PLATFORM_SHORT[s.platform]} {slotShort(s.slot)}
           </span>
         </span>
       ))}

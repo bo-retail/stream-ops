@@ -5,18 +5,40 @@ import { useRouter } from "next/navigation";
 import { Check, Send, Trash2 } from "lucide-react";
 import { Alert, Badge, Button, Card, CardHeader, Input, Label, Select } from "@/components/ui";
 import { formatDate } from "@/lib/domain/dates";
-import { PLATFORM_SHORT, SLOT_SHORT, SUGGESTED_HOURS } from "@/lib/domain/types";
+import {
+  compareSlots,
+  normaliseSlotName,
+  PLATFORM_SHORT,
+  slotShort,
+  isStandardSlot,
+  slotsInOrder,
+  SUGGESTED_HOURS,
+} from "@/lib/domain/types";
 import type { DateISO, Platform, Slot } from "@/lib/domain/types";
 import { deleteRelease, getDeleteImpact, setReleaseRules, setReleaseShows } from "./actions";
 import type { DeleteImpact, ReleaseState } from "./actions";
 
-/** The four shows that can exist on a day, in the order they appear as columns. */
-const COLUMNS: { platform: Platform; slot: Slot; key: string }[] = [
-  { platform: "TIKTOK", slot: "DAY", key: "TIKTOK|DAY" },
-  { platform: "EBAY", slot: "DAY", key: "EBAY|DAY" },
-  { platform: "TIKTOK", slot: "NIGHT", key: "TIKTOK|NIGHT" },
-  { platform: "EBAY", slot: "NIGHT", key: "EBAY|NIGHT" },
-];
+/** One time of day a show can run in this release: its hours, for every day it is ticked. */
+interface ShowTime {
+  slot: Slot;
+  start: string;
+  end: string;
+}
+
+/**
+ * The release's show times: day and night always, plus every extra show its
+ * shows already use, in the order they run. Hours from the shows themselves.
+ */
+function initialTimes(existing: readonly ExistingShow[]): ShowTime[] {
+  return slotsInOrder(existing).map((slot) => {
+    const first = existing.find((s) => s.slot === slot);
+    const fallback = slot === "NIGHT" ? SUGGESTED_HOURS.NIGHT : SUGGESTED_HOURS.DAY;
+    return { slot, start: first?.startHM ?? fallback.start, end: first?.endHM ?? fallback.end };
+  });
+}
+
+/** Earliest start first, so an early morning show sits before the day show. */
+const byStart = (a: ShowTime, b: ShowTime) => a.start.localeCompare(b.start) || compareSlots(a.slot, b.slot);
 
 export interface ExistingShow {
   dateISO: DateISO;
@@ -67,14 +89,54 @@ export function Composer({
   const [pending, startTransition] = useTransition();
   const [state, setState] = useState<ReleaseState>({});
 
-  // Hours are set per slot for the whole release; one-off changes to a single
-  // show are made later on the schedule page, where the context is the show.
-  const firstDay = existing.find((s) => s.slot === "DAY");
-  const firstNight = existing.find((s) => s.slot === "NIGHT");
-  const [dayStart, setDayStart] = useState(firstDay?.startHM ?? SUGGESTED_HOURS.DAY.start);
-  const [dayEnd, setDayEnd] = useState(firstDay?.endHM ?? SUGGESTED_HOURS.DAY.end);
-  const [nightStart, setNightStart] = useState(firstNight?.startHM ?? SUGGESTED_HOURS.NIGHT.start);
-  const [nightEnd, setNightEnd] = useState(firstNight?.endHM ?? SUGGESTED_HOURS.NIGHT.end);
+  // Hours are set per show time for the whole release; one-off changes to a
+  // single show are made later on the schedule page, where the context is the show.
+  const [times, setTimes] = useState<ShowTime[]>(() => initialTimes(existing));
+  const [newName, setNewName] = useState("");
+  const [newStart, setNewStart] = useState("07:00");
+  const [newEnd, setNewEnd] = useState("13:00");
+  const [timeError, setTimeError] = useState<string | null>(null);
+
+  /**
+   * The grid's columns: each show time on TikTok, then on eBay, in the order
+   * they run. An extra show is TikTok only — an eBay file says only AM or PM on
+   * each item, so a third eBay show could never be credited with its sales.
+   */
+  const columns = useMemo(
+    () =>
+      [...times].sort(byStart).flatMap((t) =>
+        (isStandardSlot(t.slot) ? (["TIKTOK", "EBAY"] as const) : (["TIKTOK"] as const)).map((platform) => ({
+          platform,
+          slot: t.slot,
+          key: `${platform}|${t.slot}`,
+        })),
+      ),
+    [times],
+  );
+
+  function setHours(slot: Slot, field: "start" | "end", value: string) {
+    setTimes((prev) => prev.map((t) => (t.slot === slot ? { ...t, [field]: value } : t)));
+  }
+
+  function addTime() {
+    const named = normaliseSlotName(newName);
+    if ("error" in named) return setTimeError(named.error);
+    if (times.some((t) => t.slot === named.slot)) return setTimeError(`There is already a ${named.slot} show.`);
+    if (!newStart || !newEnd) return setTimeError("Give the show a start and an end.");
+    setTimes((prev) => [...prev, { slot: named.slot, start: newStart, end: newEnd }]);
+    setNewName("");
+    setTimeError(null);
+  }
+
+  /** Takes an extra show time off, with every tick under it. Never one somebody is scheduled on. */
+  function removeTime(slot: Slot) {
+    if ([...staffedKeys].some((key) => key.endsWith(`|${slot}`))) {
+      return setTimeError(`Somebody is scheduled on a ${slotShort(slot)} show, so it cannot be taken off.`);
+    }
+    setTimes((prev) => prev.filter((t) => t.slot !== slot));
+    setTicked((prev) => new Set([...prev].filter((key) => !key.endsWith(`|${slot}`))));
+    setTimeError(null);
+  }
 
   const [ticked, setTicked] = useState<Set<string>>(
     () => new Set(existing.map((s) => cellKey(s.dateISO, s.platform, s.slot))),
@@ -110,7 +172,7 @@ export function Composer({
       for (const date of dates) {
         const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
         if (which === "weekdays" && (weekday === 0 || weekday === 6)) continue;
-        for (const col of COLUMNS) {
+        for (const col of columns) {
           if (which === "days" && col.slot !== "DAY") continue;
           if (which === "nights" && col.slot !== "NIGHT") continue;
           next.add(cellKey(date, col.platform, col.slot));
@@ -123,15 +185,13 @@ export function Composer({
   }
 
   function saveShows() {
-    const picks = [...ticked].map((key) => {
+    const hoursOf = new Map(times.map((t) => [t.slot, t]));
+    const picks = [...ticked].flatMap((key) => {
       const [dateISO, platform, slot] = key.split("|") as [DateISO, Platform, Slot];
-      return {
-        dateISO,
-        platform,
-        slot,
-        startHM: slot === "DAY" ? dayStart : nightStart,
-        endHM: slot === "DAY" ? dayEnd : nightEnd,
-      };
+      const hours = hoursOf.get(slot);
+      // A tick under a show time that was taken off is not sent.
+      if (!hours) return [];
+      return [{ dateISO, platform, slot, startHM: hours.start, endHM: hours.end }];
     });
     startTransition(async () => {
       const result = await setReleaseShows(releaseId, picks);
@@ -162,53 +222,90 @@ export function Composer({
 
       <Card>
         <CardHeader
-          title="Hours"
-          description="What the day and night shows run in this release. One show can still be adjusted on its own afterwards."
+          title="Show times"
+          description="The shows this release can run each day, and their hours. Add another — an early morning TikTok, say — and it gets its own column below. One show can still be adjusted on its own afterwards."
         />
-        <div className="grid gap-4 p-4 sm:grid-cols-2">
-          <div>
-            <Label>Day shows</Label>
-            <div className="flex items-center gap-2">
-              <Input
-                type="time"
-                value={dayStart}
-                disabled={!editable}
-                onChange={(e) => setDayStart(e.target.value)}
-                aria-label="Day show start"
-              />
-              <span className="text-sm text-ink-subtle">to</span>
-              <Input
-                type="time"
-                value={dayEnd}
-                disabled={!editable}
-                onChange={(e) => setDayEnd(e.target.value)}
-                aria-label="Day show end"
-              />
-            </div>
+        <div className="space-y-4 p-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            {[...times].sort(byStart).map((t) => {
+              const extra = t.slot !== "DAY" && t.slot !== "NIGHT";
+              return (
+                <div key={t.slot}>
+                  <div className="flex items-center justify-between">
+                    <Label>{slotShort(t.slot)} shows</Label>
+                    {extra && editable ? (
+                      <button
+                        type="button"
+                        onClick={() => removeTime(t.slot)}
+                        className="text-xs text-ink-subtle hover:text-danger-700"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="time"
+                      value={t.start}
+                      disabled={!editable}
+                      onChange={(e) => setHours(t.slot, "start", e.target.value)}
+                      aria-label={`${slotShort(t.slot)} show start`}
+                    />
+                    <span className="text-sm text-ink-subtle">to</span>
+                    <Input
+                      type="time"
+                      value={t.end}
+                      disabled={!editable}
+                      onChange={(e) => setHours(t.slot, "end", e.target.value)}
+                      aria-label={`${slotShort(t.slot)} show end`}
+                    />
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <div>
-            <Label>Night shows</Label>
-            <div className="flex items-center gap-2">
-              <Input
-                type="time"
-                value={nightStart}
-                disabled={!editable}
-                onChange={(e) => setNightStart(e.target.value)}
-                aria-label="Night show start"
-              />
-              <span className="text-sm text-ink-subtle">to</span>
-              <Input
-                type="time"
-                value={nightEnd}
-                disabled={!editable}
-                onChange={(e) => setNightEnd(e.target.value)}
-                aria-label="Night show end"
-              />
+          <p className="text-xs text-ink-muted">
+            An end earlier than the start runs past midnight, which is normal for a night show.
+          </p>
+
+          {editable ? (
+            <div className="rounded-lg border border-line bg-canvas p-3">
+              <Label htmlFor="new-show-name">Add a show</Label>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  id="new-show-name"
+                  value={newName}
+                  placeholder="Name, like Early AM"
+                  maxLength={20}
+                  onChange={(e) => setNewName(e.target.value)}
+                  className="w-44"
+                />
+                <Input
+                  type="time"
+                  value={newStart}
+                  onChange={(e) => setNewStart(e.target.value)}
+                  aria-label="New show start"
+                  className="w-32"
+                />
+                <span className="text-sm text-ink-subtle">to</span>
+                <Input
+                  type="time"
+                  value={newEnd}
+                  onChange={(e) => setNewEnd(e.target.value)}
+                  aria-label="New show end"
+                  className="w-32"
+                />
+                <Button type="button" size="sm" variant="secondary" onClick={addTime}>
+                  Add
+                </Button>
+              </div>
+              <p className="mt-1 text-xs text-ink-muted">
+                A TikTok show. Tick the days it runs below and save. Each show needs its own TikTok
+                export — the upload puts a file on the show most of its orders came in during.
+              </p>
+              {timeError ? <p className="mt-1 text-xs text-danger-700">{timeError}</p> : null}
             </div>
-            <p className="mt-1 text-xs text-ink-muted">
-              An end earlier than the start runs past midnight, which is normal for a night show.
-            </p>
-          </div>
+          ) : null}
         </div>
       </Card>
 
@@ -221,7 +318,7 @@ export function Composer({
               <div className="flex flex-wrap gap-1.5">
                 {(
                   [
-                    ["all", "All four, every day"],
+                    ["all", "Every show, every day"],
                     ["weekdays", "Weekdays only"],
                     ["days", "Days only"],
                     ["nights", "Nights only"],
@@ -249,14 +346,14 @@ export function Composer({
                 <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
                   Day
                 </th>
-                {COLUMNS.map((col) => (
+                {columns.map((col) => (
                   <th
                     key={col.key}
                     className="px-2 py-2 text-center text-xs font-medium uppercase tracking-wide text-ink-subtle"
                   >
                     {PLATFORM_SHORT[col.platform]}
                     <br />
-                    {SLOT_SHORT[col.slot]}
+                    {slotShort(col.slot)}
                   </th>
                 ))}
               </tr>
@@ -270,7 +367,7 @@ export function Composer({
                     <td className="whitespace-nowrap px-4 py-1.5 font-medium text-ink">
                       {formatDate(date)}
                     </td>
-                    {COLUMNS.map((col) => {
+                    {columns.map((col) => {
                       const key = cellKey(date, col.platform, col.slot);
                       const on = ticked.has(key);
                       const locked = staffedKeys.has(key);
@@ -281,7 +378,7 @@ export function Composer({
                             disabled={!editable || locked}
                             onClick={() => toggle(key)}
                             aria-pressed={on}
-                            aria-label={`${PLATFORM_SHORT[col.platform]} ${SLOT_SHORT[col.slot]} on ${date}`}
+                            aria-label={`${PLATFORM_SHORT[col.platform]} ${slotShort(col.slot)} on ${date}`}
                             title={locked ? "Somebody is scheduled on this show" : undefined}
                             className={`h-7 w-12 rounded-md border text-xs font-medium transition-colors ${
                               on

@@ -14,7 +14,7 @@ import {
   toDbDate,
 } from "@/lib/domain/dates";
 import { BUSINESS_LABEL } from "@/lib/domain/business";
-import { PLATFORM_SHORT, SLOT_SHORT } from "@/lib/domain/types";
+import { PLATFORM_SHORT, isSlot, platformRunsSlot, slotShort } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
 import { getSettings } from "@/lib/server/settings";
 
@@ -109,13 +109,15 @@ export async function createRelease(
   return { ok: "Release started. Now choose the shows.", releaseId: release.id };
 }
 
-const ShowPickSchema = z.object({
-  dateISO: z.string().refine(isDateISO),
-  platform: z.enum(["TIKTOK", "EBAY"]),
-  slot: z.enum(["DAY", "NIGHT"]),
-  startHM: z.string().refine(isTimeHM, "Enter a time as HH:MM."),
-  endHM: z.string().refine(isTimeHM, "Enter a time as HH:MM."),
-});
+const ShowPickSchema = z
+  .object({
+    dateISO: z.string().refine(isDateISO),
+    platform: z.enum(["TIKTOK", "EBAY"]),
+    slot: z.string().refine(isSlot, "That is not a show name the app can keep."),
+    startHM: z.string().refine(isTimeHM, "Enter a time as HH:MM."),
+    endHM: z.string().refine(isTimeHM, "Enter a time as HH:MM."),
+  })
+  .refine((p) => platformRunsSlot(p.platform, p.slot), "An extra show can only be a TikTok show.");
 
 /**
  * Replaces the shows on a draft release with exactly what is on screen.
@@ -182,7 +184,7 @@ export async function setReleaseShows(
   if (staffed.length > 0) {
     const first = staffed[0];
     return {
-      error: `${PLATFORM_SHORT[first.platform]} ${SLOT_SHORT[first.slot]} on ${first.date
+      error: `${PLATFORM_SHORT[first.platform]} ${slotShort(first.slot)} on ${first.date
         .toISOString()
         .slice(0, 10)} has people on it. Take them off before removing it${
         staffed.length > 1 ? `, and ${staffed.length - 1} other(s)` : ""
@@ -212,7 +214,7 @@ export async function setReleaseShows(
   });
   if (clash) {
     return {
-      error: `${PLATFORM_SHORT[clash.platform]} ${SLOT_SHORT[clash.slot]} on ${clash.date
+      error: `${PLATFORM_SHORT[clash.platform]} ${slotShort(clash.slot)} on ${clash.date
         .toISOString()
         .slice(0, 10)} is already in another release.`,
     };

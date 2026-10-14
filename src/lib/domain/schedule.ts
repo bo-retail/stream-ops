@@ -23,7 +23,7 @@
  */
 
 import { instantsOverlap } from "./dates";
-import { PLATFORM_SHORT, SEATS_PER_SHOW, SLOT_SHORT } from "./types";
+import { PLATFORM_SHORT, SEATS_PER_SHOW, slotShort } from "./types";
 import type { DateISO, Platform, ShowStatus, Slot } from "./types";
 
 export interface AssignmentInput {
@@ -136,7 +136,7 @@ export function showLabel(show: {
   platform: Platform;
   slot: Slot;
 }): string {
-  return `${PLATFORM_SHORT[show.platform]} ${SLOT_SHORT[show.slot]} on ${show.dateISO}`;
+  return `${PLATFORM_SHORT[show.platform]} ${slotShort(show.slot)} on ${show.dateISO}`;
 }
 
 export function validateSchedule(

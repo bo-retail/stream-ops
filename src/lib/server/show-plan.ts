@@ -1,4 +1,5 @@
 import "server-only";
+import { showNameFor } from "@/lib/domain/imports/types";
 import { prisma } from "@/lib/db";
 import { addDays, toDbDate } from "@/lib/domain/dates";
 import { isPlaceholderStock } from "@/lib/domain/imports/placeholders";
@@ -183,7 +184,7 @@ export async function missingReportsOn(day: DateISO): Promise<string[]> {
     const found = s.platform === "EBAY"
       ? batches.some((b) => b.platform === "EBAY")
       : batches.some((b) => b.platform === "TIKTOK" && b.slot === s.slot);
-    const label = s.platform === "EBAY" ? "eBay" : `TikTok ${s.slot === "DAY" ? "AM" : "PM"}`;
+    const label = s.platform === "EBAY" ? "eBay" : showNameFor("TIKTOK", s.slot);
     if (!found && !missing.includes(label)) missing.push(label);
   }
   return missing;
