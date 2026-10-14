@@ -29,7 +29,7 @@ import { slotShort } from "../types";
 import type { Slot } from "../types";
 import type { Business } from "../business";
 import { showNameFor, slotOfSalesShow } from "./types";
-import type { ImportFlag, WatchSale } from "./types";
+import type { ImportFlag, ShowKey, WatchSale } from "./types";
 
 /** One TikTok show on the file's date. */
 export interface TikTokShowWindow {
@@ -64,6 +64,26 @@ export function showAt(shows: readonly TikTokShowWindow[], t: Date): TikTokShowW
   let chosen = ordered[0];
   for (const show of ordered) if (show.startsAt.getTime() <= t.getTime()) chosen = show;
   return chosen;
+}
+
+/**
+ * Files with no sale left in them — every order cancelled — placed the same
+ * way: on an extra show when most of their orders, cancelled ones, fell in its
+ * hours. Diamonds, and every day without an extra show, are left where the
+ * parse put them. Without this, an early show's file whose orders were all
+ * cancelled would go to the day show and empty the day show's line.
+ */
+export function placeCoversOnExtraShows<T extends { sourceFile: string; business: Business; platform: string; show: ShowKey }>(
+  covers: readonly T[],
+  shows: readonly TikTokShowWindow[],
+  timesOf: (file: string) => Date[],
+): T[] {
+  return covers.map((c) => {
+    if (c.platform !== "TIKTOK" || c.business === "DIAMOND" || !hasExtraShow(shows, c.business)) return c;
+    const times = timesOf(c.sourceFile);
+    const show = showForOrders(shows.filter((s) => s.business === c.business), times, times[0] ?? null);
+    return show && isExtra(show.slot) ? { ...c, show: showNameFor("TIKTOK", show.slot) } : c;
+  });
 }
 
 /**

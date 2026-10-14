@@ -167,10 +167,27 @@ export interface ImportFlag {
   message: string;
 }
 
+/**
+ * The show a file is the export of, read from all its rows — cancelled ones
+ * included. What places a file none of whose orders is a sale any more: on
+ * 10/14 a diamond file whose only order was cancelled had no sale to take a
+ * day from, was refused with no reason, and its cancellation never reached
+ * the day.
+ */
+export interface FileCover {
+  sourceFile: string;
+  business: Business;
+  platform: ImportPlatform;
+  show: ShowKey;
+  showDate: DateISO;
+}
+
 export interface ParseResult {
   sales: WatchSale[];
   dropped: DroppedRow[];
   flags: ImportFlag[];
+  /** Set once the file's show, day and shop are known, whatever its rows were. */
+  cover?: FileCover;
 }
 
 /** TikTok records its timestamps in California time, always (R2). */

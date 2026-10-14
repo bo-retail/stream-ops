@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { expectedLinesFor } from "./expected";
-import { hasExtraShow, placeOnExtraShows, replacesAnotherShowsFile, showAt, showForOrders } from "./extra-shows";
+import { hasExtraShow, placeCoversOnExtraShows, placeOnExtraShows, replacesAnotherShowsFile, showAt, showForOrders } from "./extra-shows";
 import type { TikTokShowWindow } from "./extra-shows";
 import { showNameFor, slotOfSalesShow, slotOfShowName, tagDateOf, tagShowWords } from "./types";
 import { parseEbayFile } from "./ebay";
@@ -342,5 +342,29 @@ describe("the upload checklist on a day with an extra show", () => {
       (_b, p, s) => `${p} ${s ?? ""}`.trim(),
     );
     expect(lines.map((l) => l.label)).toEqual(["TIKTOK EARLY AM", "TIKTOK DAY", "TIKTOK NIGHT", "EBAY"]);
+  });
+});
+
+describe("placing a file whose every order was cancelled", () => {
+  // 10/14: such a file has no sale to place it by, only its orders' times.
+  const cover = (business: "WATCH" | "DIAMOND", show: "TikTok AM" | "TikTok PM" = "TikTok AM") => ({
+    sourceFile: "f.csv", business, platform: "TIKTOK", show, showDate: "2026-10-15",
+  });
+
+  it("goes to the extra show when most of its orders fell in its hours", () => {
+    const placed = placeCoversOnExtraShows([cover("WATCH")], THREE, () => [et("07:40"), et("08:10"), et("13:30")]);
+    expect(placed[0].show).toBe(showNameFor("TIKTOK", "EARLY AM"));
+  });
+
+  it("stays where the parse put it when most were the day show's", () => {
+    // A day show that went live at 12:20: one order in the early show's hours.
+    const placed = placeCoversOnExtraShows([cover("WATCH")], THREE, () => [et("12:20"), et("13:30"), et("14:00")]);
+    expect(placed[0].show).toBe("TikTok AM");
+  });
+
+  it("is left alone on a day with no extra show, and for diamonds", () => {
+    expect(placeCoversOnExtraShows([cover("WATCH")], [DAY, NIGHT], () => [et("07:40")])[0].show).toBe("TikTok AM");
+    const diamond = { ...EARLY, business: "DIAMOND" as const };
+    expect(placeCoversOnExtraShows([cover("DIAMOND")], [diamond], () => [et("07:40")])[0].show).toBe("TikTok AM");
   });
 });

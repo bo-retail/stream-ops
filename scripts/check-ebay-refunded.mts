@@ -33,6 +33,19 @@
  *   - an eBay watch refunded on a label with a diamond eBay order: named
  *   - ordinary re-uploads of either business, before and after: nothing said
  *
+ * Found 10/14: a file whose every order is cancelled was refused with no
+ * reason, dated 1970, and the cancellation never reached the day. Now:
+ *   - the diamond file's only order, on a packed shared parcel: goes in as its
+ *     day, the sale taken away, the parcel named — and the same again twice
+ *   - a day never uploaded: goes in as a day with no sale
+ *   - a watch file all cancelled: sales gone, unpacked box swept, packed named
+ *   - an eBay report with no sale left: refused, saying why; beside TikTok
+ *     files, the upload goes in and says the eBay report was not changed
+ * And from the review of that: the night file all cancelled with the day
+ * file; a stray all-cancelled file (the Canceled tab) refused, the line kept;
+ * a shared whole-day diamond file all cancelled; an Early AM file all
+ * cancelled; cancelled and never-paid rows; two uploads at the same moment.
+ *
  * Dates are years in the past and everything is removed at the end. It refuses
  * to run against anything but a local database.
  *
@@ -79,10 +92,23 @@ const MIX_ONLY = "2019-06-06"; // the diamond file's only order cancelled (a rea
 const MIX_CXL = "2019-06-08"; // a real "Canceled" row, not a row left out; the file twice
 const TWO_DAY_A = "2019-06-10"; // one label across two watch days, the first day's order cancelled
 const TWO_DAY_B = "2019-06-11";
+// What-ifs for a file whose every order is cancelled, 10/14:
+const NEVER = "2019-06-13"; // a day never uploaded before
+const WATCH_ALL = "2019-06-15"; // a watch file, every order cancelled
+const EBAY_NONE = "2019-06-17"; // an eBay report whose only order was refunded
+// From the independent review of that fix:
+const WA_PAIR = "2019-06-19"; // the day file and an all-cancelled night file
+const WA_WRONG = "2019-06-21"; // an all-cancelled file that is not the line's export
+const DI_WHOLE = "2019-06-23"; // two diamond shows, the shared whole-day file all cancelled
+const EARLY_D = "2019-06-25"; // an Early AM show's file all cancelled
+const EB_PAIR = "2019-06-27"; // TikTok beside an eBay report with no sale
+const MIXED_NP = "2019-06-29"; // cancelled and never-paid rows
+const AT_ONCE = "2019-07-01"; // two uploads at the same moment
 const ALL = [
   FIRST, LATER, CLOSED, SHARED, LATE_SOLD, LATE_PAID, SENT,
   MIX_D, MIX_W, MIX_ONE, MIX_ALL, MIX_PH, MIX_SHORT, MIX_SENT, MIX_EBAY,
-  MIX_PH_KEEP, MIX_ONLY, MIX_CXL, TWO_DAY_A, TWO_DAY_B,
+  MIX_PH_KEEP, MIX_ONLY, MIX_CXL, TWO_DAY_A, TWO_DAY_B, NEVER, WATCH_ALL, EBAY_NONE,
+  WA_PAIR, WA_WRONG, DI_WHOLE, EARLY_D, EB_PAIR, MIXED_NP, AT_ONCE,
 ];
 const PREFIX = "check: ebay refunded ";
 
@@ -269,6 +295,16 @@ try {
   const items = async (l: string) =>
     (await prisma.package.findUnique({ where: { trackingNumber: l }, select: { items: { select: { stockNumber: true, scannedQty: true, expectedQty: true } } } }))
       ?.items.map((i) => `${i.stockNumber} ${i.scannedQty}/${i.expectedQty}`).sort() ?? null;
+  /** A business's TikTok line on a day as its newest upload holds it. */
+  const line = async (business: "WATCH" | "DIAMOND", d: string) => {
+    const b = await prisma.importBatch.findFirst({
+      where: { business, showDate: toDbDate(d), status: "OK", platform: "TIKTOK" },
+      orderBy: { uploadedAt: "desc" },
+      select: { slot: true, sales: { select: { orderRef: true } }, drops: { select: { orderRef: true } } },
+    });
+    return b && { slot: b.slot, sales: b.sales.map((s) => s.orderRef).sort(), drops: b.drops.map((s) => s.orderRef).sort() };
+  };
+  const lineSales = async (business: "WATCH" | "DIAMOND", d: string) => (await line(business, d))?.sales ?? null;
   const status = async (l: string) => (await prisma.package.findUnique({ where: { trackingNumber: l }, select: { status: true } }))?.status;
   /** Every piece scanned in; the last one closes it. */
   const pack = async (l: string, tags: string[]) => {
@@ -438,16 +474,219 @@ try {
     await upload(d);
     await pack(l, ["W90001", "W90002", "E93557"]);
     check("closed", await status(l), "CLOSED_COMPLETE");
-    // Not through `upload`: found 10/14 that a file whose every order is
-    // cancelled is refused with no reason and no day, so the cancellation
-    // never reaches the day at all. Its refusal is dated 1970 and removed here.
+    // Not through `upload`, which throws on a refusal: until 10/14 a file
+    // whose every order is cancelled was refused with no reason, dated 1970,
+    // and the cancellation never reached the day. Removed here if it ever is again.
     const cut = await runImport([cancelled({ ...d, name: "d2.csv" }, "960000240000")], boss.id);
     if (cut.status !== "OK" && cut.batchId) await prisma.importBatch.delete({ where: { id: cut.batchId } });
-    // Known, not yet fixed (was so before 10/14): the file is refused, so
-    // nothing is named. Recorded as it is, so a fix shows up here — then
-    // expect "OK" and ["E93557"].
-    check("KNOWN GAP — every diamond order cancelled: the upload is refused", cut.status, "BLOCKED");
-    check("KNOWN GAP — and so the parcel is not named", said(cut, l), []);
+    check("every diamond order cancelled: the upload goes in, as that day", [cut.status, cut.showDate, cut.business], ["OK", MIX_ONLY, "DIAMOND"]);
+    check("and the parcel is named, take out the diamond", said(cut, l), ["E93557"]);
+    check(
+      "and the upload says the show has no sales now",
+      cut.flags.some((f) => f.severity === "info" && f.message.includes("every order in it was cancelled")),
+      true,
+    );
+    check("the diamond line holds no sale now", await lineSales("DIAMOND", MIX_ONLY), []);
+    check("the watch line is untouched", await lineSales("WATCH", MIX_ONLY), ["960000230000", "960000230001", "960000230002"]);
+
+    // What-if (10/14): the same all-cancelled file uploaded twice.
+    const twice = await upload(cancelled({ ...d, name: "d3.csv" }, "960000240000"));
+    check("all cancelled, twice: goes in again, still no sale", await lineSales("DIAMOND", MIX_ONLY), []);
+    check("and the parcel is still named, once", said(twice, l), ["E93557"]);
+    check("and the closed box is never touched", await items(l), ["E93557 1/1", "W90001 1/1", "W90002 1/1"]);
+  }
+
+  console.log("\n[what-if] An all-cancelled file for a day that was never uploaded.");
+  {
+    const cut = await upload(cancelled(diamonds("d.csv", NEVER, 1, "96000031", { names: ["E93999"], buyer: "x" }), "960000310000"));
+    check("goes in as that day, with no sale", [cut.status, cut.showDate, cut.watchCount, cut.boxCount], ["OK", NEVER, 0, 0]);
+    check("on the diamond TikTok day line, its row on the exceptions list", await line("DIAMOND", NEVER), {
+      slot: "DAY", sales: [], drops: ["960000310000"],
+    });
+    check("and no box", await prisma.package.count({ where: { showDate: toDbDate(NEVER) } }), 0);
+  }
+
+  console.log("\n[what-if] A watch file, every order cancelled.");
+  {
+    const l = "GFUS01990000000015";
+    const w = watches("w.csv", WATCH_ALL, 3, "96000032", watchesOn(l));
+    await upload(w);
+    check("three sales, two boxes", [(await lineSales("WATCH", WATCH_ALL)).length, await prisma.package.count({ where: { showDate: toDbDate(WATCH_ALL) } })], [3, 2]);
+    // The shared-label box packed; the single one left open.
+    await pack(l, ["W90001", "W90002"]);
+    const all = ["960000320000", "960000320001", "960000320002"].reduce((f, id) => cancelled(f, id), { ...w, name: "w2.csv" });
+    const cut = await upload(all);
+    check("goes in, as that day", [cut.status, cut.showDate, cut.business], ["OK", WATCH_ALL, "WATCH"]);
+    check("every sale taken away", await lineSales("WATCH", WATCH_ALL), []);
+    check("the unpacked box swept off the floor, the packed one kept", (await prisma.package.findMany({ where: { showDate: toDbDate(WATCH_ALL) }, select: { trackingNumber: true } })).map((b) => b.trackingNumber), [l]);
+    check("and the packed parcel is named, to pull", cut.flags.some((f) => f.severity === "warning" && f.message.includes(l)), true);
+  }
+
+  console.log("\n[what-if] An eBay report whose only order was refunded, for a day never uploaded.");
+  {
+    await schedule(EBAY_NONE);
+    const refused = await runImport([file(EBAY_NONE, [order(EBAY_NONE, "44001", { total: "$0.00" })])], boss.id);
+    if (refused.batchId) await prisma.importBatch.delete({ where: { id: refused.batchId } });
+    check("refused", refused.status, "BLOCKED");
+    check(
+      "and says why — no sale left to tell the day by",
+      refused.flags.some((f) => f.severity === "blocking" && f.message.includes("no order in it is a sale")),
+      true,
+    );
+  }
+
+  /* --------- what-ifs from the independent review of the all-cancelled fix, 10/14 */
+  const allCancelled = (f: { name: string; text: string }) =>
+    ({ name: f.name, text: f.text.replace(/,To ship,Awaiting collection,/g, ",Canceled,,") });
+  const lineAt = async (business: "WATCH" | "DIAMOND", d: string, slot: string) => {
+    const b = await prisma.importBatch.findFirst({
+      where: { business, showDate: toDbDate(d), status: "OK", platform: "TIKTOK", slot },
+      orderBy: { uploadedAt: "desc" },
+      select: { sales: { select: { orderRef: true } }, drops: { select: { orderRef: true } }, files: true },
+    });
+    return b && {
+      sales: b.sales.map((s) => s.orderRef).sort(),
+      drops: b.drops.map((s) => s.orderRef).sort(),
+      files: (b.files as { name: string }[]).map((f) => f.name).sort(),
+    };
+  };
+  /** Published TikTok shows on a day, times in UTC. */
+  const tiktokShows = async (d: string, business: "WATCH" | "DIAMOND", slots: { slot: string; from: string; to: string }[]) => {
+    const r = await prisma.release.create({
+      data: { name: `${PREFIX}${business} tt ${d}`, business, startDate: toDbDate(d), endDate: toDbDate(d), scheduleStatus: "PUBLISHED" },
+      select: { id: true },
+    });
+    for (const s of slots) {
+      await prisma.show.create({
+        data: { releaseId: r.id, business, date: toDbDate(d), platform: "TIKTOK", slot: s.slot, startsAt: new Date(s.from), endsAt: new Date(s.to) },
+      });
+    }
+  };
+
+  console.log("\n[what-if] The day file and an all-cancelled night file in one drop.");
+  {
+    const day = watches("day.csv", WA_PAIR, 2, "96000041", {});
+    const night = watches("night.csv", WA_PAIR, 2, "96000042", { time: "07:05:00 PM" });
+    await upload(day);
+    await upload(night);
+    check("four boxes", await prisma.package.count({ where: { showDate: toDbDate(WA_PAIR) } }), 4);
+    const both = await runImport([day, allCancelled({ ...night, name: "night3.csv" })], boss.id);
+    check("together: goes in", both.status, "OK");
+    check("the day line keeps its sales", (await lineAt("WATCH", WA_PAIR, "DAY"))?.sales, ["960000410000", "960000410001"]);
+    check("the night line has no sale, its rows on the exceptions list", await lineAt("WATCH", WA_PAIR, "NIGHT"), {
+      sales: [], drops: ["960000420000", "960000420001"], files: ["night3.csv"],
+    });
+    check("the night's unpacked boxes swept, the day's kept", await prisma.package.count({ where: { showDate: toDbDate(WA_PAIR) } }), 2);
+  }
+
+  console.log("\n[what-if] An all-cancelled file that is not the line's own export (a stray, or the Canceled tab).");
+  {
+    await upload(watches("day.csv", WA_WRONG, 3, "96000043", {}));
+    const stray = await runImport([allCancelled(watches("stray.csv", WA_WRONG, 1, "96000044", {}))], boss.id);
+    if (stray.status !== "OK" && stray.batchId) await prisma.importBatch.delete({ where: { id: stray.batchId } });
+    check("sharing no order with the line: refused", stray.status, "BLOCKED");
+    check("saying why", stray.flags.some((f) => f.severity === "blocking" && f.message.includes("not that show's whole export")), true);
+    // Only the cancelled one of three: still not the whole export.
+    const tab = watches("day.csv", WA_WRONG, 3, "96000043", {});
+    const partial = { name: "canceled-tab.csv", text: allCancelled(tab).text.split("\r\n").filter((l, i) => i === 0 || l.includes("960000430001\t")).join("\r\n") };
+    const part = await runImport([partial], boss.id);
+    if (part.status !== "OK" && part.batchId) await prisma.importBatch.delete({ where: { id: part.batchId } });
+    check("only the cancelled order of three: refused", part.status, "BLOCKED");
+    check("and the day line keeps its sales", (await lineAt("WATCH", WA_WRONG, "DAY"))?.sales.length, 3);
+    check("and its boxes", await prisma.package.count({ where: { showDate: toDbDate(WA_WRONG) } }), 3);
+  }
+
+  console.log("\n[what-if] Two diamond shows, the shared whole-day file, then every order cancelled.");
+  {
+    // Day 10 AM to 4 PM Pacific, night 7 PM on (UTC-7 in June).
+    await tiktokShows(DI_WHOLE, "DIAMOND", [
+      { slot: "DAY", from: `${DI_WHOLE}T17:00:00Z`, to: `${DI_WHOLE}T23:00:00Z` },
+      { slot: "NIGHT", from: "2019-06-24T02:00:00Z", to: "2019-06-24T06:00:00Z" },
+    ]);
+    const am = diamonds("a.csv", DI_WHOLE, 2, "96000045", {});
+    const pm = diamonds("b.csv", DI_WHOLE, 2, "96000046", { time: "08:05:00 PM" });
+    const whole = { name: "whole.csv", text: `${am.text}\r\n${pm.text.split("\r\n").slice(1).join("\r\n")}` };
+    await upload(whole);
+    check("shared: two on the day, two on the night", [
+      (await lineAt("DIAMOND", DI_WHOLE, "DAY"))?.sales.length, (await lineAt("DIAMOND", DI_WHOLE, "NIGHT"))?.sales.length,
+    ], [2, 2]);
+    const out = await upload(allCancelled({ ...whole, name: "whole2.csv" }));
+    check("all cancelled: both lines empty", [
+      (await lineAt("DIAMOND", DI_WHOLE, "DAY"))?.sales, (await lineAt("DIAMOND", DI_WHOLE, "NIGHT"))?.sales,
+    ], [[], []]);
+    check("the file on both lines", [
+      (await lineAt("DIAMOND", DI_WHOLE, "DAY"))?.files, (await lineAt("DIAMOND", DI_WHOLE, "NIGHT"))?.files,
+    ], [["whole2.csv"], ["whole2.csv"]]);
+    check("says both shows", out.flags.some((f) => f.message.includes("day and night shows") && f.message.includes("have no sales")), true);
+    check("no boxes left", await prisma.package.count({ where: { showDate: toDbDate(DI_WHOLE) } }), 0);
+  }
+
+  console.log("\n[what-if] A day with an Early AM show, its file all cancelled.");
+  {
+    // Early 4 to 10 AM Pacific, day 10 AM to 4 PM, night from 4 PM.
+    await tiktokShows(EARLY_D, "WATCH", [
+      { slot: "EARLY AM", from: `${EARLY_D}T11:00:00Z`, to: `${EARLY_D}T17:00:00Z` },
+      { slot: "DAY", from: `${EARLY_D}T17:00:00Z`, to: `${EARLY_D}T23:00:00Z` },
+      { slot: "NIGHT", from: `${EARLY_D}T23:00:00Z`, to: "2019-06-26T05:00:00Z" },
+    ]);
+    const early = watches("early.csv", EARLY_D, 2, "96000047", { time: "05:10:00 AM" });
+    await upload(early);
+    await upload(watches("day.csv", EARLY_D, 2, "96000048", {}));
+    check("the early file on its own line", (await lineAt("WATCH", EARLY_D, "EARLY AM"))?.sales.length, 2);
+    const out = await upload(allCancelled({ ...early, name: "early2.csv" }));
+    check("goes in", out.status, "OK");
+    check("the early line empty", (await lineAt("WATCH", EARLY_D, "EARLY AM"))?.sales, []);
+    check("the day line untouched", (await lineAt("WATCH", EARLY_D, "DAY"))?.sales, ["960000480000", "960000480001"]);
+  }
+
+  console.log("\n[what-if] The TikTok file and an eBay report whose only order was refunded, one drop.");
+  {
+    await schedule(EB_PAIR);
+    const tt = watches("tt.csv", EB_PAIR, 1, "96000049", {});
+    await upload(tt);
+    await upload(file(EB_PAIR, [order(EB_PAIR, "45001")]));
+    const out = await runImport([tt, file(EB_PAIR, [order(EB_PAIR, "45001", { total: "$0.00" })])], boss.id);
+    check("goes in", out.status, "OK");
+    check(
+      "and says the eBay report was not changed",
+      out.flags.some((f) => f.severity === "warning" && f.message.includes("did not replace the day's eBay report")),
+      true,
+    );
+    // Known, said: the eBay line keeps the order until the day is sorted by hand.
+    check("the eBay line as it was", (await day(EB_PAIR)).sales, ["45001"]);
+  }
+
+  console.log("\n[what-if] Cancelled and never-paid rows in one file.");
+  {
+    const f = watches("w.csv", MIXED_NP, 2, "96000050", {});
+    await upload(f);
+    const rows = f.text.split("\r\n");
+    rows[1] = rows[1].replace(",To ship,Awaiting collection,", ",Canceled,,");
+    const header = rows[0].replace(/^﻿/, "").split(",");
+    const cells = rows[2].split(",");
+    cells[header.indexOf("Paid Time")] = "";
+    rows[2] = cells.join(",");
+    const out = await upload({ name: "w2.csv", text: rows.join("\r\n") });
+    check("goes in, saying cancelled or never paid", out.flags.some((x) => x.message.includes("was cancelled or never paid")), true);
+    check("the line empty", (await lineAt("WATCH", MIXED_NP, "DAY"))?.sales, []);
+  }
+
+  console.log("\n[what-if] Two people at once: the all-cancelled night file and the day file.");
+  {
+    const day = watches("day.csv", AT_ONCE, 2, "96000051", {});
+    const night = watches("night.csv", AT_ONCE, 2, "96000052", { time: "07:05:00 PM" });
+    await upload(day);
+    await upload(night);
+    for (let i = 0; i < 2; i++) {
+      const [a, b] = await Promise.all([
+        runImport([allCancelled({ ...night, name: `night${i}.csv` })], boss.id),
+        runImport([day], boss.id),
+      ]);
+      check(`at once, round ${i + 1}: both go in`, [a.status, b.status], ["OK", "OK"]);
+      check(`round ${i + 1}: night empty, day has its sales`, [
+        (await lineAt("WATCH", AT_ONCE, "NIGHT"))?.sales, (await lineAt("WATCH", AT_ONCE, "DAY"))?.sales,
+      ], [[], ["960000510000", "960000510001"]]);
+    }
   }
 
   console.log("\n[review] A real \"Canceled\" row rather than a row left out; the corrected file twice.");

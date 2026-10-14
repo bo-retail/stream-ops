@@ -101,6 +101,16 @@ export function earliestOrderAt(text: string): Date | null {
   return orderTimes(text)?.earliest ?? null;
 }
 
+/** Every order's time in a TikTok export, cancelled ones included; unreadable ones left out. */
+export function orderTimesIn(text: string): Date[] {
+  const rows = parseCsv(text);
+  if (rows.length < 2) return [];
+  return toRecords(rows[0], rows.slice(1)).filter((r) => (r["Order ID"] ?? "") !== "").flatMap((r) => {
+    const wall = parseTikTokDateTime(r["Created Time"] ?? "");
+    return wall ? [toInstant(wall)] : [];
+  });
+}
+
 function orderTimes(text: string): { earliest: Date; latest: Date } | null {
   const rows = parseCsv(text);
   if (rows.length < 2) return null;
@@ -476,5 +486,7 @@ export function parseTikTokFile(file: TikTokFile): ParseResult {
     }
   }
 
-  return { sales, dropped, flags };
+  // Decided from every row, so a file whose every order was cancelled still says
+  // which show it is the export of.
+  return { sales, dropped, flags, cover: { sourceFile: file.name, business, platform: "TIKTOK", show, showDate } };
 }

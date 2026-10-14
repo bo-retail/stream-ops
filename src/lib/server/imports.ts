@@ -11,15 +11,15 @@ import type { Box } from "@/lib/domain/imports/boxes";
 import { parseCsv } from "@/lib/domain/imports/csv";
 import { parseEbayFile, readEbaySeller } from "@/lib/domain/imports/ebay";
 import { coversNight, shareDiamondDay } from "@/lib/domain/imports/diamond-day";
-import { earliestOrderAt, latestOrderAt } from "@/lib/domain/imports/tiktok";
-import { hasExtraShow, placeOnExtraShows, replacesAnotherShowsFile } from "@/lib/domain/imports/extra-shows";
+import { earliestOrderAt, latestOrderAt, orderTimesIn } from "@/lib/domain/imports/tiktok";
+import { hasExtraShow, placeCoversOnExtraShows, placeOnExtraShows, replacesAnotherShowsFile } from "@/lib/domain/imports/extra-shows";
 import type { TikTokShowWindow } from "@/lib/domain/imports/extra-shows";
 import { ebayFallback, placeEbayFile } from "@/lib/domain/imports/ebay-business";
 import type { EbayPlacement } from "@/lib/domain/imports/ebay-business";
 import { isPlaceholderStock, listingOfNote } from "@/lib/domain/imports/placeholders";
 import { parseTikTokFile } from "@/lib/domain/imports/tiktok";
 import { defaultShiftTag, detectPlatform, parseShiftTag, slotOfSalesShow, tagDateOf, tagShowWords } from "@/lib/domain/imports/types";
-import type { DroppedRow, ImportFlag, WatchSale } from "@/lib/domain/imports/types";
+import type { DroppedRow, FileCover, ImportFlag, WatchSale } from "@/lib/domain/imports/types";
 import { slotShort } from "@/lib/domain/types";
 import type { DateISO, Slot } from "@/lib/domain/types";
 import { getSettings } from "./settings";
@@ -135,11 +135,14 @@ export function readFiles(
   carried: WatchSale[];
   /** The same, but sharing a label with one of this day's, so kept on this day. */
   keptToday: WatchSale[];
+  /** Files with no sale in them — every order cancelled — and the show each is the export of. */
+  empty: FileCover[];
 } {
   const flags: ImportFlag[] = [];
   const sales: WatchSale[] = [];
   const dropped: DroppedRow[] = [];
   const fileInfo: { name: string; platform: string; sha256: string; bytes: number }[] = [];
+  const empty: FileCover[] = [];
 
   for (const file of files) {
     const platform = detectPlatform(parseCsv(file.text));
@@ -179,6 +182,7 @@ export function readFiles(
     sales.push(...result.sales);
     dropped.push(...result.dropped);
     flags.push(...result.flags);
+    if (result.sales.length === 0 && result.cover) empty.push(result.cover);
   }
 
   /*
@@ -200,7 +204,8 @@ export function readFiles(
     included, carries exactly one business. Refusing is honest; guessing a
     business for the batch would put one side's sales under the other's name.
   */
-  const businesses = new Set(sales.map((s) => s.business));
+  // A file with no sale left in it still names its shop, and counts.
+  const businesses = new Set([...sales, ...empty].map((s) => s.business));
   if (businesses.size > 1) {
     const names = [...businesses].map((b) => BUSINESS_SHORT[b]).join(" and ");
     flags.push({
@@ -284,6 +289,8 @@ export function readFiles(
   // the wrong date.
   const dates = new Map<DateISO, number>();
   for (const sale of kept) dates.set(sale.showDate, (dates.get(sale.showDate) ?? 0) + 1);
+  // A file whose every order was cancelled is still that day's export.
+  for (const e of empty) if (!dates.has(e.showDate)) dates.set(e.showDate, 0);
   const ranked = [...dates.entries()].sort((a, b) => b[1] - a[1]);
   const showDate = ranked[0]?.[0] ?? null;
 
@@ -291,7 +298,7 @@ export function readFiles(
     flags.push({
       severity: "blocking",
       message: `These files cover ${ranked.length} different show days (${ranked
-        .map(([d, n]) => `${d}: ${n} ${n === 1 ? "sale" : "sales"}`)
+        .map(([d, n]) => `${d}: ${n === 0 ? "no sale, every order cancelled" : `${n} ${n === 1 ? "sale" : "sales"}`}`)
         .join(", ")}). Upload one day at a time.`,
     });
   }
@@ -302,7 +309,7 @@ export function readFiles(
   // Exactly one by the time this returns — anything else is blocking above.
   const business = businesses.size === 1 ? [...businesses][0] : null;
 
-  return { sales: kept, dropped, flags, boxes, showDate, business, fileInfo, carried, keptToday };
+  return { sales: kept, dropped, flags, boxes, showDate, business, fileInfo, carried, keptToday, empty };
 }
 
 /**
@@ -1443,7 +1450,7 @@ function ebaySellerBusiness(text: string): Business | null {
 }
 
 /** Which line of a day's checklist a sale fills. */
-function lineKey(sale: WatchSale): string {
+function lineKey(sale: Pick<WatchSale, "platform" | "show">): string {
   // Read by the whole name: "TikTok EARLY AM" ends in "AM" and is its own show.
   return sale.platform === "EBAY"
     ? "EBAY|"
@@ -1456,7 +1463,7 @@ function lineKey(sale: WatchSale): string {
  * Null covers both nothing readable and a mix of several, because neither can
  * be recorded against one row of the checklist without being wrong about it.
  */
-function linesIn(sales: readonly WatchSale[]): {
+function linesIn(sales: readonly Pick<WatchSale, "platform" | "show">[]): {
   platform: "TIKTOK" | "EBAY";
   slot: string | null;
 } | null {
@@ -1606,10 +1613,12 @@ async function anotherShowsFileGuard(
   showDate: DateISO,
   sales: readonly WatchSale[],
   dropped: readonly DroppedRow[],
+  /** Files with no sale left in them, on the show each is the export of. */
+  empty: readonly FileCover[],
   db: Prisma.TransactionClient = prisma,
 ): Promise<ImportFlag[]> {
   if (business !== "WATCH") return [];
-  const tiktok = sales.filter((s) => s.platform === "TIKTOK" && s.business === business);
+  const tiktok = [...sales, ...empty].filter((s) => s.platform === "TIKTOK" && s.business === business);
   if (tiktok.length === 0) return [];
 
   // What this upload brings to each line: its files' orders, sold or cancelled.
@@ -1617,7 +1626,9 @@ async function anotherShowsFileGuard(
   const filesOn = new Map<string, Set<string>>();
   for (const s of tiktok) {
     const slot = slotOfSalesShow(s.show);
-    (incoming.get(slot) ?? incoming.set(slot, new Set()).get(slot)!).add(s.orderRef);
+    const orders = incoming.get(slot) ?? incoming.set(slot, new Set()).get(slot)!;
+    // An empty file's orders are all among the drops, added below.
+    if ("orderRef" in s) orders.add((s as WatchSale).orderRef);
     (filesOn.get(slot) ?? filesOn.set(slot, new Set()).get(slot)!).add(s.sourceFile);
   }
   for (const d of dropped) {
@@ -1786,7 +1797,7 @@ export async function runImport(
   );
   if (extraEbay) read.flags.push(...strayEbayShowLabels([...read.sales, ...read.carried], extraEbay));
   const { dropped, flags, showDate, business, fileInfo, keptToday } = read;
-  let { sales, boxes, carried } = read;
+  let { sales, boxes, carried, empty } = read;
 
   /*
     A day with an extra TikTok show — the early morning one — places each
@@ -1799,6 +1810,12 @@ export async function runImport(
     if (extra.sales !== null) {
       sales = extra.sales;
       boxes = buildBoxes(sales);
+    }
+    // And a file with no sale left in it, by its orders' times, cancelled ones.
+    if (empty.some((e) => e.platform === "TIKTOK")) {
+      empty = placeCoversOnExtraShows(empty, await tiktokShowsOn(showDate), (name) =>
+        orderTimesIn(files.find((f) => f.name === name)?.text ?? ""),
+      );
     }
   }
 
@@ -1884,8 +1901,11 @@ export async function runImport(
     would be paid twice.
   */
   let wholeDay: { file: string; night: Date | null; onNightLine: boolean } | null = null;
+  // A diamond file whose every order was cancelled is a correction of the day too.
   const diamondTiktok = [
-    ...new Set(sales.filter((s) => s.business === "DIAMOND" && s.platform === "TIKTOK").map((s) => s.sourceFile)),
+    ...new Set(
+      [...sales, ...empty].filter((s) => s.business === "DIAMOND" && s.platform === "TIKTOK").map((s) => s.sourceFile),
+    ),
   ];
   if (business === "DIAMOND" && showDate && diamondTiktok.length > 0) {
     const [shows, current] = await Promise.all([
@@ -1911,7 +1931,8 @@ export async function runImport(
     const shasOf = (slot: "DAY" | "NIGHT") =>
       ((current.find((b) => b.slot === slot)?.files ?? []) as { sha256?: string }[]).map((f) => f.sha256).filter(Boolean);
     const wasShared = shasOf("DAY").some((sha) => shasOf("NIGHT").includes(sha));
-    const placedOnDay = (name: string) => sales.some((s) => s.sourceFile === name && s.show === "TikTok AM");
+    const placedOnDay = (name: string) =>
+      [...sales, ...empty].some((s) => s.sourceFile === name && s.show === "TikTok AM");
     const covers = (name: string) =>
       night !== null && coversNight(latestOrderAt(files.find((f) => f.name === name)?.text ?? ""), night.startsAt);
     const whole = diamondTiktok.filter((name) => placedOnDay(name) && covers(name));
@@ -1999,7 +2020,85 @@ export async function runImport(
   }
 
   // On a day with an extra show, never overwrite another show's file.
-  if (showDate && business) flags.push(...(await anotherShowsFileGuard(business, showDate, sales, dropped)));
+  if (showDate && business) flags.push(...(await anotherShowsFileGuard(business, showDate, sales, dropped, empty)));
+
+  /*
+    A file with no sale left in it empties the line it lands on — so it may do
+    that only when it is that show's own export, corrected: every order the
+    line counts as sold now is in it, cancelled. A real re-export always has
+    them. A stray file — an export of TikTok's "Canceled" tab, another show's
+    file, a partial one — would otherwise take away sales still sold, with
+    their commission and their boxes, and report OK.
+  */
+  if (showDate && business) {
+    for (const e of empty) {
+      const slots =
+        wholeDay?.file === e.sourceFile ? ["DAY", "NIGHT"] : [slotOfSalesShow(e.show)];
+      const held = await prisma.importBatch.findMany({
+        where: { business, showDate: toDbDate(showDate), status: "OK", platform: "TIKTOK", slot: { in: slots } },
+        orderBy: { uploadedAt: "desc" },
+        select: { slot: true, sales: { select: { orderRef: true } } },
+      });
+      const current = slots.flatMap((slot) => held.find((b) => b.slot === slot)?.sales ?? []);
+      const ours = new Set(dropped.filter((d) => d.sourceFile === e.sourceFile).map((d) => d.orderRef));
+      const missing = [...new Set(current.map((s) => s.orderRef).filter((o) => !ours.has(o)))];
+      if (missing.length === 0) continue;
+      flags.push({
+        severity: "blocking",
+        message:
+          `${e.sourceFile}: every order in it was cancelled, but it does not have ${missing.length} order(s) the ` +
+          `${BUSINESS_SHORT[business].toLowerCase()} TikTok ${slots.map((s) => slotShort(s)).join(" and ")} show on ` +
+          `${showDate} still counts as sold (${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ", …" : ""}). ` +
+          `So it is not that show's whole export, and nothing was changed. Export the show's full order list ` +
+          `(all orders, not only the cancelled ones) and upload that.`,
+      });
+    }
+  }
+
+  /*
+    An eBay report with no sale left in it, uploaded beside other files. Its
+    day cannot be read from it (an eBay row's date is not its show's — late
+    payers, checkouts after midnight), so it does not replace the day's eBay
+    report: whatever that report counted is still counted. Said, rather than
+    the file going in quietly with nothing done.
+  */
+  if (showDate !== null) {
+    for (const f of fileInfo) {
+      if (f.platform !== "EBAY") continue;
+      const sold = [...sales, ...carried].some((s) => s.sourceFile === f.name);
+      if (sold || !dropped.some((d) => d.sourceFile === f.name)) continue;
+      flags.push({
+        severity: "warning",
+        message:
+          `${f.name}: no order in this eBay report is a sale — every one unpaid or refunded — so it did not ` +
+          `replace the day's eBay report, and anything that report counted is still counted. If an order there ` +
+          `was refunded, tell your admin so it can be taken off.`,
+      });
+    }
+  }
+
+  /*
+    Nothing in the files says which day they are.
+
+    A TikTok file always says — its orders' times and its shop, cancelled rows
+    included — so this is an eBay report with no sale left in it: every order
+    unpaid or refunded. Refused with the reason, never as a silent refusal
+    dated 1970 the uploader cannot read anything from.
+  */
+  if (showDate === null && !flags.some((f) => f.severity === "blocking")) {
+    const names = fileInfo.map((f) => f.name).join(", ");
+    flags.push({
+      severity: "blocking",
+      message:
+        dropped.length > 0
+          ? `${names}: no order in it is a sale — ${dropped.length} row(s), every one ${[
+              ...new Set(dropped.filter((d) => !d.reason.startsWith("summary row")).map((d) => d.reason.split(":")[0])),
+            ].join(" or ")} — and with no sale left there is nothing to say which show day it is. ` +
+            `Nothing was changed, so whatever an earlier upload of that day counted is still counted. ` +
+            `Tell your admin which day it is, so those orders can be taken off.`
+          : `${names}: no orders could be read, so there is no way to tell which show day it is. Nothing was changed.`,
+    });
+  }
 
   const blocked = flags.some((f) => f.severity === "blocking");
 
@@ -2066,7 +2165,7 @@ export async function runImport(
       broken to place at all, or one mixing two lines, has no line to record and
       shows on the day instead.
     */
-    const refusedLine = linesIn(sales);
+    const refusedLine = linesIn([...sales, ...empty]);
 
     const batch = await prisma.importBatch.create({
       data: {
@@ -2117,6 +2216,29 @@ export async function runImport(
     });
   }
 
+  /*
+    A file whose every order was cancelled is its show's export all the same,
+    and the line it fills now holds no sale. Written like any correction: it
+    replaces the line's earlier upload, takes its sales away, and its boxes are
+    brought in line — swept if nobody has packed them, named if packed.
+  */
+  for (const e of empty) {
+    const why = dropped.every((d) => d.sourceFile !== e.sourceFile || d.reason.startsWith("Canceled"))
+      ? "was cancelled"
+      : "was cancelled or never paid";
+    const which =
+      wholeDay?.file === e.sourceFile && wholeDay.onNightLine
+        ? `${BUSINESS_SHORT[e.business].toLowerCase()} TikTok day and night shows`
+        : `${BUSINESS_SHORT[e.business].toLowerCase()} TikTok ${slotShort(slotOfSalesShow(e.show))} show`;
+    flags.push({
+      severity: "info",
+      message:
+        `${e.sourceFile}: every order in it ${why}, so the ${which} on ${e.showDate} ` +
+        `${wholeDay?.file === e.sourceFile && wholeDay.onNightLine ? "have" : "has"} no sales now. Anything an ` +
+        `earlier upload counted there has been taken off.`,
+    });
+  }
+
   // The whole upload's figures, for what this call reports back. Each line's
   // own counts are worked out per line below.
   const summary = summariseDay(sales, boxes);
@@ -2132,7 +2254,7 @@ export async function runImport(
     One upload is one line. Anything that would fill two at once was refused
     above, so there is exactly one here.
   */
-  const lines = new Set([...sales.map(lineKey), ...forcedLines]);
+  const lines = new Set([...sales.map(lineKey), ...empty.map(lineKey), ...forcedLines]);
 
   /*
     An upload may still carry several files at once — three most mornings — and
@@ -2140,8 +2262,9 @@ export async function runImport(
     correcting any one of them later touches only that one.
 
     A file's drops go with its own line. A file whose every row was cancelled
-    has no sales and so no line of its own; its drops join the first, which is
-    the exceptions list rather than anything anybody is paid from.
+    has no sales, and its line is the show it is the export of (`empty`); one
+    with no line at all — never a TikTok file — has its drops join the first,
+    which is the exceptions list rather than anything anybody is paid from.
   */
   const lineOf = lineKey;
   // A file's lines — two for a diamond export shared between the day's shows.
@@ -2152,6 +2275,7 @@ export async function runImport(
     if (!lines.includes(lineOf(s))) lines.push(lineOf(s));
     fileLines.set(s.sourceFile, lines);
   }
+  for (const e of empty) fileLines.set(e.sourceFile, [lineOf(e)]);
   // A whole-day diamond file is on both of its lines, empty or not — which is
   // also how its next correction knows to replace both.
   // With no night show, the night line is emptied but the file is not on it:
@@ -2170,7 +2294,7 @@ export async function runImport(
       // Asked again now the day is locked: another upload may have landed
       // since the first asking. Thrown, so nothing below is written.
       if (business) {
-        const late = await anotherShowsFileGuard(business, showDate, sales, dropped, tx);
+        const late = await anotherShowsFileGuard(business, showDate, sales, dropped, empty, tx);
         if (late.some((f) => f.severity === "blocking")) throw new AnotherShowsFile(late);
       }
 
@@ -2326,7 +2450,7 @@ export async function runImport(
   // Refused once the day was locked: recorded as any refusal is, nothing written.
   if (written instanceof AnotherShowsFile) {
     const all = [...flags, ...written.flags];
-    const refusedLine = linesIn(sales);
+    const refusedLine = linesIn([...sales, ...empty]);
     const batch = await prisma.importBatch.create({
       data: {
         business: business ?? "WATCH",

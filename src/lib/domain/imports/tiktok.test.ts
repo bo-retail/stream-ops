@@ -142,6 +142,30 @@ describe("which rows count", () => {
     expect(result.dropped[0].amount).toBe(120.07);
   });
 
+  it("still says which show, day and shop a file is when every order was cancelled", () => {
+    // 10/14: such a file had no sale to take a day from, and was refused with no reason.
+    const cancelled = { "Order Status": "Canceled", "Cancel Reason": "Customer changed mind", "Paid Time": "" };
+    const result = parse(
+      [
+        paidRow({ ...cancelled, "Order ID": "n1", "Created Time": "09/08/2026 4:38:00 PM\t", "Creator Handle": "caratclublive" }),
+        paidRow({ ...cancelled, "Order ID": "n2", "Created Time": "09/08/2026 5:02:00 PM\t", "Creator Handle": "caratclublive" }),
+      ],
+      "night.csv",
+    );
+    expect(result.sales).toHaveLength(0);
+    expect(result.dropped).toHaveLength(2);
+    expect(result.flags.filter((f) => f.severity === "blocking")).toEqual([]);
+    expect(result.cover).toEqual({
+      sourceFile: "night.csv", business: "DIAMOND", platform: "TIKTOK", show: "TikTok PM", showDate: "2026-09-08",
+    });
+  });
+
+  it("has no cover when the shop cannot be told", () => {
+    const result = parse([paidRow({ "Order Status": "Canceled", "Creator Handle": "" })]);
+    expect(result.cover).toBeUndefined();
+    expect(result.flags.some((f) => f.severity === "blocking")).toBe(true);
+  });
+
   it("drops a row with no Paid Time", () => {
     const result = parse([paidRow({ "Paid Time": "" })]);
     expect(result.sales).toHaveLength(0);
