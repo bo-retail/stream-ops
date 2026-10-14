@@ -27,6 +27,7 @@ import { addDays, fromDbDate, toDbDate, todayISO } from "../src/lib/domain/dates
 import { balancesFor } from "../src/lib/server/inventory";
 import { bringStockUpToDate } from "../src/lib/server/deduction";
 import { readStartingCount, saveStartingCount } from "../src/lib/server/starting-count";
+import { inventoryWorkbook, rangeOf, soldByModel } from "../src/lib/server/inventory-export";
 
 assertDevDatabase("check-starting-count.mts");
 
@@ -112,6 +113,8 @@ try {
   // A sale from before the start day, and one on it.
   await sales(BEFORE, [M.sold], "before");
   await sales(START, [M.sold], "on");
+  // A night show past midnight is dated tomorrow, and comes off today.
+  await sales(addDays(today, 1), [M.fresh], "late");
 
   /* ------------------------------------------------- bad sheets save nothing */
   const bad = await start(await sheet(NEW, [[M.kept, "", "three", 1, 0, 0]]));
@@ -141,6 +144,33 @@ try {
   check("the start day is set", fromDbDate((await prisma.settings.findUniqueOrThrow({ where: { id: "singleton" } })).inventoryStartDate!), START);
   const sold = await stockOf(M.sold);
   check("the sale on the start day came off the new 4; the one before did not", [sold?.SELLABLE, sold?.WAITING], [3, 1]);
+
+  /* ----------------------------------------- the Excel download (10/14) */
+  const book = new ExcelJS.Workbook();
+  await book.xlsx.load(await inventoryWorkbook(rangeOf(START, today), today, null, settings.timezone));
+  const rowsOf = (name: string) => {
+    const out: unknown[][] = [];
+    book.getWorksheet(name)!.eachRow((row, n) => { if (n > 2) out.push((row.values as unknown[]).slice(1)); });
+    return out;
+  };
+  check("the download has the four sheets", book.worksheets.map((w) => w.name), ["Stock now", "By day", "Sales subtracted", "Not taken off"]);
+  const soldRow = rowsOf("Stock now").find((r) => r[0] === M.sold);
+  check("stock now: the model's places, total and sold in range", soldRow?.slice(2), [3, 0, 0, 0, 3, 1]);
+  check("sales subtracted: the one sale on the start day, from Sellable", rowsOf("Sales subtracted").filter((r) => r[5] === M.sold).map((r) => [r[1], r[6], r[7]]), [["TikTok AM", "Sellable", "Waiting to ship"]]);
+  const dayRows = rowsOf("By day");
+  check("by day: the start day's show, one unit from Sellable", dayRows.find((r) => r[1] === "TikTok AM")?.slice(2, 4), [1, 1]);
+  check("a range with no sales in it: nothing sold", (await soldByModel(today, today, today)).get(M.sold) ?? 0, 0);
+  check("a range starting before the start day begins at the start day", rangeOf(START, today, addDays(START, -5), today).from, START);
+  check("an upside-down range is put right", rangeOf(START, today, today, START), { from: START, to: START });
+  check("a night show dated tomorrow counts in a range reaching today (review)", (await soldByModel(START, today, today)).get(M.fresh), 1);
+  check("…and is in the file's list", rowsOf("Sales subtracted").some((r) => r[5] === M.fresh), true);
+  check("a range past today stops at today", rangeOf(START, today, START, addDays(today, 30)).to, today);
+  check("no range picked: the last month, or since the start day if later", rangeOf(addDays(today, -90), today).from, addDays(today, -30));
+  check("the not-taken-off sheet says when it could not be checked", await (async () => {
+    const b = new ExcelJS.Workbook();
+    await b.xlsx.load(await inventoryWorkbook(rangeOf(START, today), today, null, settings.timezone));
+    return String(b.getWorksheet("Not taken off")!.getCell("A1").value).startsWith("Could not be checked");
+  })(), true);
 
   /* --------------------------------------------------------- uploaded again */
   await start(
