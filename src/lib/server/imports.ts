@@ -865,7 +865,89 @@ async function reconcileDayBoxes(
     gone.length === 0 ? new Map() : await currentLinesElsewhere(tx, business, showDate, gone.map((p) => p.trackingNumber));
   const packedButGone = gone.map((p) => p.trackingNumber).filter((t) => !goneElsewhere.has(t));
 
-  return { untouchedClosedBoxes: closedTracking.size, packedWithout, packedButGone: [...packedButGone, ...packedWithExtra] };
+  /*
+    A shared label this line has just let go of, already packed and closed.
+
+    Watches and a diamond on one label are one box, filed under one of the
+    two reports. When one side is cancelled or refunded after the box closed,
+    neither check above sees it: the label is no longer this business's day,
+    and the box is filed under — or still wanted by — the other line. The
+    parcel would ship with the cancelled piece. Named, with the piece to take
+    out, measured against what the lines still wanting the label now sell.
+    Every earlier upload of the line counts as let go of, so it is named
+    again on each later upload of that line — until the parcel is reopened,
+    as on the other side (`packedWithExtra`).
+  */
+  const packedLetGo =
+    letGo.length === 0
+      ? []
+      : await tx.package.findMany({
+          where: { trackingNumber: { in: letGo }, status: { notIn: ["OPEN", "CLOSED_UNVERIFIED"] } },
+          select: {
+            trackingNumber: true,
+            items: { select: { stockNumber: true, scannedQty: true, expectedQty: true } },
+            scans: {
+              where: { kind: "ITEM_PLACEHOLDER" },
+              select: { stockNumber: true, note: true },
+            },
+          },
+        });
+  const named = new Set(packedButGone);
+  const stillWanting = await currentLinesElsewhere(
+    tx,
+    business,
+    showDate,
+    packedLetGo.filter((p) => !named.has(p.trackingNumber)).map((p) => p.trackingNumber),
+  );
+  const stillSold =
+    stillWanting.size === 0
+      ? []
+      : await tx.salesRecord.findMany({
+          where: {
+            tracking: { in: [...stillWanting.keys()] },
+            batchId: { in: [...new Set([...stillWanting.values()].flatMap((lines) => [...lines]))] },
+          },
+          orderBy: [{ showDate: "asc" }, { id: "asc" }],
+          select: {
+            tracking: true, platform: true, buyer: true, shipToName: true, state: true,
+            showDate: true, show: true, stockNumber: true, qty: true, orderRef: true, batchId: true,
+          },
+        });
+  const stillIn = new Map(
+    buildBoxes(
+      ordersOnce([], stillSold).map((r) => ({ ...r, showDate: fromDbDate(r.showDate), show: r.show as WatchSale["show"] })),
+    ).map((b) => [b.tracking, b.items]),
+  );
+  const letGoWithExtra = packedLetGo
+    .filter((p) => !named.has(p.trackingNumber))
+    .flatMap((p) => {
+      const wanted = new Map<string, number>();
+      for (const i of stillIn.get(p.trackingNumber) ?? []) wanted.set(i.stockNumber, (wanted.get(i.stockNumber) ?? 0) + i.expected);
+      const extra: string[] = [];
+      for (const i of p.items) {
+        const want = wanted.get(i.stockNumber) ?? 0;
+        // As above: only a piece the box was asked for, not one put in over it.
+        if (i.scannedQty <= want || i.expectedQty <= want) continue;
+        if (!isPlaceholderStock(i.stockNumber)) {
+          extra.push(i.stockNumber);
+          continue;
+        }
+        // A piece sold under a placeholder carries its own tag: name that,
+        // unless what is still sold on the label is that very piece.
+        const tags = p.scans
+          .filter((sc) => sc.stockNumber && listingOfNote(sc.note) === i.stockNumber)
+          .map((sc) => sc.stockNumber!);
+        if (tags.length === 0) extra.push(i.stockNumber);
+        else extra.push(...tags.filter((tag) => !wanted.has(tag)));
+      }
+      return extra.length === 0 ? [] : [`${p.trackingNumber} (take out ${[...new Set(extra)].join(", ")})`];
+    });
+
+  return {
+    untouchedClosedBoxes: closedTracking.size,
+    packedWithout,
+    packedButGone: [...packedButGone, ...packedWithExtra, ...letGoWithExtra],
+  };
 }
 
 /** Said at upload: packed parcels whose orders the report no longer has. */
