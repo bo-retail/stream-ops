@@ -10,3 +10,13 @@
 export const DAY_PLAN_ON = false;
 
 export const DAY_PLAN_OFF_MESSAGE = "The day's plan is not switched on yet.";
+
+/**
+ * Inventory kept simple (Samuel, 10/14: "we got way too complicated too
+ * fast"): one table — each model's Sellable, TT sample, eBay sample and
+ * Random pulls — a starting count, and sales subtracting. Receiving,
+ * movements, morning numbers, the sales page, templates and the model pages
+ * are switched off while this is true, not deleted: their data stays, and
+ * turning them back on is this line.
+ */
+export const INVENTORY_SIMPLE = true;

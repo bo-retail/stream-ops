@@ -96,19 +96,29 @@ export async function bringStockUpToDate(actorId: string | null, options: { ifCh
   const mark = await changeMark();
   // Read fresh, not from the per-request cache: a start date set a moment ago counts.
   const settings = await readStart();
-  const start = settings.inventoryStartDate ? fromDbDate(settings.inventoryStartDate) : null;
+  let start = settings.inventoryStartDate ? fromDbDate(settings.inventoryStartDate) : null;
   if (options.ifChanged && mark === lastMark) return { on: start !== null, startDate: start, ...NOTHING, skipped: true };
 
   const today = todayISO(settings.timezone);
   const lookBack = addDays(today, -LOOK_BACK_DAYS);
   // New sales are read from the start date (or the look-back, if later).
-  const from = start && start > lookBack ? start : lookBack;
+  let from = start && start > lookBack ? start : lookBack;
   // Reports can name tomorrow's date for a late night show; read a day ahead.
   const to = addDays(today, 1);
 
   const result = await prisma.$transaction(
     async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('inventory-count')::bigint)`;
+
+      /*
+        The start date again, now nothing else can change stock. A run that
+        read it, then waited here while a starting count was saved, would
+        otherwise take the old date's sales off the new count — every watch
+        shipped since the old start, subtracted a second time.
+      */
+      const locked = await tx.settings.findUnique({ where: { id: "singleton" }, select: { inventoryStartDate: true } });
+      start = locked?.inventoryStartDate ? fromDbDate(locked.inventoryStartDate) : null;
+      from = start && start > lookBack ? start : lookBack;
 
       // Every watch still waiting to ship is followed, however old — its box can close late.
       const oldestWaiting = await tx.stockSale.findFirst({ where: { status: "SOLD" }, orderBy: { showDate: "asc" }, select: { showDate: true } });

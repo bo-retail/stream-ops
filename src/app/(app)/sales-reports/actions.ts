@@ -138,7 +138,7 @@ export async function uploadReports(
   if (stockFailed) {
     flags.push({
       severity: "warning",
-      message: "The reports are in, but stock could not be brought up to date just now. Open Inventory → Sales in a minute; it tries again there.",
+      message: "The reports are in, but stock could not be brought up to date just now. Open Inventory in a minute; it tries again there.",
     });
   }
   const showDate = outcomes.find((o) => o.showDate)?.showDate ?? undefined;

@@ -1,103 +1,103 @@
 import type { Metadata } from "next";
-import { DAY_PLAN_ON } from "@/lib/domain/features";
 import Link from "next/link";
-import { Badge, Card, EmptyState, Input, LinkButton, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
+import { Card, EmptyState, Input, LinkButton, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
 import { requireShippingDirector } from "@/lib/auth/guards";
-import { PLACES, PLACE_LABEL } from "@/lib/domain/inventory";
-import { bringStockUpToDateQuietly } from "@/lib/server/deduction";
+import { formatDate } from "@/lib/domain/dates";
+import { COUNTED_LABEL, COUNTED_PLACES } from "@/lib/domain/inventory";
+import { bringStockUpToDateQuietly, getStartDate } from "@/lib/server/deduction";
 import { listStock } from "@/lib/server/inventory";
 
 export const metadata: Metadata = { title: "Inventory" };
 
-const money = (cents: number) =>
-  `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-
 /**
- * What is in stock, model by model.
+ * What is in stock, model by model — kept simple (Samuel, 10/14).
  *
- * One table: every model, what is in each place, and a link to its history.
- * The search narrows it; nothing else to learn.
+ * Each model's Sellable, TT sample, eBay sample and Random pulls. A starting
+ * count sets them; every sales report uploaded since subtracts. Nothing else.
  */
 export default async function InventoryPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   const user = await requireShippingDirector();
   const { q = "" } = await searchParams;
-  // Today's sales and packing, taken off before stock is shown.
-  const run = await bringStockUpToDateQuietly(user.id, { ifChanged: true });
-  const rows = await listStock(q);
-  const all = q ? null : rows;
+  // Today's sales taken off before stock is shown — in full, so what could
+  // not be taken off is known and shown below.
+  const run = await bringStockUpToDateQuietly(user.id);
+  const [all, from] = await Promise.all([listStock(q), getStartDate()]);
 
-  const pieces = rows.reduce((n, r) => n + r.total, 0);
-  const value = rows.reduce((n, r) => n + r.total * (r.costCents ?? 0), 0);
-  const notCounted = rows.filter((r) => r.lastCountedAt === null).length;
-  const flagged = rows.filter((r) => r.needsDetails).length;
+  // Models with stock, or below zero (sold more than was counted), only.
+  const total = (r: (typeof all)[number]) => COUNTED_PLACES.reduce((n, p) => n + r.balances[p], 0);
+  const rows = all.filter((r) => COUNTED_PLACES.some((p) => r.balances[p] !== 0));
+  const pieces = rows.reduce((n, r) => n + total(r), 0);
 
   return (
     <>
       <PageHeader
         title="Inventory"
-        description="Every model and how many are in each place."
+        description={
+          from
+            ? `From the starting count. Sales from ${formatDate(from)} on come off automatically when the sales report is uploaded.`
+            : "Nothing counted yet. Do the starting count to begin."
+        }
         action={
-          <div className="flex flex-wrap gap-2">
-            <LinkButton href="/inventory/count" variant="primary">
-              Count
-            </LinkButton>
-            {DAY_PLAN_ON ? <LinkButton href="/inventory/plan">The day&apos;s plan</LinkButton> : null}
-            <LinkButton href="/inventory/morning">Morning numbers</LinkButton>
-            <LinkButton href="/inventory/sales">Sales</LinkButton>
-            <LinkButton href="/inventory/movements">Movements</LinkButton>
-            <LinkButton href="/inventory/receiving">Receiving</LinkButton>
-            <LinkButton href="/inventory/templates">Templates &amp; uploads</LinkButton>
-          </div>
+          <LinkButton href="/inventory/start" variant="primary">
+            Starting count
+          </LinkButton>
         }
       />
 
       {run === null ? (
         <p className="mb-4 rounded-lg border border-warn-200 bg-warn-50 px-4 py-3 text-sm text-warn-700">
-          Stock could not be brought up to date with the latest sales just now; this is how it last stood. See{" "}
-          <Link href="/inventory/sales" className="underline">Sales</Link>.
+          The latest sales could not be taken off just now; this is how stock last stood. Reload in a minute.
         </p>
       ) : null}
 
-      {all && all.length > 0 ? (
+      {run && (run.unknown.length > 0 || run.unnamed.length > 0) ? (
+        <div className="mb-4 rounded-lg border border-warn-200 bg-warn-50 px-4 py-3 text-sm text-warn-700">
+          <p className="font-medium">Sold, but not taken off — nothing to take them off from:</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+            {run.unknown.length > 0 ? (
+              <li>
+                {run.unknown.length} sale(s) of a model that is not in inventory:{" "}
+                {[...new Set(run.unknown.map((w) => w.line.stockNumber))].slice(0, 12).join(", ")}
+                {run.unknown.length > 12 ? "…" : ""}. Add them on the next count if they are ours.
+              </li>
+            ) : null}
+            {run.unnamed.length > 0 ? (
+              <li>
+                {run.unnamed.length} random pull(s) with no model number yet — they come off once the report names the
+                watch, or it is scanned when packed.
+              </li>
+            ) : null}
+          </ul>
+        </div>
+      ) : null}
+
+      {!q && rows.length > 0 ? (
         <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <Stat label="Models" value={all.length.toLocaleString("en-US")} />
+          <Stat label="Models" value={rows.length.toLocaleString("en-US")} />
           <Stat label="Pieces" value={pieces.toLocaleString("en-US")} />
-          <Stat label="At cost" value={money(value)} />
-          <Stat
-            label="Not counted yet"
-            value={notCounted.toLocaleString("en-US")}
-            tone={notCounted > 0 ? "warn" : "ok"}
-          />
         </div>
       ) : null}
 
       <Card>
         <form className="flex flex-wrap items-center gap-2 border-b border-line p-3" action="/inventory">
-          <Input
-            name="q"
-            defaultValue={q}
-            placeholder="Search a model, description or collection"
-            className="max-w-sm"
-            aria-label="Search"
-          />
+          <Input name="q" defaultValue={q} placeholder="Search a model or description" className="max-w-sm" aria-label="Search" />
           {q ? (
             <Link href="/inventory" className="text-sm text-ink-muted underline">
               Clear
             </Link>
           ) : null}
-          {flagged > 0 ? <Badge tone="warn">{flagged} need their details</Badge> : null}
         </form>
 
         {rows.length === 0 ? (
-          <EmptyState title={q ? "No model matches that." : "The catalogue is empty."}>
+          <EmptyState title={q ? "No model matches that." : "Nothing in stock yet."}>
             {q ? null : (
               <>
-                Load Invicta&apos;s master file on{" "}
-                <Link href="/inventory/templates" className="underline">
-                  Templates &amp; uploads
+                Do the{" "}
+                <Link href="/inventory/start" className="underline">
+                  starting count
                 </Link>{" "}
-                first.
+                to begin.
               </>
             )}
           </EmptyState>
@@ -110,50 +110,39 @@ export default async function InventoryPage({ searchParams }: { searchParams: Pr
                 </Th>
                 <Th>Model</Th>
                 <Th>Description</Th>
-                {PLACES.map((p) => (
+                {COUNTED_PLACES.map((p) => (
                   <Th key={p} className="text-right">
-                    {PLACE_LABEL[p]}
+                    {COUNTED_LABEL[p]}
                   </Th>
                 ))}
                 <Th className="text-right">Total</Th>
-                <Th className="text-right">Sold, waiting to ship</Th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.model}>
                   <Td className="py-1.5">
-                    <Link href={`/inventory/${encodeURIComponent(r.model)}`} tabIndex={-1}>
-                      <WatchImage url={r.picture} model={r.model} size={48} />
-                    </Link>
+                    <WatchImage url={r.picture} model={r.model} size={48} />
                   </Td>
-                  <Td>
-                    <Link href={`/inventory/${encodeURIComponent(r.model)}`} className="tabular font-medium text-brand-700 underline">
-                      {r.model}
-                    </Link>
-                    {!r.active ? (
-                      <span className="block text-xs text-brand-700">Ordered, not arrived yet</span>
-                    ) : null}
-                    {r.needsDetails ? (
-                      <span className="block text-xs text-warn-700">Needs its details</span>
-                    ) : r.active && r.lastCountedAt === null ? (
-                      <span className="block text-xs text-ink-subtle">Not counted yet</span>
-                    ) : null}
-                  </Td>
+                  <Td className="tabular font-medium">{r.model}</Td>
                   <Td className="max-w-xs truncate text-ink-muted">{r.description || "—"}</Td>
-                  {PLACES.map((p) => (
+                  {COUNTED_PLACES.map((p) => (
                     <Td key={p} className={`tabular text-right ${r.balances[p] < 0 ? "font-semibold text-danger-600" : ""}`}>
                       {r.balances[p] === 0 ? <span className="text-ink-subtle">0</span> : r.balances[p]}
                     </Td>
                   ))}
-                  <Td className="tabular text-right font-semibold">{r.total}</Td>
-                  <Td className="tabular text-right text-ink-muted">{r.balances.WAITING === 0 ? "" : r.balances.WAITING}</Td>
+                  <Td className="tabular text-right font-semibold">{total(r)}</Td>
                 </tr>
               ))}
             </tbody>
           </Table>
         )}
       </Card>
+      {rows.some((r) => COUNTED_PLACES.some((p) => r.balances[p] < 0)) ? (
+        <p className="mt-3 text-xs text-ink-muted">
+          A number in red is below zero: more sold than was counted. The next count puts it right.
+        </p>
+      ) : null}
     </>
   );
 }

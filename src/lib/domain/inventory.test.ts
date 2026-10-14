@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  startingCountLines,
   badModelNumber,
   catalogueSpelling,
   spellings,
@@ -208,5 +209,37 @@ describe("looking a report's number up in the catalogue", () => {
     const catalogue = ["0071", "49888"];
     const fetched = catalogue.filter((m) => spellings("71").includes(m));
     expect(catalogueSpelling(fetched)("71")).toBe("0071");
+  });
+});
+
+describe("the starting count", () => {
+  const none = { SELLABLE: 0, SAMPLE_EBAY: 0, SAMPLE_TIKTOK: 0, RANDOM_PULLS: 0, DAMAGED: 0, WAITING: 0 };
+
+  it("leaves each place at exactly what the sheet says", () => {
+    const before = { ...none, SELLABLE: 5, SAMPLE_TIKTOK: 2 };
+    const lines = startingCountLines(before, { SELLABLE: 3, SAMPLE_TIKTOK: 2, SAMPLE_EBAY: 1 });
+    const after = { ...before };
+    for (const l of lines) after[l.place] += l.qty;
+    expect(after).toEqual({ ...none, SELLABLE: 3, SAMPLE_TIKTOK: 2, SAMPLE_EBAY: 1 });
+  });
+
+  it("empties damaged and sold-waiting-to-ship, which the simple inventory does not keep", () => {
+    const lines = startingCountLines({ ...none, DAMAGED: 2, WAITING: 4 }, {});
+    expect(lines).toEqual([
+      { place: "DAMAGED", qty: -2, counted: 0 },
+      { place: "WAITING", qty: -4, counted: 0 },
+    ]);
+  });
+
+  it("a blank place is none, and a model below zero is brought back up", () => {
+    const lines = startingCountLines({ ...none, SELLABLE: -3, RANDOM_PULLS: 1 }, { SELLABLE: 2 });
+    expect(lines).toEqual([
+      { place: "SELLABLE", qty: 5, counted: 2 },
+      { place: "RANDOM_PULLS", qty: -1, counted: 0 },
+    ]);
+  });
+
+  it("writes nothing for a model already right", () => {
+    expect(startingCountLines({ ...none, SELLABLE: 2 }, { SELLABLE: 2 })).toEqual([]);
   });
 });

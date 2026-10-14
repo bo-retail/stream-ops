@@ -32,6 +32,48 @@ export const PLACE_LABEL: Record<Where, string> = {
 };
 
 /**
+ * The four places the simple inventory keeps (Samuel, 10/14: "inventory with
+ * the sku, sellable, tt sample, ebay sample and random pulls"), in the order
+ * the team reads them. Damaged is not counted.
+ */
+export const COUNTED_PLACES = ["SELLABLE", "SAMPLE_TIKTOK", "SAMPLE_EBAY", "RANDOM_PULLS"] as const;
+export type CountedPlace = (typeof COUNTED_PLACES)[number];
+
+export const COUNTED_LABEL: Record<CountedPlace, string> = {
+  SELLABLE: "Sellable",
+  SAMPLE_TIKTOK: "TT sample",
+  SAMPLE_EBAY: "eBay sample",
+  RANDOM_PULLS: "Random pulls",
+};
+
+/** Headings a count sheet may use for each place: today's, and the older sheet's. */
+export const COUNTED_HEADINGS: Record<CountedPlace, string[]> = {
+  SELLABLE: ["sellable"],
+  SAMPLE_TIKTOK: ["tt sample", "sample tiktok", "tiktok sample"],
+  SAMPLE_EBAY: ["ebay sample", "sample ebay"],
+  RANDOM_PULLS: ["random pulls", "random pull"],
+};
+
+/**
+ * What a starting count writes for one model: in every place, the difference
+ * between what the app has and what was counted — and in every place the
+ * simple inventory does not keep (damaged, sold-waiting-to-ship), whatever
+ * takes it to zero. Afterwards the model holds exactly what the sheet says.
+ */
+export function startingCountLines(
+  current: Readonly<Record<Where, number>>,
+  counted: Readonly<Partial<Record<CountedPlace, number>>>,
+): { place: Where; qty: number; counted: number }[] {
+  const all: Where[] = [...PLACES, WAITING];
+  return all
+    .map((place) => {
+      const target = (COUNTED_PLACES as readonly string[]).includes(place) ? (counted[place as CountedPlace] ?? 0) : 0;
+      return { place, qty: target - (current[place] ?? 0), counted: target };
+    })
+    .filter((l) => l.qty !== 0);
+}
+
+/**
  * A model number as the scanner and the reports read it.
  *
  * Trimmed and upper-cased, and nothing else: model numbers mix digits, letters
