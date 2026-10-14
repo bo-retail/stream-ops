@@ -11,8 +11,9 @@ after that, built on top of it.*
 1. Give this whole file to your own Claude (paste it in, or attach it).
 2. Play with it. Ask your Claude anything, correct what is wrong, and go
    through the questions in section 5 whenever you like.
-3. When you are done, ask your Claude to **fill in section 6, "Answers for
-   Samuel"**, and send that back to Samuel (the whole conversation is fine too).
+3. When you are done, say **"I'm done, make the file for Samuel."** Your
+   Claude gives you this same file back, updated with what you said (section
+   6 explains how). Send that file to Samuel.
 
 Samuel builds the app. You know the business, the Excel files and the way the
 team works. This is where the two meet.
@@ -30,9 +31,10 @@ section 5 in order. Please:
   "Anything else" in section 6 rather than steering him away.
 - When you get to the questions in section 5, each has a default. "Keep the
   default" is a perfectly good answer.
-- If Daniel says something in sections 2–4 is wrong, write down exactly what is
-  true instead. That matters more than the questions.
-- At the end, fill in section 6 in the same format.
+- If Daniel says something in sections 2–4 is wrong, keep track of exactly
+  what is true instead. That matters more than the questions.
+- When Daniel says he is done, make the file for Samuel exactly as section 6
+  describes.
 
 ---
 
@@ -235,31 +237,29 @@ nothing.
 
 ---
 
-## 6. Answers for Samuel
+## 6. When you're done: the file back to Samuel
 
-*(Daniel's Claude: fill this in at the end. Keep each answer to a line or two.
-Write "default" where Daniel kept the default.)*
+*(For Daniel's Claude. When Daniel says he is done, make this file and give it
+to him as a downloadable Markdown file, so he can send it to Samuel.)*
 
-```
-CORRECTIONS TO SECTIONS 2–4 (what is actually true):
--
+Send back **this same document**, updated, so Samuel can lay the two side by
+side and see exactly what changed. Keep every heading and the order of the
+sections. Change only this:
 
-ANSWERS:
-1. Numbers match reality:
-2. When the xlookup stops:
-3. Recounts:
-4. Model # always filled:
-5. Selling from samples:
-6. Who enters returns, when:
-7. Where returns go:
-8. Cancellations after packing:
-9. Exchanges / reships:
-10. Counting deliveries:
-11. Shipping lists uploaded:
-12. The 62 new models:
-13. Diamonds in inventory:
-14. Anything missing:
+1. **Title:** "Inventory in StreamOps: Daniel's answers", with the date under it.
+2. **At the very top, under the title, a "What Daniel changed" list:** one line
+   per correction or new fact, most important first. If nothing in sections
+   2–4 was wrong, say so.
+3. **Sections 2–4:** where Daniel said something is wrong, rewrite it in place
+   to say what is true, and mark each change with **(Daniel)** at the end of
+   the sentence. Leave everything he agreed with exactly as it is.
+4. **Section 5:** under each question, add a line starting **Answer:** with
+   Daniel's answer in his own words, or "Keep the default". If he skipped it,
+   write "Not answered".
+5. **Section 6:** replace this text with **"Anything else"**: everything Daniel
+   raised that has no question above, including anything about cost, pricing or
+   profit, his own words where possible.
+6. **Leave out** the "How to use this" section and the note for Daniel's Claude.
+   They were for this conversation only.
 
-ANYTHING ELSE DANIEL WANTS SAMUEL TO KNOW:
--
-```
+Name the file **`Inventory handoff - Daniel's answers.md`**.
