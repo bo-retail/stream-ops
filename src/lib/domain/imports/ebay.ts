@@ -346,6 +346,7 @@ export function parseEbayFile(
   const sales: WatchSale[] = [];
   const dropped: DroppedRow[] = [];
   const malformedTags: string[] = [];
+  const refunded: string[] = [];
   const saleDates = new Set<DateISO>();
 
   for (const [srn, group] of groups) {
@@ -368,6 +369,35 @@ export function parseEbayFile(
           reason: "committed but never paid",
         });
       }
+      continue;
+    }
+
+    /*
+      Paid, and then refunded: a Paid On Date but a Total Price of exactly $0.
+
+      eBay keeps the Paid On Date when a buyer cancels after paying and is
+      refunded, and zeroes the order's total. Order 39632 on 10/13 (49163, $70,
+      buyer chik-3425) read as a second sale of a watch sold once — Pipe
+      checked in Seller Hub: cancelled by the buyer, money refunded. So such an
+      order is no sale: not paid on, not off the shelf, no box. Only a total
+      that says zero counts; a blank or unreadable one is left alone.
+    */
+    const totalRaw = ((summary ?? items[0] ?? group[0])["Total Price"] ?? "").trim();
+    // Something was sold for money: a $0 giveaway is not a refund.
+    const soldFor = (items.length > 0 ? items : group).reduce((sum, r) => sum + parseMoney(r["Sold For"]), 0);
+    if (/^\$?\s*0+(\.0+)?$/.test(totalRaw) && soldFor > 0) {
+      for (const row of items.length > 0 ? items : group) {
+        dropped.push({
+          sourceFile: file.name,
+          platform: "EBAY",
+          orderRef: srn,
+          buyer: row["Buyer Username"],
+          stockNumber: row["Item Title"],
+          amount: parseMoney(row["Sold For"]),
+          reason: "paid, then cancelled and refunded — eBay shows $0 paid",
+        });
+      }
+      refunded.push(`${srn} (${(items[0] ?? group[0])["Buyer Username"]}: ${items.map((r) => r["Item Title"]).join(", ")})`);
       continue;
     }
 
@@ -481,6 +511,16 @@ export function parseEbayFile(
         `eBay has no time of day to tell a day-show sale from a night-show one, so if any of these sold in the day ` +
         `show its commission is going to the night pair — fix the listing and upload the day again. ` +
         malformedTags.slice(0, 3).join("; "),
+    });
+  }
+
+  if (refunded.length > 0) {
+    flags.push({
+      severity: "warning",
+      message:
+        `${file.name}: ${refunded.length} eBay order(s) show $0 paid — cancelled and refunded after payment — so they ` +
+        `are not counted as sales and get no box (listed on Exceptions). If one was really sold, check it in Seller ` +
+        `Hub. ${refunded.slice(0, 5).join("; ")}`,
     });
   }
 

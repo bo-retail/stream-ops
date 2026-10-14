@@ -477,3 +477,72 @@ describe("reading the seller account from a file's tail", () => {
     expect(readEbaySeller("Order ID,Order Status\r\n123,To ship\r\n")).toBeNull();
   });
 });
+
+describe("an order paid and then refunded — eBay shows $0 paid", () => {
+  /*
+    10/13, order 39632: 49163 for $70 to chik-3425, a Paid On Date, no label,
+    Total Price $0.00. Pipe checked in Seller Hub: cancelled by the buyer, money
+    refunded. It read as a second sale of a watch sold once.
+  */
+  const refunded = single({
+    "Sales Record Number": "39632", "Buyer Username": "chik-3425", "Item Title": "49163",
+    "Sold For": "$70.00", "eBay Collected Tax": "$5.53", "Total Price": "$0.00", "Tracking Number": "",
+  });
+
+  it("is no sale: on the exceptions list, with why, and said out loud", () => {
+    const result = parse([refunded, single({ "Sales Record Number": "39631", "Item Title": "49163" })]);
+    expect(result.sales.map((s) => s.orderRef)).toEqual(["39631"]);
+    expect(result.dropped).toEqual([
+      expect.objectContaining({ orderRef: "39632", stockNumber: "49163", amount: 70, reason: expect.stringContaining("refunded") }),
+    ]);
+    const warning = result.flags.find((f) => f.message.includes("$0 paid"));
+    expect(warning?.severity).toBe("warning");
+    expect(warning?.message).toContain("39632");
+  });
+
+  it("whatever way eBay writes the zero", () => {
+    for (const total of ["$0.00", "0", "$0", "0.00", " $0.00 "]) {
+      expect(parse([single({ "Total Price": total })]).sales).toHaveLength(0);
+    }
+  });
+
+  it("a blank or unreadable total is not taken for a refund", () => {
+    for (const total of ["", "n/a", "#VALUE!"]) {
+      expect(parse([single({ "Total Price": total })]).sales).toHaveLength(1);
+    }
+  });
+
+  it("a $0 giveaway — sold for nothing, total nothing — is not taken for a refund", () => {
+    expect(parse([single({ "Sold For": "$0.00", "Total Price": "$0.00" })]).sales).toHaveLength(1);
+  });
+
+  it("a paid order with a real total is untouched, and nothing is said", () => {
+    const result = parse([single()]);
+    expect(result.sales).toHaveLength(1);
+    expect(result.flags.some((f) => f.message.includes("$0 paid"))).toBe(false);
+  });
+
+  it("a multi-item order refunded whole: every watch in it is dropped", () => {
+    const rows = [
+      single({ "Sales Record Number": "29462", "Item Number": "", "Item Title": "", "Custom Label": "",
+               "Quantity": "2", "Sold For": "$26.00", "Total Price": "$0.00", "Tracking Number": "", "Transaction ID": "" }),
+      single({ "Sales Record Number": "29462", "Item Title": "ACW8105MC-005", "Sold For": "$12.00",
+               "Paid On Date": "", "Total Price": "", "Transaction ID": "aaa" }),
+      single({ "Sales Record Number": "29462", "Item Title": "ACW8082-018", "Sold For": "$14.00",
+               "Paid On Date": "", "Total Price": "", "Transaction ID": "bbb" }),
+    ];
+    const result = parse(rows);
+    expect(result.sales).toHaveLength(0);
+    expect(result.dropped.map((d) => d.stockNumber)).toEqual(["ACW8105MC-005", "ACW8082-018"]);
+  });
+
+  it("a multi-item order with a real total is read as always", () => {
+    const rows = [
+      single({ "Sales Record Number": "29462", "Item Number": "", "Item Title": "", "Custom Label": "",
+               "Quantity": "2", "Sold For": "$26.00", "Total Price": "$40.54", "Tracking Number": "", "Transaction ID": "" }),
+      single({ "Sales Record Number": "29462", "Item Title": "ACW8105MC-005", "Sold For": "$12.00",
+               "Paid On Date": "", "Total Price": "", "Transaction ID": "aaa" }),
+    ];
+    expect(parse(rows).sales).toHaveLength(1);
+  });
+});

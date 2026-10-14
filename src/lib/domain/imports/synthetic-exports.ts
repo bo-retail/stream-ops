@@ -39,6 +39,8 @@ export interface EbayOrder {
   /** Defaults to one buyer per order. A shared label is one buyer. */
   buyer?: string;
   price?: string;
+  /** The order's Total Price, when it is not the price ("$0.00" for a refunded order). */
+  total?: string;
 }
 
 /** An eBay order report from the watch account. */
@@ -55,7 +57,7 @@ export function ebayReport(orders: EbayOrder[]): string {
       "Custom Label": o.label ?? `${tagDate(o.showDay)} PM`,
       Quantity: "1",
       "Sold For": o.price ?? "$25.00",
-      "Total Price": o.price ?? "$25.00",
+      "Total Price": o.total ?? o.price ?? "$25.00",
       "Sale Date": ebayDate(o.saleDay ?? o.showDay),
       "Paid On Date": ebayDate(o.paidDay),
       "Tracking Number": o.tracking ?? `9434608106245552${o.srn.padStart(6, "0")}`,

@@ -23,6 +23,7 @@ import type { DroppedRow, ImportFlag, WatchSale } from "@/lib/domain/imports/typ
 import { slotShort } from "@/lib/domain/types";
 import type { DateISO, Slot } from "@/lib/domain/types";
 import { getSettings } from "./settings";
+import { latestBatchIds } from "./sales-data";
 
 /**
  * Taking a morning's exports and turning them into the day's boxes.
@@ -335,7 +336,7 @@ async function reconcileDayBoxes(
     supersededIds: string[];
     splitOrigins: string[];
   },
-): Promise<{ untouchedClosedBoxes: number; packedWithout: string[] }> {
+): Promise<{ untouchedClosedBoxes: number; packedWithout: string[]; packedButGone: string[] }> {
 
   /*
     What this business's day now holds, across every line of its checklist.
@@ -463,7 +464,7 @@ async function reconcileDayBoxes(
       trackingNumber: true,
       status: true,
       batchId: true,
-      items: { select: { id: true, stockNumber: true, scannedQty: true } },
+      items: { select: { id: true, stockNumber: true, scannedQty: true, expectedQty: true } },
       // The real pieces a packer recorded against placeholder lines, so a
       // report that now names them can be matched to what is in the box —
       // and the pieces scanned straight onto a line, which say how much of
@@ -478,6 +479,27 @@ async function reconcileDayBoxes(
   const byTracking = new Map(existing.map((p) => [p.trackingNumber, p]));
   const closed = existing.filter((p) => p.status !== "OPEN");
   const closedTracking = new Set(closed.map((p) => p.trackingNumber));
+
+  /*
+    Parcels already packed with a piece the report no longer sells them: one
+    of two orders on a label cancelled, or refunded after payment (an eBay
+    order showing $0 paid). A closed box is never changed, so the refunded
+    watch would ship with the paid one. Named, with the piece to take out.
+    Not a box marked sent in bulk — it has gone.
+  */
+  const packedWithExtra = closed
+    .filter((p) => p.status !== "CLOSED_UNVERIFIED")
+    .flatMap((p) => {
+      const wanted = new Map<string, number>();
+      for (const i of contentsOf.get(p.trackingNumber) ?? []) wanted.set(i.stockNumber, (wanted.get(i.stockNumber) ?? 0) + i.expected);
+      const extra = p.items.filter(
+        (i) =>
+          !isPlaceholderStock(i.stockNumber) &&
+          i.scannedQty > (wanted.get(i.stockNumber) ?? 0) &&
+          i.expectedQty > (wanted.get(i.stockNumber) ?? 0),
+      );
+      return extra.length === 0 ? [] : [`${p.trackingNumber} (take out ${extra.map((i) => i.stockNumber).join(", ")})`];
+    });
 
   /*
     Parcels already packed that a report now adds a piece to.
@@ -818,7 +840,47 @@ async function reconcileDayBoxes(
     await tx.package.deleteMany({ where: { id: { in: sweep }, scans: { none: {} } } });
   }
 
-  return { untouchedClosedBoxes: closedTracking.size, packedWithout };
+  /*
+    Parcels this line's old file made, already packed — or begun — whose
+    orders the new file no longer has: cancelled, or refunded after payment
+    (an eBay order showing $0 paid). Such a box is never touched, rightly,
+    but a box left alone is a box that ships, and the buyer has had their
+    money back. Named, so it is pulled before it goes. Not one another day's
+    report still wants.
+  */
+  const gone =
+    supersededIds.length === 0
+      ? []
+      : await tx.package.findMany({
+          where: {
+            batchId: { in: supersededIds },
+            trackingNumber: { notIn: dayTrackings.length > 0 ? dayTrackings : ["-"] },
+            // Not one marked sent in bulk: it has already gone.
+            status: { not: "CLOSED_UNVERIFIED" },
+            OR: [{ status: { not: "OPEN" } }, { scans: { some: {} } }],
+          },
+          select: { trackingNumber: true },
+        });
+  const goneElsewhere =
+    gone.length === 0 ? new Map() : await currentLinesElsewhere(tx, business, showDate, gone.map((p) => p.trackingNumber));
+  const packedButGone = gone.map((p) => p.trackingNumber).filter((t) => !goneElsewhere.has(t));
+
+  return { untouchedClosedBoxes: closedTracking.size, packedWithout, packedButGone: [...packedButGone, ...packedWithExtra] };
+}
+
+/** Said at upload: packed parcels whose orders the report no longer has. */
+function packedButGoneFlag(labels: string[]): ImportFlag[] {
+  if (labels.length === 0) return [];
+  return [
+    {
+      severity: "warning",
+      message:
+        `${labels.length} parcel(s) were already packed with something this report no longer sells under that label ` +
+        `— an order cancelled or refunded after payment, or relabelled: ${labels.slice(0, 5).join(", ")}` +
+        `${labels.length > 5 ? ` and ${labels.length - 5} more` : ""}. If not yet shipped, pull each one and check the ` +
+        `order in Seller Hub / TikTok before it goes.`,
+    },
+  ];
 }
 
 /** Said at upload: packed parcels a report has since added a piece to. */
@@ -1816,6 +1878,44 @@ export async function runImport(
     }
   }
 
+  /*
+    A refund that arrives on a later day's export.
+
+    A late payer is counted on the day it sold (`carryOver`). If the buyer is
+    refunded since, this file shows the order at $0 and drops it — but the
+    earlier day's report still holds it as a sale, with its commission and
+    its box. Named, with the day to upload again: that day's own corrected
+    report is what takes it away.
+  */
+  const refundedRefs = [...new Set(dropped.filter((d) => d.platform === "EBAY" && d.reason.includes("refunded")).map((d) => d.orderRef))];
+  if (showDate && business && refundedRefs.length > 0) {
+    // What those days read now — their newest upload per line, not every one
+    // ever made — and only this business's: a sales record number belongs
+    // to one seller account, and the diamond account counts its own.
+    const current = await latestBatchIds(addDays(showDate, -14), addDays(showDate, -1));
+    const stillSold = await prisma.salesRecord.findMany({
+      where: {
+        platform: "EBAY",
+        business,
+        orderRef: { in: refundedRefs },
+        batchId: { in: current.length > 0 ? current : ["-"] },
+      },
+      select: { orderRef: true, showDate: true },
+      distinct: ["orderRef"],
+    });
+    const byDay = new Map<string, { orderRef: string }[]>();
+    for (const r of stillSold) byDay.set(fromDbDate(r.showDate), [...(byDay.get(fromDbDate(r.showDate)) ?? []), r]);
+    for (const [day, refs] of byDay) {
+      flags.push({
+        severity: "warning",
+        message:
+          `eBay order(s) ${refs.map((r) => r.orderRef).join(", ")} were refunded, but ${day}'s eBay report still ` +
+          `counts them as sold — with commission, and a box. Export ${day}'s eBay report again and upload it, so it is ` +
+          `taken off that day too.`,
+      });
+    }
+  }
+
   // On a day with an extra show, never overwrite another show's file.
   if (showDate && business) flags.push(...(await anotherShowsFileGuard(business, showDate, sales, dropped)));
 
@@ -2107,7 +2207,7 @@ export async function runImport(
 
       // Nothing of this day's own — an eBay report of nothing but the day
       // before's late payers — and there is no day to bring in line.
-      const { untouchedClosedBoxes, packedWithout } =
+      const { untouchedClosedBoxes, packedWithout, packedButGone } =
         keys.length > 0
           ? await reconcileDayBoxes(tx, {
               business: business ?? "WATCH",
@@ -2116,7 +2216,7 @@ export async function runImport(
               supersededIds,
               splitOrigins,
             })
-          : { untouchedClosedBoxes: 0, packedWithout: [] as string[] };
+          : { untouchedClosedBoxes: 0, packedWithout: [] as string[], packedButGone: [] as string[] };
 
       // The day before's eBay report gets its late orders.
       const late = await updateEarlierReport(
@@ -2134,6 +2234,7 @@ export async function runImport(
         batchId: firstBatchId || late?.batchId || null,
         untouchedClosedBoxes,
         packedWithout,
+        packedButGone,
         late,
       };
     },
@@ -2179,7 +2280,7 @@ export async function runImport(
     // An all-late report went to the day before, and says so.
     showDate: lateDay ? carried[0].showDate : showDate,
     business,
-    flags: [...flags, ...notes, ...packedWithoutFlag(written.packedWithout)],
+    flags: [...flags, ...notes, ...packedWithoutFlag(written.packedWithout), ...packedButGoneFlag(written.packedButGone)],
     watchCount: sales.length > 0 ? summary.watches : (written.late?.pieces ?? 0),
     boxCount: sales.length > 0 ? summary.boxes : (written.late?.newBoxes ?? 0),
     droppedCount: dropped.length,
