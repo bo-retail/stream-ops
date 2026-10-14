@@ -14,7 +14,7 @@ import {
   toDbDate,
 } from "@/lib/domain/dates";
 import { BUSINESS_LABEL } from "@/lib/domain/business";
-import { PLATFORM_SHORT, isSlot, platformRunsSlot, slotShort } from "@/lib/domain/types";
+import { PLATFORM_SHORT, isSlot, slotShort } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
 import { getSettings } from "@/lib/server/settings";
 
@@ -116,8 +116,7 @@ const ShowPickSchema = z
     slot: z.string().refine(isSlot, "That is not a show name the app can keep."),
     startHM: z.string().refine(isTimeHM, "Enter a time as HH:MM."),
     endHM: z.string().refine(isTimeHM, "Enter a time as HH:MM."),
-  })
-  .refine((p) => platformRunsSlot(p.platform, p.slot), "An extra show can only be a TikTok show.");
+  });
 
 /**
  * Replaces the shows on a draft release with exactly what is on screen.

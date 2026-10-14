@@ -18,7 +18,7 @@
  */
 
 import type { Business } from "../business";
-import type { DateISO } from "../types";
+import type { DateISO, Slot } from "../types";
 import { readModelNumber } from "./placeholders";
 import {
   checkHeaders,
@@ -29,7 +29,7 @@ import {
   roundedOffMessage,
   toRecords,
 } from "./csv";
-import { EBAY_HEADERS, defaultShiftTag, parseMoney, parseShiftTag } from "./types";
+import { EBAY_HEADERS, defaultShiftTag, parseMoney, parseShiftTag, showNameFor, tagDateOf, tagShowWords } from "./types";
 import type { DroppedRow, ImportFlag, ParseResult, ShowKey, WatchSale } from "./types";
 
 const MONTHS: Record<string, number> = {
@@ -178,7 +178,16 @@ function isFooterRow(row: string[]): boolean {
  *   schedule. See `placeEbayFile`. Defaults to watches, the only business that
  *   has ever sold on eBay, so every existing caller reads exactly as before.
  */
-export function parseEbayFile(file: EbayFile, business: Business = "WATCH"): ParseResult {
+export function parseEbayFile(
+  file: EbayFile,
+  business: Business = "WATCH",
+  /**
+   * The extra eBay shows a date has on the schedule ("EARLY AM"), for this
+   * business. A label naming one of them — `10.15.26 Early AM` — is that
+   * show's. None by default, which is every day before extra shows existed.
+   */
+  extraShowsOn: (date: DateISO) => readonly Slot[] = () => [],
+): ParseResult {
   const flags: ImportFlag[] = [];
   const rows = parseCsv(file.text);
 
@@ -385,10 +394,28 @@ export function parseEbayFile(file: EbayFile, business: Business = "WATCH"): Par
 
     items.forEach((item, index) => {
       const rawTag = item["Custom Label"];
-      const parsedTag = parseShiftTag(rawTag);
       const date = showDate ?? paidOn ?? "";
+      /*
+        An extra show's name in the label wins over reading it as AM or PM:
+        `10.15.26 EARLY AM` reads as a day-show tag with a token, and would be
+        paid to the day pair. Only a name that is that day's show counts.
 
-      if (!parsedTag) {
+        That day is the label's own date as well as the Sale Date: eBay dates
+        an order by its checkout, so a buyer who won in the 10/15 Early AM
+        show and checked out after midnight has a 10/16 Sale Date and a
+        "10.15.26 Early AM" label. Moved back to 10/15 later (`lateCheckouts`),
+        it must still be the Early AM show's.
+      */
+      const words = tagShowWords(rawTag);
+      const labelDate = tagDateOf(rawTag);
+      const extra =
+        words !== null &&
+        (extraShowsOn(date).includes(words) || (labelDate !== null && extraShowsOn(labelDate).includes(words)))
+          ? words
+          : null;
+      const parsedTag = extra ? null : parseShiftTag(rawTag);
+
+      if (!parsedTag && !extra) {
         malformedTags.push(`${srn} (${item["Item Title"]}, ${item["Sold For"]})`);
       }
 
@@ -399,7 +426,7 @@ export function parseEbayFile(file: EbayFile, business: Business = "WATCH"): Par
       // day-show watch with a bad tag pays the night pair until the listing is
       // fixed and the day uploaded again.
       const half: "AM" | "PM" = parsedTag ? parsedTag.half : "PM";
-      const show: ShowKey = half === "AM" ? "eBay AM" : "eBay PM";
+      const show: ShowKey = extra ? showNameFor("EBAY", extra) : half === "AM" ? "eBay AM" : "eBay PM";
 
       // Order-level figures sit on the first watch only, so an order's shipping
       // and tax are never counted once per item.
@@ -412,9 +439,9 @@ export function parseEbayFile(file: EbayFile, business: Business = "WATCH"): Par
         platform: "EBAY",
         show,
         showDate: date,
-        shiftTag: parsedTag ? rawTag : defaultShiftTag(date, "PM"),
+        shiftTag: parsedTag || extra ? rawTag : defaultShiftTag(date, "PM"),
         rawShiftTag: rawTag,
-        shiftTagValid: parsedTag !== null,
+        shiftTagValid: parsedTag !== null || extra !== null,
 
         orderRef: srn,
         lineRef: item["Transaction ID"],

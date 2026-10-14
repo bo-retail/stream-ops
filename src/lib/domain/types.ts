@@ -82,16 +82,6 @@ export function isStandardSlot(slot: Slot): boolean {
   return slot === "DAY" || slot === "NIGHT";
 }
 
-/**
- * Whether a platform can run a show in this slot. An extra show is TikTok only:
- * an eBay export marks each item AM or PM and nothing else, so a third eBay
- * show could never be credited with what it sold, and its pair would be paid
- * nothing for it.
- */
-export function platformRunsSlot(platform: Platform, slot: Slot): boolean {
-  return platform === "TIKTOK" || isStandardSlot(slot);
-}
-
 /** Whether a value is a slot: a standard show, or a well-formed extra one. */
 export function isSlot(value: string): boolean {
   if (value === "DAY" || value === "NIGHT") return true;

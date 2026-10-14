@@ -23,6 +23,16 @@
  *   - a file mostly the night show's but placed on the day show: said out loud
  *   - two shows' files uploaded at the same moment onto one line: one refused
  *
+ * eBay (Samuel 10/14: an extra show on eBay too, its listings labelled with
+ * the date and the show's name):
+ *   - "10.15.26 Early AM" goes to the eBay Early AM show and pays its pair
+ *   - AM and PM labels in the same file go to the day and night as always
+ *   - the label on a day without that eBay show: day show as before, and warned
+ *   - a buyer who won in the Early AM show and checked out after midnight (review)
+ *   - a mistyped name ("Erly AM") on a day with an extra eBay show: warned (review)
+ *   - yesterday's or tomorrow's Early AM label sold on a day without it: the day
+ *     or night show as before, never a show nobody is paid for (second review)
+ *
  * Dates are years in the past and everything is removed at the end. It refuses
  * to run against anything but a local database.
  *
@@ -31,8 +41,8 @@
 import "dotenv/config";
 import { assertDevDatabase } from "./dev-only.mjs";
 import { prisma } from "../src/lib/db";
-import { toDbDate } from "../src/lib/domain/dates";
-import { tiktokReport } from "../src/lib/domain/imports/synthetic-exports";
+import { addDays, toDbDate } from "../src/lib/domain/dates";
+import { ebayReport, tiktokReport } from "../src/lib/domain/imports/synthetic-exports";
 import { runImport } from "../src/lib/server/imports";
 import { listShowDays } from "../src/lib/server/shipping";
 import { getPayrollPeriod } from "../src/lib/server/payroll";
@@ -58,7 +68,14 @@ const CALLED_OFF_AFTER = "2021-07-18";
 const DELETED_AFTER = "2021-07-20";
 const MOSTLY_NIGHT = "2021-07-22";
 const AT_ONCE = "2021-07-24";
-const ALL = [EXTRA, BOTH_IN_ONE, PLAIN, CANCELLED, EARLY_LIVE, DRAFT, CALLED_OFF_AFTER, DELETED_AFTER, MOSTLY_NIGHT, AT_ONCE];
+const EBAY_EXTRA = "2021-07-26";
+const EBAY_PLAIN = "2021-07-28";
+const STALE_EARLY = "2021-07-30"; // has eBay Early AM; the 31st does not
+const AHEAD_EARLY = "2021-08-03"; // has eBay Early AM; the 2nd does not
+const ALL = [
+  EXTRA, BOTH_IN_ONE, PLAIN, CANCELLED, EARLY_LIVE, DRAFT, CALLED_OFF_AFTER, DELETED_AFTER, MOSTLY_NIGHT, AT_ONCE,
+  EBAY_EXTRA, EBAY_PLAIN, STALE_EARLY, addDays(STALE_EARLY, 1), addDays(AHEAD_EARLY, -1), AHEAD_EARLY,
+];
 const PREFIX = "check: extra shows ";
 
 async function clean() {
@@ -107,7 +124,11 @@ const HOURS: Record<string, [string, string]> = {
 };
 
 /** A published watch release with these TikTok shows on a day; the early pair on the early show. */
-async function schedule(day: string, shows: { slot: string; cancelled?: boolean }[], draft = false) {
+async function schedule(
+  day: string,
+  shows: { slot: string; cancelled?: boolean; platform?: "TIKTOK" | "EBAY" }[],
+  draft = false,
+) {
   const release = await prisma.release.create({
     data: { name: `${PREFIX}${day}`, business: "WATCH", startDate: toDbDate(day), endDate: toDbDate(day), scheduleStatus: draft ? "DRAFT" : "PUBLISHED" },
     select: { id: true },
@@ -122,7 +143,7 @@ async function schedule(day: string, shows: { slot: string; cancelled?: boolean 
         releaseId: release.id,
         business: "WATCH",
         date: toDbDate(day),
-        platform: "TIKTOK",
+        platform: s.platform ?? "TIKTOK",
         slot: s.slot,
         status: s.cancelled ? "CANCELLED" : "SCHEDULED",
         startsAt,
@@ -349,6 +370,103 @@ try {
     Object.values(kept),
     [one.status === "OK" ? 3 : 2],
   );
+
+  /* --------------------------------------------------------- eBay extra show */
+
+  const ebayFile = (day: string, labels: string[], base: number) => ({
+    name: `ebay-${day}.csv`,
+    text: ebayReport(labels.map((label, i) => ({ srn: String(base + i), showDay: day, paidDay: day, label }))),
+  });
+  const tag = (day: string) => `${day.slice(5, 7)}.${day.slice(8, 10)}.${day.slice(2, 4)}`;
+
+  await schedule(EBAY_EXTRA, [
+    { slot: "EARLY AM", platform: "EBAY" },
+    { slot: "DAY", platform: "EBAY" },
+    { slot: "NIGHT", platform: "EBAY" },
+  ]);
+  await upload([
+    ebayFile(EBAY_EXTRA, [`${tag(EBAY_EXTRA)} Early AM`, `${tag(EBAY_EXTRA)} EARLY AM`, `${tag(EBAY_EXTRA)} AM`, `${tag(EBAY_EXTRA)} PM`], 9100),
+  ]);
+  check("eBay: the show's name in the label goes to that show; AM and PM as always", await byShow(EBAY_EXTRA), {
+    "eBay AM @ null": 1,
+    "eBay EARLY AM @ null": 2,
+    "eBay PM @ null": 1,
+  });
+  const ebayPay = await getPayrollPeriod(EBAY_EXTRA, EBAY_EXTRA);
+  const ebayEarly = ebayPay.shows.find((s) => s.key.platform === "EBAY" && s.key.slot === "EARLY AM");
+  check("and the eBay Early AM pair are paid on its two items", [ebayEarly?.netRevenueCents, ebayEarly?.people.length], [2 * 2500, 2]);
+  check("nothing on that day is unattributed", ebayPay.unattributed.length, 0);
+
+  // Checked out after midnight: Sale Date the next day, label still the Early AM show's.
+  const late = await upload([
+    {
+      name: `ebay-late-${EBAY_EXTRA}.csv`,
+      text: ebayReport([
+        { srn: "9100", showDay: EBAY_EXTRA, paidDay: EBAY_EXTRA, label: `${tag(EBAY_EXTRA)} Early AM` },
+        { srn: "9101", showDay: EBAY_EXTRA, paidDay: EBAY_EXTRA, label: `${tag(EBAY_EXTRA)} EARLY AM` },
+        { srn: "9102", showDay: EBAY_EXTRA, paidDay: EBAY_EXTRA, label: `${tag(EBAY_EXTRA)} AM` },
+        { srn: "9103", showDay: EBAY_EXTRA, paidDay: EBAY_EXTRA, label: `${tag(EBAY_EXTRA)} PM` },
+        { srn: "9104", showDay: EBAY_EXTRA, saleDay: addDays(EBAY_EXTRA, 1), paidDay: addDays(EBAY_EXTRA, 1), label: `${tag(EBAY_EXTRA)} Early AM` },
+        { srn: "9105", showDay: EBAY_EXTRA, paidDay: EBAY_EXTRA, label: `${tag(EBAY_EXTRA)} Erly AM` },
+      ]),
+    },
+  ]);
+  check("checked out after midnight, labelled Early AM: still the Early AM show's", await byShow(EBAY_EXTRA), {
+    "eBay AM @ null": 2,
+    "eBay EARLY AM @ null": 3,
+    "eBay PM @ null": 1,
+  });
+  check(
+    "a mistyped show name is warned about, and nothing else is",
+    late.flags.filter((f) => f.severity === "warning" && /label/.test(f.message)).map((f) => f.message.includes("9105")),
+    [true],
+  );
+
+  await schedule(EBAY_PLAIN, [{ slot: "DAY", platform: "EBAY" }, { slot: "NIGHT", platform: "EBAY" }]);
+  const plainEbay = await upload([ebayFile(EBAY_PLAIN, [`${tag(EBAY_PLAIN)} Early AM`, `${tag(EBAY_PLAIN)} PM`], 9200)]);
+  check("an Early AM label on a day with no such eBay show: the day show, as before", await byShow(EBAY_PLAIN), {
+    "eBay AM @ null": 1,
+    "eBay PM @ null": 1,
+  });
+  check(
+    "and the upload says the label names a show that is not on that day",
+    plainEbay.flags.some((f) => f.severity === "warning" && f.message.includes("labelled for the EARLY AM show")),
+    true,
+  );
+
+  // A label dated for a neighbouring day's Early AM, sold on a day without one.
+  await schedule(STALE_EARLY, [{ slot: "EARLY AM", platform: "EBAY" }, { slot: "DAY", platform: "EBAY" }]);
+  await schedule(addDays(STALE_EARLY, 1), [{ slot: "DAY", platform: "EBAY" }]);
+  const stale = await upload([
+    {
+      name: "ebay-stale.csv",
+      text: ebayReport([
+        { srn: "9300", showDay: addDays(STALE_EARLY, 1), paidDay: addDays(STALE_EARLY, 1), label: `${tag(STALE_EARLY)} Early AM` },
+        { srn: "9301", showDay: addDays(STALE_EARLY, 1), paidDay: addDays(STALE_EARLY, 1), label: `${tag(addDays(STALE_EARLY, 1))} AM` },
+      ]),
+    },
+  ]);
+  check("yesterday's Early AM label sold today: today's day show, not a show nobody is paid for", await byShow(addDays(STALE_EARLY, 1)), {
+    "eBay AM @ null": 2,
+  });
+  check("and it is warned about", stale.flags.some((f) => f.severity === "warning" && f.message.includes("9300")), true);
+  check("nothing unattributed", (await getPayrollPeriod(addDays(STALE_EARLY, 1), addDays(STALE_EARLY, 1))).unattributed.length, 0);
+
+  await schedule(addDays(AHEAD_EARLY, -1), [{ slot: "NIGHT", platform: "EBAY" }]);
+  await schedule(AHEAD_EARLY, [{ slot: "EARLY AM", platform: "EBAY" }]);
+  await upload([
+    {
+      name: "ebay-ahead.csv",
+      text: ebayReport([
+        { srn: "9400", showDay: addDays(AHEAD_EARLY, -1), paidDay: addDays(AHEAD_EARLY, -1), label: `${tag(AHEAD_EARLY)} Early AM` },
+        { srn: "9401", showDay: addDays(AHEAD_EARLY, -1), paidDay: addDays(AHEAD_EARLY, -1), label: `${tag(addDays(AHEAD_EARLY, -1))} PM` },
+      ]),
+    },
+  ]);
+  check("tomorrow's Early AM label bought tonight: read as its AM, as before — never unattributed to Early AM", await byShow(addDays(AHEAD_EARLY, -1)), {
+    "eBay AM @ null": 1,
+    "eBay PM @ null": 1,
+  });
 
   /* ------------------------------------------------- days without the early show */
 

@@ -18,10 +18,10 @@ import { ebayFallback, placeEbayFile } from "@/lib/domain/imports/ebay-business"
 import type { EbayPlacement } from "@/lib/domain/imports/ebay-business";
 import { isPlaceholderStock, listingOfNote } from "@/lib/domain/imports/placeholders";
 import { parseTikTokFile } from "@/lib/domain/imports/tiktok";
-import { detectPlatform, slotOfSalesShow } from "@/lib/domain/imports/types";
+import { defaultShiftTag, detectPlatform, parseShiftTag, slotOfSalesShow, tagDateOf, tagShowWords } from "@/lib/domain/imports/types";
 import type { DroppedRow, ImportFlag, WatchSale } from "@/lib/domain/imports/types";
 import { slotShort } from "@/lib/domain/types";
-import type { DateISO } from "@/lib/domain/types";
+import type { DateISO, Slot } from "@/lib/domain/types";
 import { getSettings } from "./settings";
 
 /**
@@ -119,6 +119,8 @@ export function readFiles(
    * the answer for the rest, worked out from the schedule. See `placeEbayFile`.
    */
   ebayBusiness: Business = "WATCH",
+  /** The extra eBay shows on a date, per business — see `parseEbayFile`. */
+  ebayExtraShows: (business: Business, date: DateISO) => readonly Slot[] = () => [],
 ): {
   sales: WatchSale[];
   dropped: DroppedRow[];
@@ -168,7 +170,10 @@ export function readFiles(
     const result =
       platform === "TIKTOK"
         ? parseTikTokFile(file)
-        : parseEbayFile(file, ebaySellerBusiness(file.text) ?? ebayBusiness);
+        : (() => {
+            const owner = ebaySellerBusiness(file.text) ?? ebayBusiness;
+            return parseEbayFile(file, owner, (date) => ebayExtraShows(owner, date));
+          })();
 
     sales.push(...result.sales);
     dropped.push(...result.dropped);
@@ -230,7 +235,36 @@ export function readFiles(
     });
   }
 
-  const { kept, carried, keptToday } = carryOver(checkedOutLate.sales);
+  /*
+    An eBay item matched to an extra show by its label's own date (a buyer who
+    checked out after midnight) keeps that show only if it has now been moved
+    back to that date. Otherwise — a listing labelled for yesterday's or
+    tomorrow's Early AM, sold today — it would sit on a show today does not
+    have and nobody would be paid for it. It is read as AM or PM instead, as it
+    always was, and `strayEbayShowLabels` says so.
+  */
+  const onItsDaysShow = (s: WatchSale): WatchSale => {
+    if (s.platform !== "EBAY") return s;
+    const slot = slotOfSalesShow(s.show);
+    if (slot === "DAY" || slot === "NIGHT" || ebayExtraShows(s.business, s.showDate).includes(slot)) return s;
+    const tag = parseShiftTag(s.rawShiftTag);
+    return {
+      ...s,
+      show: tag?.half === "AM" ? ("eBay AM" as const) : ("eBay PM" as const),
+      shiftTag: tag ? s.rawShiftTag : defaultShiftTag(s.showDate, "PM"),
+      shiftTagValid: tag !== null,
+    };
+  };
+  const carriedOver = carryOver(checkedOutLate.sales.map(onItsDaysShow));
+  const { carried } = carriedOver;
+  // And again once late payers are settled: one kept on today's report (it
+  // shares a label with today's) is today's now, and today may have no such show.
+  const kept = carriedOver.kept.map(onItsDaysShow);
+  // Its note names the show it now counts towards, not one today does not have.
+  const keptToday = carriedOver.keptToday.map((s) => ({
+    ...s,
+    show: kept.find((k) => k.orderRef === s.orderRef && k.lineRef === s.lineRef)?.show ?? s.show,
+  }));
   if (carried.length + keptToday.length + checkedOutLate.redated.length > 0) {
     // The parser's own "two Sale Dates in one file" note is explained by these.
     const late = new Set([...carried, ...keptToday, ...checkedOutLate.redated].map((s) => s.sourceFile));
@@ -1291,6 +1325,98 @@ function linesIn(sales: readonly WatchSale[]): {
   };
 }
 
+/**
+ * The extra eBay shows running on the days an eBay file can cover — the day,
+ * the day before (late payers) and after — keyed "business|date"; and every
+ * extra show name the schedule has ever had, to tell a label that names a
+ * show from one that merely carries a token.
+ *
+ * Any release, draft or published, because the boss's plan is the plan either
+ * way; never a cancelled show, which sold nothing. The names are eBay shows'
+ * only — a TikTok show's name in an eBay label means nothing.
+ */
+async function ebayExtraShowsAround(day: DateISO): Promise<{ onDay: Map<string, Slot[]>; known: Set<string> }> {
+  const [rows, names] = await Promise.all([
+    prisma.show.findMany({
+      where: {
+        platform: "EBAY",
+        status: { not: "CANCELLED" },
+        slot: { notIn: ["DAY", "NIGHT"] },
+        date: { gte: toDbDate(addDays(day, -1)), lte: toDbDate(addDays(day, 1)) },
+      },
+      select: { business: true, date: true, slot: true },
+    }),
+    prisma.show.findMany({
+      where: { platform: "EBAY", slot: { notIn: ["DAY", "NIGHT"] } },
+      distinct: ["slot"],
+      select: { slot: true },
+    }),
+  ]);
+  const onDay = new Map<string, Slot[]>();
+  for (const r of rows) {
+    const key = `${r.business}|${fromDbDate(r.date)}`;
+    onDay.set(key, [...(onDay.get(key) ?? []), r.slot]);
+  }
+  return { onDay, known: new Set(names.map((n) => n.slot)) };
+}
+
+/**
+ * eBay items whose label looks meant for an extra show but went to the day or
+ * night show instead — so the extra show's pair would be paid nothing for them
+ * and the day or night pair would be. Said out loud, with the orders, so the
+ * schedule or the labels can be put right and the file uploaded again.
+ *
+ *   - a label naming an extra eBay show that is not on the schedule that day
+ *     (`10.15.26 EARLY AM` reads as a day-show tag with a token)
+ *   - on a day that has an extra eBay show, a label with any other word before
+ *     AM or PM — "10.15.26 Erly AM" — except the TT the team has always used
+ */
+function strayEbayShowLabels(
+  sales: readonly WatchSale[],
+  extra: { onDay: ReadonlyMap<string, readonly Slot[]>; known: ReadonlySet<string> },
+): ImportFlag[] {
+  const ORDINARY = new Set(["AM", "PM", "TT AM", "TT PM"]);
+  const notOnDay: WatchSale[] = [];
+  const unknown: WatchSale[] = [];
+  for (const s of sales) {
+    if (s.platform !== "EBAY" || (s.show !== "eBay AM" && s.show !== "eBay PM")) continue;
+    const words = tagShowWords(s.rawShiftTag);
+    if (words === null || ORDINARY.has(words) || !s.shiftTagValid) continue;
+    if (extra.known.has(words)) {
+      notOnDay.push(s);
+      continue;
+    }
+    const days = [s.showDate, tagDateOf(s.rawShiftTag)].filter((d): d is DateISO => d !== null);
+    if (days.some((d) => (extra.onDay.get(`${s.business}|${d}`) ?? []).length > 0)) unknown.push(s);
+  }
+  const examples = (list: WatchSale[]) =>
+    list
+      .slice(0, 3)
+      .map((s) => `${s.orderRef} (${s.rawShiftTag})`)
+      .join("; ");
+  const flags: ImportFlag[] = [];
+  if (notOnDay.length > 0) {
+    const names = [...new Set(notOnDay.map((s) => tagShowWords(s.rawShiftTag)!))];
+    flags.push({
+      severity: "warning",
+      message:
+        `${notOnDay.length} eBay item(s) are labelled for the ${names.join(" / ")} show, but no such eBay show is on ` +
+        `the schedule that day, so they were credited to the day or night show instead. Add the show to the schedule ` +
+        `(or fix the labels) and upload the eBay file again. ${examples(notOnDay)}`,
+    });
+  }
+  if (unknown.length > 0) {
+    flags.push({
+      severity: "warning",
+      message:
+        `${unknown.length} eBay item(s) have a label that is not AM, PM or the name of one of the day's eBay shows, ` +
+        `so they were credited to the day or night show by their last word. If they were meant for an extra show, ` +
+        `fix the labels (date and show name, like "10.15.26 Early AM") and upload the eBay file again. ${examples(unknown)}`,
+    });
+  }
+  return flags;
+}
+
 /** A refusal found only once the day was locked — see `anotherShowsFileGuard`. */
 class AnotherShowsFile extends Error {
   constructor(readonly flags: ImportFlag[]) {
@@ -1508,7 +1634,13 @@ export async function runImport(
   const ebayBusiness: EbayPlacement =
     fallback.kind === "fallback" ? { kind: "placed", business: fallback.business } : scheduled;
 
-  const read = readFiles(files, ebayBusiness.kind === "ambiguous" ? "WATCH" : ebayBusiness.business);
+  const extraEbay = firstPass.showDate ? await ebayExtraShowsAround(firstPass.showDate) : null;
+  const read = readFiles(
+    files,
+    ebayBusiness.kind === "ambiguous" ? "WATCH" : ebayBusiness.business,
+    (business, date) => extraEbay?.onDay.get(`${business}|${date}`) ?? [],
+  );
+  if (extraEbay) read.flags.push(...strayEbayShowLabels([...read.sales, ...read.carried], extraEbay));
   const { dropped, flags, showDate, business, fileInfo, keptToday } = read;
   let { sales, boxes, carried } = read;
 

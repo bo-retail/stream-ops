@@ -55,6 +55,28 @@ export function slotOfShowName(show: string): { platform: ImportPlatform; slot: 
 }
 
 /**
+ * The words after the date in a Custom Label, in capitals: "EARLY AM" for
+ * `10.15.26 Early AM`. Null for a label with no date in front.
+ *
+ * An eBay file records no time of day, so an extra eBay show is told apart by
+ * its name in the label (Samuel, 10/14: date and show name). The caller checks
+ * the words against that day's shows; this only reads them.
+ */
+export function tagShowWords(raw: string): string | null {
+  const match = /^\s*\d{2}\.\d{2}\.\d{2}\s+(.+?)\s*$/.exec(raw);
+  return match ? match[1].replace(/\s+/g, " ").toUpperCase() : null;
+}
+
+/** The date a Custom Label starts with, `10.15.26 …` → "2026-10-15", or null. */
+export function tagDateOf(raw: string): DateISO | null {
+  const match = /^\s*(\d{2})\.(\d{2})\.(\d{2})\s/.exec(raw);
+  if (!match) return null;
+  const [, mm, dd, yy] = match;
+  if (Number(mm) < 1 || Number(mm) > 12 || Number(dd) < 1 || Number(dd) > 31) return null;
+  return `20${yy}-${mm}-${dd}`;
+}
+
+/**
  * The slot of a stored sales record's show, always answering.
  *
  * A name `slotOfShowName` cannot read is placed the way every record was before

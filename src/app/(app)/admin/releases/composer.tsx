@@ -10,7 +10,6 @@ import {
   normaliseSlotName,
   PLATFORM_SHORT,
   slotShort,
-  isStandardSlot,
   slotsInOrder,
   SUGGESTED_HOURS,
 } from "@/lib/domain/types";
@@ -97,15 +96,11 @@ export function Composer({
   const [newEnd, setNewEnd] = useState("13:00");
   const [timeError, setTimeError] = useState<string | null>(null);
 
-  /**
-   * The grid's columns: each show time on TikTok, then on eBay, in the order
-   * they run. An extra show is TikTok only — an eBay file says only AM or PM on
-   * each item, so a third eBay show could never be credited with its sales.
-   */
+  /** The grid's columns: each show time on TikTok, then on eBay, in the order they run. */
   const columns = useMemo(
     () =>
       [...times].sort(byStart).flatMap((t) =>
-        (isStandardSlot(t.slot) ? (["TIKTOK", "EBAY"] as const) : (["TIKTOK"] as const)).map((platform) => ({
+        (["TIKTOK", "EBAY"] as const).map((platform) => ({
           platform,
           slot: t.slot,
           key: `${platform}|${t.slot}`,
@@ -168,6 +163,17 @@ export function Composer({
   function fill(which: "all" | "weekdays" | "days" | "nights" | "none") {
     if (!editable) return;
     const next = new Set<string>();
+    /*
+      An extra show's eBay column is filled only once it has been ticked by hand
+      somewhere. An early morning show is usually TikTok alone, and one click of
+      "Every show, every day" must not quietly create an eBay show on every date
+      — with a pair to staff, availability to ask for and hours to pay.
+    */
+    const extraInUse = (col: { platform: Platform; slot: Slot }) =>
+      col.platform === "TIKTOK" ||
+      col.slot === "DAY" ||
+      col.slot === "NIGHT" ||
+      [...ticked].some((key) => key.endsWith(`|${col.platform}|${col.slot}`));
     if (which !== "none") {
       for (const date of dates) {
         const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
@@ -175,6 +181,7 @@ export function Composer({
         for (const col of columns) {
           if (which === "days" && col.slot !== "DAY") continue;
           if (which === "nights" && col.slot !== "NIGHT") continue;
+          if (!extraInUse(col)) continue;
           next.add(cellKey(date, col.platform, col.slot));
         }
       }
@@ -300,8 +307,11 @@ export function Composer({
                 </Button>
               </div>
               <p className="mt-1 text-xs text-ink-muted">
-                A TikTok show. Tick the days it runs below and save. Each show needs its own TikTok
-                export — the upload puts a file on the show most of its orders came in during.
+                It gets a TikTok and an eBay column — tick the days it runs on each and save. TikTok: each
+                show needs its own export, and a file goes to the show most of its orders came in
+                during. eBay: tick its eBay column by hand the first time (the quick fills only
+                repeat it after that), and label that show&apos;s listings with the date and the show&apos;s
+                name, like &quot;10.15.26 Early AM&quot;.
               </p>
               {timeError ? <p className="mt-1 text-xs text-danger-700">{timeError}</p> : null}
             </div>

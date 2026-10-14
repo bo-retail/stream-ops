@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { expectedLinesFor } from "./expected";
 import { hasExtraShow, placeOnExtraShows, replacesAnotherShowsFile, showAt, showForOrders } from "./extra-shows";
 import type { TikTokShowWindow } from "./extra-shows";
-import { showNameFor, slotOfSalesShow, slotOfShowName } from "./types";
+import { showNameFor, slotOfSalesShow, slotOfShowName, tagDateOf, tagShowWords } from "./types";
+import { parseEbayFile } from "./ebay";
+import { ebayReport } from "./synthetic-exports";
 import type { WatchSale } from "./types";
-import { isSlot, normaliseSlotName, platformRunsSlot, slotsInOrder } from "../types";
+import { isSlot, normaliseSlotName, slotsInOrder } from "../types";
 
 /*
   10/15/2026, Eastern daylight time (UTC-4). The boss's early morning TikTok
@@ -149,12 +151,63 @@ describe("which show a file belongs to", () => {
   });
 });
 
-describe("an extra show is TikTok only", () => {
-  it("eBay runs only the day and night shows", () => {
-    expect(platformRunsSlot("TIKTOK", "EARLY AM")).toBe(true);
-    expect(platformRunsSlot("EBAY", "EARLY AM")).toBe(false);
-    expect(platformRunsSlot("EBAY", "DAY")).toBe(true);
-    expect(platformRunsSlot("EBAY", "NIGHT")).toBe(true);
+describe("an extra eBay show, told apart by its name in the Custom Label", () => {
+  const D = "2026-10-15";
+  const ebay = (labels: string[]) => ({
+    name: "ebay.csv",
+    text: ebayReport(labels.map((label, i) => ({ srn: String(100 + i), showDay: D, paidDay: D, label }))),
+  });
+  const shows = (date: string) => (date === D ? ["EARLY AM"] : []);
+
+  it("a label with the show's name goes to that show; AM and PM as always", () => {
+    const out = parseEbayFile(ebay(["10.15.26 Early AM", "10.15.26 AM", "10.15.26 PM", "10.15.26  early   am "]), "WATCH", shows);
+    expect(out.sales.map((s) => s.show)).toEqual(["eBay EARLY AM", "eBay AM", "eBay PM", "eBay EARLY AM"]);
+    expect(out.sales.every((s) => s.shiftTagValid)).toBe(true);
+    expect(out.flags.filter((f) => f.severity !== "info")).toEqual([]);
+  });
+
+  it("with no such show that day, the label reads exactly as it always did", () => {
+    const before = parseEbayFile(ebay(["10.15.26 Early AM", "10.15.26 TT AM"]));
+    const now = parseEbayFile(ebay(["10.15.26 Early AM", "10.15.26 TT AM"]), "WATCH", () => []);
+    expect(now).toEqual(before);
+    expect(now.sales.map((s) => s.show)).toEqual(["eBay AM", "eBay AM"]);
+  });
+
+  it("the words must be the show's whole name, not part of it", () => {
+    const out = parseEbayFile(ebay(["10.15.26 EARLY", "10.15.26 EARLY AM PM"]), "WATCH", shows);
+    expect(out.sales.map((s) => s.show)).toEqual(["eBay PM", "eBay PM"]);
+  });
+
+  it("a blank or Excel-mangled label is still flagged and goes to PM, as before", () => {
+    const out = parseEbayFile(ebay(["", "45945"]), "WATCH", shows);
+    expect(out.sales.map((s) => s.show)).toEqual(["eBay PM", "eBay PM"]);
+    expect(out.flags.some((f) => f.message.includes("unreadable Custom Label"))).toBe(true);
+  });
+
+  it("a buyer who checked out after midnight: the label's own date finds the show", () => {
+    // Won in the 10/15 Early AM show, checked out 10/16: Sale Date 10/16, label 10/15.
+    const out = parseEbayFile(
+      {
+        name: "ebay.csv",
+        text: ebayReport([{ srn: "1", showDay: D, saleDay: "2026-10-16", paidDay: "2026-10-16", label: "10.15.26 Early AM" }]),
+      },
+      "WATCH",
+      shows,
+    );
+    expect(out.sales[0].show).toBe("eBay EARLY AM");
+  });
+
+  it("reads the words and the date at the front of a label", () => {
+    expect(tagDateOf("10.15.26 Early AM")).toBe("2026-10-15");
+    expect(tagDateOf("13.15.26 AM")).toBeNull();
+    expect(tagDateOf("Early AM")).toBeNull();
+  });
+
+  it("reads the words after the date", () => {
+    expect(tagShowWords("10.15.26 Early AM")).toBe("EARLY AM");
+    expect(tagShowWords(" 10.15.26   early  am ")).toBe("EARLY AM");
+    expect(tagShowWords("Early AM")).toBeNull();
+    expect(tagShowWords("")).toBeNull();
   });
 });
 

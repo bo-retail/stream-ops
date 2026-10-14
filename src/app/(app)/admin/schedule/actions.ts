@@ -14,7 +14,7 @@ import {
 } from "@/lib/domain/dates";
 import { blockerFor, rankCandidates } from "@/lib/domain/assign";
 import type { Candidate } from "@/lib/domain/assign";
-import { PLATFORM_SHORT, SEATS, SEATS_PER_SHOW, isSlot, platformRunsSlot, slotShort } from "@/lib/domain/types";
+import { PLATFORM_SHORT, SEATS, SEATS_PER_SHOW, isSlot, slotShort } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
 import { businessOfRelease } from "@/lib/server/business";
 import { busyPeriods, getReleaseView, planCopyLastRelease } from "@/lib/server/schedule";
@@ -346,7 +346,7 @@ const AddShowSchema = z.object({
   slot: z.string().refine(isSlot, "That is not a show name the app can keep."),
   start: z.string().refine(isTimeHM, "Use 24-hour times like 13:00."),
   end: z.string().refine(isTimeHM, "Use 24-hour times like 19:00."),
-}).refine((d) => platformRunsSlot(d.platform, d.slot), "An extra show can only be a TikTok show.");
+});
 
 /** Recreates a show that was deleted outright. */
 export async function addShow(_prev: ActionState, formData: FormData): Promise<ActionState> {
