@@ -453,6 +453,25 @@ export function sentAvailability<T extends { userId: string }>(availability: rea
   return availability.filter((a) => sent.has(a.userId));
 }
 
+/** What the picker says about someone who has not pressed Send — and how its group knows them. */
+export const NOT_SENT_REASON = "Hasn't sent in availability";
+
+/** Which part of the picker a person goes in, and the order of the parts. */
+export type PickerGroup = "yes" | "unsent" | "no" | "cant";
+export const PICKER_ORDER: Record<PickerGroup, number> = { yes: 0, unsent: 1, no: 2, cant: 3 };
+
+/**
+ * Said yes (offered this show, sent); hasn't sent availability; said no (did
+ * not offer it, or booked the day off); can't (already on a show then).
+ * Samuel, 10/14: "sort it, it's messy".
+ */
+export function pickerGroup(check: { ok: boolean; reason?: string }): PickerGroup {
+  if (!check.ok) return "cant";
+  if (!check.reason) return "yes";
+  if (check.reason === NOT_SENT_REASON) return "unsent";
+  return "no";
+}
+
 /**
  * Whether a person can be added to a show, and if not, why.
  *
@@ -512,7 +531,7 @@ export function checkCandidate(
     without meaning to (Samuel, 10/14). Build schedule never picks them.
   */
   if (options.submittedUserIds && !options.submittedUserIds.includes(userId)) {
-    return { ok: true, reason: "Hasn't sent in availability", severity: "warning" };
+    return { ok: true, reason: NOT_SENT_REASON, severity: "warning" };
   }
 
   const availability = options.availability;

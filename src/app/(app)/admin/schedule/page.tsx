@@ -4,7 +4,7 @@ import { FileSpreadsheet } from "lucide-react";
 import { Badge, Card, CardHeader, LinkButton, PageHeader, Stat } from "@/components/ui";
 import { requireBoss } from "@/lib/auth/guards";
 import { BUSINESS_LABEL, BUSINESS_SHORT } from "@/lib/domain/business";
-import { checkCandidate } from "@/lib/domain/schedule";
+import { checkCandidate, PICKER_ORDER, pickerGroup } from "@/lib/domain/schedule";
 import { SEATS, SUGGESTED_HOURS, slotsInOrder } from "@/lib/domain/types";
 import {
   getReleaseView,
@@ -110,20 +110,19 @@ export default async function BuildSchedulePage({
           elsewhere: view.elsewhere,
           submittedUserIds: view.submittedUserIds,
         });
+        const blocked = result.ok ? null : (result.reason ?? "Not available");
+        const warn = result.ok ? (result.reason ?? null) : null;
         return {
           userId: person.id,
           name: person.name,
-          blocked: result.ok ? null : (result.reason ?? "Not available"),
-          warn: result.ok ? (result.reason ?? null) : null,
+          blocked,
+          warn,
+          group: pickerGroup(result),
         };
       });
 
-      // People who can simply take the seat first, then the ones with a caveat,
-      // then the ones who cannot — so the obvious choice is at the top.
-      forSeat.sort((a, b) => {
-        const rank = (c: Candidate) => (c.blocked ? 2 : c.warn ? 1 : 0);
-        return rank(a) - rank(b) || a.name.localeCompare(b.name);
-      });
+      // Said yes first, then not sent, then said no, then can't — each by name.
+      forSeat.sort((a, b) => PICKER_ORDER[a.group] - PICKER_ORDER[b.group] || a.name.localeCompare(b.name));
 
       candidates[seatKey(show.id, seat)] = forSeat;
     }

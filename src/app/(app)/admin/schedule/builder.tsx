@@ -1,5 +1,6 @@
 "use client";
 
+import type { PickerGroup } from "@/lib/domain/schedule";
 import { useActionState, useMemo, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Ban, Clock, RotateCcw, X } from "lucide-react";
@@ -103,7 +104,22 @@ export interface Candidate {
   blocked: string | null;
   /** Set when picking them is allowed but worth flagging. */
   warn: string | null;
+  /**
+   * Which part of the list they go in (Samuel, 10/14 — "sort it, it's
+   * messy"): said yes; hasn't sent availability; said no (did not offer, or
+   * booked the day off); can't (already on a show then).
+   */
+  group: CandidateGroup;
 }
+
+export type CandidateGroup = PickerGroup;
+
+const GROUPS: { key: CandidateGroup; label: string; color?: string }[] = [
+  { key: "yes", label: "Said yes" },
+  { key: "unsent", label: "Hasn't sent availability" },
+  { key: "no", label: "Said no", color: "#b91c1c" },
+  { key: "cant", label: "Can't — already on a show", color: "#9ca3af" },
+];
 
 /**
  * Candidates for every empty seat, keyed `showId|seat`.
@@ -189,12 +205,26 @@ function Seat({
             <option value="" disabled>
               Pick someone…
             </option>
-            {candidates.map((c) => (
-              <option key={c.userId} value={c.userId} disabled={c.blocked !== null}>
-                {c.name}
-                {c.blocked ? ` — ${c.blocked}` : c.warn ? ` (${c.warn})` : ""}
-              </option>
-            ))}
+            {GROUPS.map((g) => {
+              const inGroup = candidates.filter((c) => c.group === g.key);
+              if (inGroup.length === 0) return null;
+              return (
+                <optgroup key={g.key} label={`${g.label} (${inGroup.length})`}>
+                  {inGroup.map((c) => (
+                    <option
+                      key={c.userId}
+                      value={c.userId}
+                      disabled={c.blocked !== null}
+                      style={g.color ? { color: g.color } : undefined}
+                    >
+                      {c.name}
+                      {/* The group already says "hasn't sent"; the other two say which kind. */}
+                      {c.blocked ? ` — ${c.blocked}` : g.key === "no" && c.warn ? ` (${c.warn})` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              );
+            })}
           </Select>
         </form>
       )}

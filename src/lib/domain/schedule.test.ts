@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkCandidate, planCopyForward, sentAvailability, validateSchedule } from "./schedule";
+import { checkCandidate, pickerGroup, planCopyForward, sentAvailability, validateSchedule } from "./schedule";
 import type {
   AssignmentInput,
   AvailabilityInput,
@@ -672,5 +672,28 @@ describe("said-yes, after review (10/14)", () => {
     const s = show();
     const result = validateSchedule([s], staff(s, "maya", "devon"), { availability: [offer("maya")] });
     expect(result.issues.filter((i) => i.code === "NOT_AVAILABLE")).toEqual([]);
+  });
+});
+
+describe("the picker's groups (10/14)", () => {
+  it("said yes, not sent, said no, can't", () => {
+    expect(pickerGroup({ ok: true })).toBe("yes");
+    expect(pickerGroup({ ok: true, reason: "Hasn't sent in availability" })).toBe("unsent");
+    expect(pickerGroup({ ok: true, reason: "Did not offer this show" })).toBe("no");
+    expect(pickerGroup({ ok: true, reason: "Booked this day off" })).toBe("no");
+    expect(pickerGroup({ ok: false, reason: "Already on TikTok Day on 2026-10-15" })).toBe("cant");
+  });
+
+  it("straight from the check: each kind of person lands in the right group", () => {
+    const s = show();
+    const other = show({ platform: "EBAY" });
+    const base = { shows: [s, other], availability: [{ userId: "yes", dateISO: DATE, slot: "DAY" as Slot }], submittedUserIds: ["yes", "no"] };
+    const group = (userId: string, extra: Partial<Parameters<typeof checkCandidate>[2]> = {}) =>
+      pickerGroup(checkCandidate(userId, s, { assignments: [], ...base, ...extra }));
+    expect(group("yes")).toBe("yes");
+    expect(group("never")).toBe("unsent");
+    expect(group("no")).toBe("no");
+    expect(group("never", { timeOffByUser: { never: [DATE] } })).toBe("no");
+    expect(group("yes", { assignments: [one(other, "yes", 1)] })).toBe("cant");
   });
 });
