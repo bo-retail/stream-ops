@@ -284,7 +284,7 @@ export function ReleaseActions({
       <Card>
         <CardHeader
           title="Build the schedule"
-          description="From everyone's availability. Nothing is saved until you confirm it."
+          description="From everyone who has sent in their availability — nobody else is put in. Nothing is saved until you confirm it."
         />
         <div className="space-y-3 p-4">
           <form action={genAction}>

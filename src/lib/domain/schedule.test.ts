@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkCandidate, planCopyForward, validateSchedule } from "./schedule";
+import { checkCandidate, planCopyForward, sentAvailability, validateSchedule } from "./schedule";
 import type {
   AssignmentInput,
   AvailabilityInput,
@@ -570,5 +570,107 @@ describe("shows in another release", () => {
       elsewhere: [diamondMorning],
     });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("only people who said yes (Samuel, 10/14)", () => {
+  const offer = (userId: string, slot: Slot = "DAY") => ({ userId, dateISO: DATE, slot });
+
+  it("Build schedule uses only availability from people who pressed Send", () => {
+    const all = [offer("maya"), offer("devon"), offer("ana", "NIGHT")];
+    expect(sentAvailability(all, ["maya", "ana"])).toEqual([offer("maya"), offer("ana", "NIGHT")]);
+    expect(sentAvailability(all, [])).toEqual([]);
+  });
+
+  it("picking by hand someone who never sent availability: allowed, with the warning", () => {
+    const s = show();
+    expect(checkCandidate("devon", s, { assignments: [], shows: [s], availability: [], submittedUserIds: ["maya"] })).toEqual({
+      ok: true,
+      reason: "Hasn't sent in availability",
+      severity: "warning",
+    });
+  });
+
+  it("someone who tapped days but never pressed Send gets the same warning", () => {
+    const s = show();
+    const result = checkCandidate("devon", s, {
+      assignments: [],
+      shows: [s],
+      availability: [offer("devon")],
+      submittedUserIds: ["maya"],
+    });
+    expect(result.reason).toBe("Hasn't sent in availability");
+    expect(result.ok).toBe(true);
+  });
+
+  it("someone who sent it but did not offer this show: told so, still allowed", () => {
+    const s = show();
+    const result = checkCandidate("maya", s, {
+      assignments: [],
+      shows: [s],
+      availability: [offer("maya", "NIGHT")],
+      submittedUserIds: ["maya"],
+    });
+    expect(result).toEqual({ ok: true, reason: "Did not offer this show", severity: "warning" });
+  });
+
+  it("someone who sent it and offered this show: no warning", () => {
+    const s = show();
+    expect(
+      checkCandidate("maya", s, { assignments: [], shows: [s], availability: [offer("maya")], submittedUserIds: ["maya"] }),
+    ).toEqual({ ok: true });
+  });
+
+  it("a clash still refuses, whatever they sent", () => {
+    const tiktok = show({ platform: "TIKTOK" });
+    const ebay = show({ platform: "EBAY" });
+    const result = checkCandidate("devon", ebay, {
+      assignments: [one(tiktok, "devon", 1)],
+      shows: [tiktok, ebay],
+      submittedUserIds: [],
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("said-yes, after review (10/14)", () => {
+  const offer = (userId: string, slot: Slot = "DAY") => ({ userId, dateISO: DATE, slot });
+
+  it("someone who sent 'no shows' is told 'did not offer', not shown as the obvious pick", () => {
+    const s = show();
+    expect(checkCandidate("zero", s, { assignments: [], shows: [s], availability: [], submittedUserIds: ["zero"] })).toEqual({
+      ok: true,
+      reason: "Did not offer this show",
+      severity: "warning",
+    });
+  });
+
+  it("a seat held by someone who never sent keeps its flag after they are picked", () => {
+    const s = show();
+    const result = validateSchedule([s], staff(s, "maya", "devon"), {
+      availability: [offer("maya")],
+      submittedUserIds: ["maya"],
+    });
+    const flags = result.issues.filter((i) => i.code === "NOT_AVAILABLE");
+    expect(flags.map((i) => i.message)).toEqual([expect.stringContaining("has not sent in availability")]);
+    expect(flags[0].userId).toBe("devon");
+    expect(result.canPublish).toBe(true);
+  });
+
+  it("a seat held by someone who sent 'no shows' is flagged 'did not offer'", () => {
+    const s = show();
+    const result = validateSchedule([s], staff(s, "maya", "zero"), {
+      availability: [offer("maya")],
+      submittedUserIds: ["maya", "zero"],
+    });
+    expect(result.issues.filter((i) => i.code === "NOT_AVAILABLE").map((i) => i.message)).toEqual([
+      expect.stringContaining("did not offer"),
+    ]);
+  });
+
+  it("without the list of who sent, validation reads as it always did", () => {
+    const s = show();
+    const result = validateSchedule([s], staff(s, "maya", "devon"), { availability: [offer("maya")] });
+    expect(result.issues.filter((i) => i.code === "NOT_AVAILABLE")).toEqual([]);
   });
 });

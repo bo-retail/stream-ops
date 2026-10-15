@@ -108,6 +108,7 @@ export default async function BuildSchedulePage({
           availability: availabilityInputs,
           timeOffByUser: view.timeOffByUser,
           elsewhere: view.elsewhere,
+          submittedUserIds: view.submittedUserIds,
         });
         return {
           userId: person.id,

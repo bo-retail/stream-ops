@@ -13,6 +13,7 @@ import {
   toDbDate,
 } from "@/lib/domain/dates";
 import { blockerFor, rankCandidates } from "@/lib/domain/assign";
+import { sentAvailability } from "@/lib/domain/schedule";
 import type { Candidate } from "@/lib/domain/assign";
 import { PLATFORM_SHORT, SEATS, SEATS_PER_SHOW, isSlot, slotShort } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
@@ -746,8 +747,15 @@ async function buildProposal(releaseId: string): Promise<Proposal | null> {
   );
   // How many shows each person offered across the whole release. This is what
   // rule 3 divides by, so the work lands in proportion to availability.
+  /*
+    Only people who said yes: their availability counts once they pressed
+    Send (Samuel, 10/14). Days tapped and never sent are not a yes, and
+    someone who sent nothing is never placed here — they can still be picked
+    by hand, with a warning.
+  */
+  const offers = sentAvailability(view.availability, view.submittedUserIds);
   const offeredByUser = new Map<string, number>();
-  for (const a of view.availability) {
+  for (const a of offers) {
     offeredByUser.set(a.userId, (offeredByUser.get(a.userId) ?? 0) + 1);
   }
 
@@ -791,7 +799,7 @@ async function buildProposal(releaseId: string): Promise<Proposal | null> {
       let offered = 0;
       const candidates: Candidate[] = [];
       for (const person of view.streamers) {
-        const offeredThisShow = view.availability.some(
+        const offeredThisShow = offers.some(
           (a) => a.userId === person.id && a.dateISO === show.dateISO && a.slot === show.slot,
         );
         if (offeredThisShow) offered++;
@@ -880,7 +888,7 @@ export async function generateSchedule(
     return {
       error:
         proposal.gaps.length > 0
-          ? "Nobody offered the empty shows, so there is nothing to fill them with."
+          ? "Nobody who has sent in their availability offered the empty shows, so there is nothing to fill them with."
           : "Every seat is already filled — nothing to generate.",
     };
   }

@@ -251,6 +251,7 @@ export function validateSchedule(
     (options.availability ?? []).map((a) => `${a.userId}|${a.dateISO}|${a.slot}`),
   );
   const hasAnyAvailability = new Set((options.availability ?? []).map((a) => a.userId));
+  const sent = options.submittedUserIds ? new Set(options.submittedUserIds) : null;
 
   for (const a of active) {
     const show = showById.get(a.showId)!;
@@ -268,10 +269,30 @@ export function validateSchedule(
       });
     }
 
-    // Only checked for people who submitted something. Someone who never
-    // submitted gets the missing-submission warning instead, not a pile of
-    // "not available" warnings for every show they are on.
-    if (!hasAnyAvailability.has(a.userId)) continue;
+    /*
+      Who pressed Send is known: a seat held by someone who did not is
+      flagged on the seat itself (Samuel, 10/14 — they can be picked by hand,
+      and the warning must not vanish the moment they are), and someone who
+      sent "no shows" did not offer this one.
+    */
+    if (sent) {
+      if (!sent.has(a.userId)) {
+        issues.push({
+          code: "NOT_AVAILABLE",
+          severity: "warning",
+          message: `${a.userName} has not sent in availability but is on ${showLabel(show)}.`,
+          dateISO: show.dateISO,
+          userId: a.userId,
+          seat: a.seat,
+          showIds: [show.id],
+        });
+        continue;
+      }
+    } else if (!hasAnyAvailability.has(a.userId)) {
+      // Not known: only checked for people who submitted something. Someone who
+      // never submitted gets the missing-submission warning instead.
+      continue;
+    }
 
     if (!offered.has(`${a.userId}|${show.dateISO}|${show.slot}`)) {
       issues.push({
@@ -423,6 +444,16 @@ export function planCopyForward(
 }
 
 /**
+ * The availability Build schedule may use: only from people who pressed Send
+ * (Samuel, 10/14 — "only people that have said yes"). Days tapped and never
+ * sent are not a yes.
+ */
+export function sentAvailability<T extends { userId: string }>(availability: readonly T[], submittedUserIds: readonly string[]): T[] {
+  const sent = new Set(submittedUserIds);
+  return availability.filter((a) => sent.has(a.userId));
+}
+
+/**
  * Whether a person can be added to a show, and if not, why.
  *
  * Used to explain a disabled option in the picker rather than silently omitting
@@ -438,6 +469,8 @@ export function checkCandidate(
     timeOffByUser?: Record<string, DateISO[]>;
     /** Shows they are already on in other releases. */
     elsewhere?: BookedElsewhere[];
+    /** Who pressed Send on their availability. Given, anyone else is warned about. */
+    submittedUserIds?: string[];
   },
 ): { ok: boolean; reason?: string; severity?: IssueSeverity } {
   const showById = new Map(options.shows.map((s) => [s.id, s]));
@@ -473,8 +506,19 @@ export function checkCandidate(
     return { ok: true, reason: "Booked this day off", severity: "warning" };
   }
 
+  /*
+    Never sent their availability: they can still be picked by hand — the
+    boss knows his people — but it is said, so nobody is put on a show
+    without meaning to (Samuel, 10/14). Build schedule never picks them.
+  */
+  if (options.submittedUserIds && !options.submittedUserIds.includes(userId)) {
+    return { ok: true, reason: "Hasn't sent in availability", severity: "warning" };
+  }
+
   const availability = options.availability;
-  if (availability && availability.some((a) => a.userId === userId)) {
+  // Sent, but offered nothing at all ("no shows this time"): not offered either.
+  const sentIt = options.submittedUserIds?.includes(userId) ?? false;
+  if (availability && (sentIt || availability.some((a) => a.userId === userId))) {
     const offered = availability.some(
       (a) => a.userId === userId && a.dateISO === show.dateISO && a.slot === show.slot,
     );
