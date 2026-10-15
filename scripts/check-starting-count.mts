@@ -28,7 +28,7 @@ import { balancesFor } from "../src/lib/server/inventory";
 import { bringStockUpToDate } from "../src/lib/server/deduction";
 import { readStartingCount, saveStartingCount } from "../src/lib/server/starting-count";
 import { inventoryWorkbook, rangeOf, soldByModel } from "../src/lib/server/inventory-export";
-import { readReceivingSheet, receivingSheet, recentReceipts, saveReceipt, undoReceipt } from "../src/lib/server/receive";
+import { deliveryLog, readReceivingSheet, receivingSheet, recentReceipts, saveReceipt, undoReceipt } from "../src/lib/server/receive";
 
 assertDevDatabase("check-starting-count.mts");
 
@@ -314,6 +314,19 @@ try {
   made.push("ZZSC-110");
   await undoReceipt(boss.id, (await recentReceipts()).find((r) => r.note.endsWith("typo-model.xlsx"))!.entryId);
   check("a typo model brought in only by an undone delivery is switched off", (await prisma.product.findUnique({ where: { model: "ZZSC-110" }, select: { active: true } }))?.active, false);
+
+  // Samuel 10/15: a delivery can be named, and every delivery stays in a log.
+  const named = await saveReceipt(boss.id, (await readReceivingSheet(await sheet(QTY, [["ZZSC-111", "", 6], ["ZZSC-112", "", 4]]))).entries, today, "sheet.xlsx", false, "  Invicta   shipment  ");
+  made.push("ZZSC-111", "ZZSC-112");
+  const log = await deliveryLog();
+  const entry = log.find((d) => d.name === "Invicta shipment");
+  check("a named delivery is in the log by its name, with what was in it", [
+    named.ok, entry?.receivedOn, entry?.pieces, entry?.items.map((i) => [i.model, i.total]),
+  ], [true, today, 10, [["ZZSC-111", 6], ["ZZSC-112", 4]]]);
+  check("…with where each model went", entry?.items.find((i) => i.model === "ZZSC-111")?.placed, { SELLABLE: 4, SAMPLE_TIKTOK: 1, SAMPLE_EBAY: 1, RANDOM_PULLS: 0 });
+  check("a delivery left unnamed goes by its file", log.some((d) => d.name === "delivery-1.xlsx"), true);
+  check("an undone delivery stays in the log, marked", log.find((d) => d.name === "typo.xlsx")?.undone, true);
+  check("…and is not offered for undo again", (await recentReceipts()).some((r) => r.note.endsWith("typo.xlsx")), false);
 
   // Samuel 10/14: the sheet is Model and Quantity only; filled in as downloaded, it reads.
   const blank = new ExcelJS.Workbook();

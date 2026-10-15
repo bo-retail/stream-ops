@@ -140,6 +140,8 @@ export async function saveReceipt(
   fileName: string,
   /** "Yes, add it anyway": a second identical delivery, or quantities this large really are right. */
   confirmed = false,
+  /** What the delivery is called in the log ("Invicta shipment"); the file's name when left blank. */
+  name = "",
 ): Promise<ReceiptResult> {
   const none = (): Record<CountedPlace, number> => ({ SELLABLE: 0, SAMPLE_TIKTOK: 0, SAMPLE_EBAY: 0, RANDOM_PULLS: 0 });
   const fail = (problems: string[]): ReceiptResult => ({ ok: false, problems, models: 0, pieces: 0, added: [], placed: none() });
@@ -228,7 +230,9 @@ export async function saveReceipt(
       // Where each one goes: by what the model holds now, read under the lock.
       const current = await balancesFor(tx, receiving.map((e) => idOf.get(e.model)!));
       const placed = none();
-      const note = `Received ${receivedOn} — ${fileName}`;
+      // "Received <day> — <name>": what the log, the undo list and the Excel download show.
+      const label = name.trim().replace(/\s+/g, " ").slice(0, 80) || fileName;
+      const note = `Received ${receivedOn} — ${label}`;
       const lines = receiving.flatMap((e) => {
         const productId = idOf.get(e.model)!;
         const now = current.get(productId) ?? zero();
@@ -278,20 +282,73 @@ export async function receivingSheet(today: string): Promise<ArrayBuffer> {
 
 /** The latest deliveries added (not undone), newest first — for the undo list. */
 export async function recentReceipts(limit = 15) {
+  return (await deliveryLog(limit * 4)).filter((d) => !d.undone).slice(0, limit);
+}
+
+export interface Delivery {
+  entryId: string;
+  /** "Received <day> — <name>", as stored. */
+  note: string;
+  name: string;
+  receivedOn: DateISO;
+  /** When it was uploaded. */
+  at: Date;
+  by: string;
+  undone: boolean;
+  pieces: number;
+  models: number;
+  /** Each model in it, and how many went to each place. */
+  items: { model: string; placed: Record<CountedPlace, number>; total: number }[];
+}
+
+/**
+ * Every delivery received, newest first — the log (Samuel, 10/14: "keeps a
+ * log of what inventory has come"). A delivery is in it from the moment it is
+ * counted and uploaded; one undone stays, marked, so the history is whole.
+ */
+export async function deliveryLog(limit = 200): Promise<Delivery[]> {
   const moves = await prisma.stockMove.findMany({
-    where: { kind: "RECEIVED", reason: { startsWith: "receipt " } },
+    where: { kind: "RECEIVED", OR: [{ reason: { startsWith: "receipt " } }, { reason: { startsWith: "undone receipt " } }] },
     orderBy: { at: "desc" },
-    take: 2_000,
-    select: { entryId: true, qty: true, note: true, at: true, productId: true, by: { select: { name: true } } },
+    take: 20_000,
+    select: {
+      entryId: true, qty: true, place: true, note: true, at: true, reason: true,
+      product: { select: { model: true } }, by: { select: { name: true } },
+    },
   });
-  const byEntry = new Map<string, { entryId: string; note: string; at: Date; by: string; pieces: number; models: Set<string> }>();
+  const byEntry = new Map<string, Delivery & { byModel: Map<string, Record<CountedPlace, number>> }>();
   for (const m of moves) {
-    const r = byEntry.get(m.entryId) ?? { entryId: m.entryId, note: m.note, at: m.at, by: m.by?.name ?? "", pieces: 0, models: new Set<string>() };
-    r.pieces += m.qty;
-    r.models.add(m.productId);
-    byEntry.set(m.entryId, r);
+    let d = byEntry.get(m.entryId);
+    if (!d) {
+      if (byEntry.size >= limit) continue;
+      const cut = m.note.indexOf(" — ");
+      d = {
+        entryId: m.entryId,
+        note: m.note,
+        name: cut >= 0 ? m.note.slice(cut + 3) : m.note,
+        receivedOn: m.note.slice("Received ".length, "Received ".length + 10) as DateISO,
+        at: m.at,
+        by: m.by?.name ?? "",
+        undone: m.reason.startsWith("undone "),
+        pieces: 0,
+        models: 0,
+        items: [],
+        byModel: new Map(),
+      };
+      byEntry.set(m.entryId, d);
+    }
+    d.pieces += m.qty;
+    const placed = d.byModel.get(m.product.model) ?? { SELLABLE: 0, SAMPLE_TIKTOK: 0, SAMPLE_EBAY: 0, RANDOM_PULLS: 0 };
+    if ((COUNTED_PLACES as readonly string[]).includes(m.place)) placed[m.place as CountedPlace] += m.qty;
+    d.byModel.set(m.product.model, placed);
   }
-  return [...byEntry.values()].slice(0, limit).map((r) => ({ ...r, models: r.models.size }));
+  return [...byEntry.values()].map(({ byModel, ...d }) => ({
+    ...d,
+    models: byModel.size,
+    items: [...byModel]
+      .map(([model, placed]) => ({ model, placed, total: COUNTED_PLACES.reduce((n, p) => n + placed[p], 0) }))
+      .sort((a, b) => a.model.localeCompare(b.model)),
+  }));
 }
 
 /**

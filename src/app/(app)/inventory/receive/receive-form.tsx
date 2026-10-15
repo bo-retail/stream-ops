@@ -41,9 +41,16 @@ export function ReceiveForm({ today }: { today: string }) {
           className="block w-full cursor-pointer rounded-lg border border-line bg-canvas p-2 text-sm text-ink file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-brand-600 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white"
         />
       </label>
-      <div>
-        <Label htmlFor="on">Received on</Label>
-        <Input id="on" name="on" type="date" defaultValue={today} required className="max-w-xs" />
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <Label htmlFor="name">Name this delivery</Label>
+          <Input id="name" name="name" maxLength={80} placeholder="e.g. Invicta shipment" />
+          <p className="mt-1 text-xs text-ink-muted">How it shows in the log. Left empty, the file&apos;s name is used.</p>
+        </div>
+        <div>
+          <Label htmlFor="on">Received on</Label>
+          <Input id="on" name="on" type="date" defaultValue={today} required className="max-w-xs" />
+        </div>
       </div>
       <label className="flex items-start gap-2 text-sm text-ink-muted">
         <input type="checkbox" name="confirm" className="mt-1 h-4 w-4" />

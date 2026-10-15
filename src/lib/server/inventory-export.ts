@@ -199,7 +199,7 @@ export async function inventoryWorkbook(
     { header: "Model", width: 14 },
     { header: "Place", width: 14 },
     { header: "Pieces", width: 10 },
-    { header: "File", width: 50 },
+    { header: "Delivery", width: 50 },
   ]);
   received.getColumn(2).numFmt = "@";
   for (const r of await receiptsBetween(range.from, range.to)) {

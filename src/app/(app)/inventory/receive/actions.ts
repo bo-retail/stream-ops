@@ -52,7 +52,8 @@ export async function uploadReceipt(_prev: ReceiveState, formData: FormData): Pr
   if (entries.length === 0) return { error: "No quantities were found. Is the sheet filled in?" };
 
   const confirmed = formData.get("confirm") === "on";
-  const result = await saveReceipt(user.id, entries, on, file.name, confirmed);
+  const name = String(formData.get("name") ?? "");
+  const result = await saveReceipt(user.id, entries, on, file.name, confirmed, name);
   if (!result.ok) return { error: "Nothing was added.", details: result.problems.slice(0, 50) };
 
   revalidatePath("/inventory");
