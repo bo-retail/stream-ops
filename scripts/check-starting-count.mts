@@ -28,7 +28,7 @@ import { balancesFor } from "../src/lib/server/inventory";
 import { bringStockUpToDate } from "../src/lib/server/deduction";
 import { readStartingCount, saveStartingCount } from "../src/lib/server/starting-count";
 import { inventoryWorkbook, rangeOf, soldByModel } from "../src/lib/server/inventory-export";
-import { readReceivingSheet, recentReceipts, saveReceipt, undoReceipt } from "../src/lib/server/receive";
+import { readReceivingSheet, receivingSheet, recentReceipts, saveReceipt, undoReceipt } from "../src/lib/server/receive";
 
 assertDevDatabase("check-starting-count.mts");
 
@@ -314,6 +314,16 @@ try {
   made.push("ZZSC-110");
   await undoReceipt(boss.id, (await recentReceipts()).find((r) => r.note.endsWith("typo-model.xlsx"))!.entryId);
   check("a typo model brought in only by an undone delivery is switched off", (await prisma.product.findUnique({ where: { model: "ZZSC-110" }, select: { active: true } }))?.active, false);
+
+  // Samuel 10/14: the sheet is Model and Quantity only; filled in as downloaded, it reads.
+  const blank = new ExcelJS.Workbook();
+  await blank.xlsx.load(await receivingSheet(today));
+  const headers = (blank.worksheets[0].getRow(2).values as unknown[]).slice(1);
+  blank.worksheets[0].addRow(["0069", 3]);
+  const asDownloaded = await readReceivingSheet((await blank.xlsx.writeBuffer()) as ArrayBuffer);
+  check("the receiving sheet is Model and Quantity, and reads back as filled in", [headers, asDownloaded.problems, asDownloaded.entries.map((e) => [e.model, e.qty])], [
+    ["Model", "Quantity"], [], [["0069", 3]],
+  ]);
 
   // Second review: a column of Gladys's own is not taken for the Inventory download.
   const ownColumn = await readReceivingSheet(await sheet(["Model", "Quantity", "Received on"], [["ZZSC-106", 1, "10/15"]]));

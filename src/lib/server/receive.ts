@@ -260,7 +260,7 @@ export async function saveReceipt(
   );
 }
 
-/** The receiving sheet: Model, Description, Quantity — one row per model received. */
+/** The receiving sheet: Model and Quantity, one row per model received. Descriptions come from the master, not from here. */
 export async function receivingSheet(today: string): Promise<ArrayBuffer> {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Received", { views: [{ state: "frozen", ySplit: 2 }] });
@@ -268,9 +268,9 @@ export async function receivingSheet(today: string): Promise<ArrayBuffer> {
     `Inventory received — one row per model, and how many came. The app puts them where they belong. ` +
     `Upload it once on Inventory → Receive inventory (downloaded ${today}).`;
   ws.getCell("A1").font = { italic: true, color: { argb: "FF5B6472" } };
-  ws.getRow(2).values = ["Model", "Description", "Quantity"];
+  ws.getRow(2).values = ["Model", "Quantity"];
   ws.getRow(2).font = { bold: true };
-  ws.columns = [{ width: 16 }, { width: 44 }, { width: 12 }];
+  ws.columns = [{ width: 18 }, { width: 12 }];
   // Model numbers as text, so Excel never drops a leading zero.
   ws.getColumn(1).numFmt = "@";
   return (await wb.xlsx.writeBuffer()) as ArrayBuffer;
