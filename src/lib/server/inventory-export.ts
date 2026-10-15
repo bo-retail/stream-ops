@@ -8,6 +8,7 @@ import type { DateISO } from "@/lib/domain/types";
 import type { StockUpToDate } from "./deduction";
 import { listStock } from "./inventory";
 import { receiptsBetween } from "./receive";
+import { returnsBetween } from "./returns";
 
 /**
  * Inventory as an Excel file (Samuel, 10/14: "download excel of inventory —
@@ -210,6 +211,18 @@ export async function inventoryWorkbook(
       r.qty,
       r.note.replace(/^Received \S+ — /, ""),
     ]);
+  }
+
+  /* --------------------------------------------------------------- returned */
+  const returned = titled(wb, "Returned", `Returns added back to Sellable ${since}, by the day they came back.`, [
+    { header: "Came back on", width: 14 },
+    { header: "Model", width: 14 },
+    { header: "Pieces", width: 10 },
+    { header: "Returns", width: 50 },
+  ]);
+  returned.getColumn(2).numFmt = "@";
+  for (const r of await returnsBetween(range.from, range.to)) {
+    returned.addRow([formatDate(r.returnedOn), r.product.model, r.qty, r.note.replace(/^Returned \S+ — /, "")]);
   }
 
   /* ---------------------------------------------------------- not taken off */

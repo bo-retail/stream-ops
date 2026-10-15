@@ -139,6 +139,25 @@ export async function importMaster(userId: string, fileName: string, sheets: She
 export type Balances = Record<Where, number>;
 export const zero = (): Balances => ({ SELLABLE: 0, SAMPLE_EBAY: 0, SAMPLE_TIKTOK: 0, RANDOM_PULLS: 0, DAMAGED: 0, WAITING: 0 });
 
+/**
+ * When these models were last counted — by a count of them, or by a starting
+ * count, which holds every model even where it writes no line (a model whose
+ * number did not change gets none). After `since` only, when given; null if not.
+ */
+export async function countedAfter(
+  db: Pick<typeof prisma, "stockMove" | "auditLog">,
+  productIds: string[],
+  since: Date | null,
+): Promise<Date | null> {
+  const after = since ? { gt: since } : undefined;
+  const [count, start] = await Promise.all([
+    db.stockMove.findFirst({ where: { productId: { in: productIds }, kind: "COUNT", at: after }, orderBy: { at: "desc" }, select: { at: true } }),
+    db.auditLog.findFirst({ where: { action: "STARTING_COUNT", createdAt: after }, orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+  ]);
+  const times = [count?.at, start?.createdAt].filter((d): d is Date => d !== undefined);
+  return times.length > 0 ? new Date(Math.max(...times.map((d) => d.getTime()))) : null;
+}
+
 export async function balancesFor(
   db: Pick<typeof prisma, "stockMove">,
   productIds?: string[],

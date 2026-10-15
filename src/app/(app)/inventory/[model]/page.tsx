@@ -120,7 +120,8 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
                       ) : m.kind === "ADJUST" ? (
                         <>{m.reason || "Adjusted"}</>
                       ) : m.kind === "RETURN" ? (
-                        <>{m.reason || "Return"}</>
+                        // Returns page moves carry a fingerprint, not words: say what happened.
+                        <>{m.reason && !/^(undone return|return|undo) /.test(m.reason) ? m.reason : m.qty < 0 ? "Return undone" : "Returned"}</>
                       ) : (
                         <>Counted {m.countedQty}</>
                       )}

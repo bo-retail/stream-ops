@@ -394,7 +394,7 @@ export function planDeduction(
   for (const k of known.values()) {
     if (wantedKeys.has(k.key) || k.status === "UNDONE" || byHand(k)) continue;
     if (k.status === "SOLD") changes.push({ kind: "unsell", key: k.key, model: k.model, place: k.place });
-    else flag(k, "Sent, but no longer in the reports (corrected or cancelled after it shipped). Check with the buyer: a return or a refund is step 4.");
+    else flag(k, "Sent, but no longer in the reports (refunded or cancelled after it shipped). If the watch comes back, add it on Inventory → Returns.");
   }
   return { changes, unnamed, unknown };
 }

@@ -15,7 +15,7 @@ import type { CountedPlace } from "@/lib/domain/inventory";
 import { sheetRows } from "@/lib/domain/inventory-sheets";
 import type { SheetRows } from "@/lib/domain/inventory-sheets";
 import type { DateISO } from "@/lib/domain/types";
-import { balancesFor, zero } from "./inventory";
+import { balancesFor, countedAfter, zero } from "./inventory";
 
 /**
  * Receiving inventory, kept simple (Samuel, 10/14).
@@ -52,6 +52,8 @@ export const REPEAT_DAYS = 7;
 /** Reads a filled-in receiving sheet: Model and Quantity. Every problem listed; nothing added until none. */
 export async function readReceivingSheet(
   buffer: ArrayBuffer,
+  /** What the sheet is called in the messages: the returns page reads the same sheet. */
+  what = "receiving sheet",
 ): Promise<{ entries: ReceivedEntry[]; problems: string[]; notes: string[] }> {
   let sheets: SheetRows;
   try {
@@ -59,9 +61,9 @@ export async function readReceivingSheet(
     await wb.xlsx.load(buffer);
     sheets = sheetRows(wb, (c) => /^model$/i.test(c) || /^invicta model$/i.test(c));
   } catch {
-    return { entries: [], problems: ["That is not an Excel (.xlsx) file. Download the receiving sheet and fill that in."], notes: [] };
+    return { entries: [], problems: [`That is not an Excel (.xlsx) file. Download the ${what} and fill that in.`], notes: [] };
   }
-  if (sheets.length === 0) return { entries: [], problems: ['No tab has a "Model" column. Is this the receiving sheet?'], notes: [] };
+  if (sheets.length === 0) return { entries: [], problems: [`No tab has a "Model" column. Is this the ${what}?`], notes: [] };
 
   const problems: string[] = [];
   const notes: string[] = [];
@@ -74,7 +76,7 @@ export async function readReceivingSheet(
       return {
         entries: [],
         problems: [
-          "This is the Inventory download, not a receiving sheet. Download the receiving sheet, fill in what arrived, and upload that.",
+          `This is the Inventory download, not the ${what}. Download the ${what}, fill it in, and upload that.`,
         ],
         notes: [],
       };
@@ -368,11 +370,8 @@ export async function undoReceipt(userId: string, entryId: string): Promise<{ ok
       const productIds = [...new Set(moves.map((m) => m.productId))];
 
       // Counted since: the count already holds what is on the shelf, this delivery included.
-      const countedSince = await tx.stockMove.findFirst({
-        where: { productId: { in: productIds }, kind: "COUNT", at: { gt: moves[0].at } },
-        select: { at: true },
-      });
-      if (countedSince) {
+      // A starting count since holds it too, even for a model it wrote no line for.
+      if (await countedAfter(tx, productIds, moves[0].at)) {
         return { ok: false, message: "These watches were counted after this delivery, so the count already has them. Nothing was undone." };
       }
 

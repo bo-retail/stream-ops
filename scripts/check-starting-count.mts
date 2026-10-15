@@ -154,7 +154,7 @@ try {
     book.getWorksheet(name)!.eachRow((row, n) => { if (n > 2) out.push((row.values as unknown[]).slice(1)); });
     return out;
   };
-  check("the download has the four sheets", book.worksheets.map((w) => w.name), ["Stock now", "By day", "Sales subtracted", "Received", "Not taken off"]);
+  check("the download has its sheets", book.worksheets.map((w) => w.name), ["Stock now", "By day", "Sales subtracted", "Received", "Returned", "Not taken off"]);
   const soldRow = rowsOf("Stock now").find((r) => r[0] === M.sold);
   check("stock now: the model's places, total and sold in range", soldRow?.slice(2), [3, 0, 0, 0, 3, 1]);
   check("sales subtracted: the one sale on the start day, from Sellable", rowsOf("Sales subtracted").filter((r) => r[5] === M.sold).map((r) => [r[1], r[6], r[7]]), [["TikTok AM", "Sellable", "Waiting to ship"]]);
