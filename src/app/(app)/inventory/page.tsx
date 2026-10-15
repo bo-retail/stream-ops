@@ -49,7 +49,7 @@ export default async function InventoryPage({
         title="Inventory"
         description={
           from
-            ? `From the starting count. Sales from ${formatDate(from)} on come off automatically when the sales report is uploaded.`
+            ? `What arrives is added on Receive inventory; sales from ${formatDate(from)} on come off automatically when the sales report is uploaded.`
             : "Nothing counted yet. Do the starting count to begin."
         }
         action={
@@ -61,8 +61,9 @@ export default async function InventoryPage({
             >
               Download Excel
             </a>
-            <LinkButton href="/inventory/start" variant="primary">
-              Starting count
+            {/* The starting count is done (10/14); its page stays at /inventory/start for a full recount. */}
+            <LinkButton href="/inventory/receive" variant="primary">
+              Receive inventory
             </LinkButton>
           </div>
         }

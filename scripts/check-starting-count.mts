@@ -28,6 +28,7 @@ import { balancesFor } from "../src/lib/server/inventory";
 import { bringStockUpToDate } from "../src/lib/server/deduction";
 import { readStartingCount, saveStartingCount } from "../src/lib/server/starting-count";
 import { inventoryWorkbook, rangeOf, soldByModel } from "../src/lib/server/inventory-export";
+import { readReceivingSheet, recentReceipts, saveReceipt, undoReceipt } from "../src/lib/server/receive";
 
 assertDevDatabase("check-starting-count.mts");
 
@@ -153,7 +154,7 @@ try {
     book.getWorksheet(name)!.eachRow((row, n) => { if (n > 2) out.push((row.values as unknown[]).slice(1)); });
     return out;
   };
-  check("the download has the four sheets", book.worksheets.map((w) => w.name), ["Stock now", "By day", "Sales subtracted", "Not taken off"]);
+  check("the download has the four sheets", book.worksheets.map((w) => w.name), ["Stock now", "By day", "Sales subtracted", "Received", "Not taken off"]);
   const soldRow = rowsOf("Stock now").find((r) => r[0] === M.sold);
   check("stock now: the model's places, total and sold in range", soldRow?.slice(2), [3, 0, 0, 0, 3, 1]);
   check("sales subtracted: the one sale on the start day, from Sellable", rowsOf("Sales subtracted").filter((r) => r[5] === M.sold).map((r) => [r[1], r[6], r[7]]), [["TikTok AM", "Sellable", "Waiting to ship"]]);
@@ -237,6 +238,106 @@ try {
   notesTab.addRow([M.kept, "back shelf"]);
   const withNotes = await readStartingCount((await extraTab.xlsx.writeBuffer()) as ArrayBuffer);
   check("an extra tab with none of the count columns is left alone", [withNotes.problems, withNotes.entries.length], [[], 1]);
+
+  /* ------------------------------------------ receiving (Samuel, 10/14) */
+  // Model + Quantity only; the app places them (placeReceived).
+  const QTY = ["Model", "Description", "Quantity"];
+  const receive = async (rows: (string | number | null)[][], on: string, name: string, confirmed = false) =>
+    saveReceipt(boss.id, (await readReceivingSheet(await sheet(QTY, rows))).entries, on, name, confirmed);
+  const keptBefore = await stockOf(M.kept);
+  const freshBefore = await stockOf(M.fresh);
+  // kept has a TT sample but no eBay sample at this point; ZZSC-106 is new.
+  const hasTT = (keptBefore?.SAMPLE_TIKTOK ?? 0) > 0;
+  const hasEbay = (keptBefore?.SAMPLE_EBAY ?? 0) > 0;
+  const got = await receive([[M.kept, "", 10], ["ZZSC-106", "a new watch", 10], ["ZZSC-108", "two only", 2]], today, "delivery-1.xlsx");
+  made.push("ZZSC-106", "ZZSC-108");
+  const keptAfter = await stockOf(M.kept);
+  check("a model missing a sample gets only that one; the rest Sellable", [
+    keptAfter!.SAMPLE_TIKTOK - keptBefore!.SAMPLE_TIKTOK,
+    keptAfter!.SAMPLE_EBAY - keptBefore!.SAMPLE_EBAY,
+    keptAfter!.SELLABLE - keptBefore!.SELLABLE,
+  ], [hasTT ? 0 : 1, hasEbay ? 0 : 1, 10 - (hasTT ? 0 : 1) - (hasEbay ? 0 : 1)]);
+  check("a new model of 10: 1 TT sample, 1 eBay sample, 8 Sellable", [(await stockOf("ZZSC-106"))?.SELLABLE, (await stockOf("ZZSC-106"))?.SAMPLE_TIKTOK, (await stockOf("ZZSC-106"))?.SAMPLE_EBAY], [8, 1, 1]);
+  check("a new model of 2: Random pulls", (await stockOf("ZZSC-108"))?.RANDOM_PULLS, 2);
+  check("what was not received is untouched", await stockOf(M.fresh), freshBefore);
+  const repeat = await receive([["ZZSC-108", "", 2], [M.kept, "x", 10], ["ZZSC-106", "", 10], [M.gone, "", 0]], today, "delivery-1 resaved.xlsx");
+  check("the same delivery again — re-saved, rows reordered, a 0 typed in — is refused", [repeat.ok, repeat.problems[0]?.includes("already added"), (await stockOf("ZZSC-106"))?.SELLABLE], [false, true, 8]);
+  await receive([["ZZSC-106", "", 5]], today, "delivery-2.xlsx");
+  check("the model now has both samples: a second delivery goes all to Sellable", [(await stockOf("ZZSC-106"))?.SELLABLE, (await stockOf("ZZSC-106"))?.SAMPLE_TIKTOK], [13, 1]);
+  await receive([["ZZSC-108", "", 10]], today, "delivery-3.xlsx");
+  const pulls = await stockOf("ZZSC-108");
+  check("a model in Random pulls getting 10: its random pulls stay, the 10 follow the rule", [pulls?.RANDOM_PULLS, pulls?.SAMPLE_TIKTOK, pulls?.SAMPLE_EBAY, pulls?.SELLABLE], [2, 1, 1, 8]);
+  // Review (10/14): the same delivery uploaded again under another date doubled it.
+  const nextDay = await receive([["ZZSC-106", "", 5]], addDays(today, -1), "delivery-2 again.xlsx");
+  check("the same delivery again under another date (within a week): refused", [nextDay.ok, (await stockOf("ZZSC-106"))?.SELLABLE], [false, 13]);
+  const really = await receive([["ZZSC-106", "", 5]], addDays(today, -1), "delivery-4.xlsx", true);
+  check("…unless it really is another one: ticked, it goes in", [really.ok, (await stockOf("ZZSC-106"))?.SELLABLE], [true, 18]);
+
+  // Review: no undo — a wrong delivery and its corrected sheet added up.
+  const wrong = await receive([["ZZSC-106", "", 30]], today, "typo.xlsx");
+  check("wrong numbers go in", (await stockOf("ZZSC-106"))?.SELLABLE, 48);
+  const typoReceipt = (await recentReceipts()).find((r) => r.note.endsWith("typo.xlsx"))!;
+  const undone = await undoReceipt(boss.id, typoReceipt.entryId);
+  check("undo takes exactly that delivery back off", [wrong.ok, undone.ok, (await stockOf("ZZSC-106"))?.SELLABLE], [true, true, 18]);
+  check("undone twice: refused, nothing taken off again", [(await undoReceipt(boss.id, typoReceipt.entryId)).ok, (await stockOf("ZZSC-106"))?.SELLABLE], [false, 18]);
+  check("an undone delivery is not in the list", (await recentReceipts()).some((r) => r.entryId === typoReceipt.entryId), false);
+  const corrected = await receive([["ZZSC-106", "", 30]], today, "typo fixed but same.xlsx");
+  check("after an undo, the same numbers can go in again", corrected.ok, true);
+  await undoReceipt(boss.id, (await recentReceipts()).find((r) => r.note.endsWith("typo fixed but same.xlsx"))!.entryId);
+
+  // Second review: undo after some of the delivery sold.
+  await receive([["ZZSC-109", "", 10]], today, "undo-after-sales.xlsx");
+  made.push("ZZSC-109");
+  const p109 = await prisma.product.findUniqueOrThrow({ where: { model: "ZZSC-109" }, select: { id: true } });
+  // Two Sellable and the TikTok sample sold since.
+  await prisma.stockMove.createMany({
+    data: [
+      { productId: p109.id, place: "SELLABLE", qty: -2, kind: "SOLD", entryId: "zz-sold" },
+      { productId: p109.id, place: "SAMPLE_TIKTOK", qty: -1, kind: "SOLD", entryId: "zz-sold" },
+    ],
+  });
+  const afterSales = await undoReceipt(boss.id, (await recentReceipts()).find((r) => r.note.endsWith("undo-after-sales.xlsx"))!.entryId);
+  const s109 = await stockOf("ZZSC-109");
+  check("undo after sales: no sample below zero; Sellable takes it, and it says so", [
+    s109?.SAMPLE_TIKTOK, s109?.SAMPLE_EBAY, s109?.SELLABLE, afterSales.message.includes("below zero"),
+  ], [0, 0, -3, true]);
+  await receive([["ZZSC-109", "", 5]], today, "after-undo.xlsx");
+  check("…so the next delivery gives it its samples again", [(await stockOf("ZZSC-109"))?.SAMPLE_TIKTOK, (await stockOf("ZZSC-109"))?.SAMPLE_EBAY], [1, 1]);
+
+  // Second review: undo after a recount would take off what the count already holds.
+  await prisma.stockMove.create({ data: { productId: p109.id, place: "SELLABLE", qty: 0, kind: "COUNT", entryId: "zz-recount", at: new Date(Date.now() + 60_000) } });
+  const afterCount = await undoReceipt(boss.id, (await recentReceipts()).find((r) => r.note.endsWith("after-undo.xlsx"))!.entryId);
+  check("undo after a later count: refused, nothing taken off", [afterCount.ok, (await stockOf("ZZSC-109"))?.SAMPLE_TIKTOK], [false, 1]);
+
+  // Second review: a mistyped new model, undone, is switched off.
+  await receive([["ZZSC-110", "", 4]], today, "typo-model.xlsx");
+  made.push("ZZSC-110");
+  await undoReceipt(boss.id, (await recentReceipts()).find((r) => r.note.endsWith("typo-model.xlsx"))!.entryId);
+  check("a typo model brought in only by an undone delivery is switched off", (await prisma.product.findUnique({ where: { model: "ZZSC-110" }, select: { active: true } }))?.active, false);
+
+  // Second review: a column of Gladys's own is not taken for the Inventory download.
+  const ownColumn = await readReceivingSheet(await sheet(["Model", "Quantity", "Received on"], [["ZZSC-106", 1, "10/15"]]));
+  check("a receiving sheet with her own \"Received on\" column is read", [ownColumn.problems, ownColumn.entries.length], [[], 1]);
+
+  // Review: implausible quantities, a barcode in the Model column, the Inventory download.
+  const huge = await receive([["ZZSC-106", "", 1000]], today, "huge.xlsx");
+  check("1,000 of one model: asked about, nothing added", [huge.ok, huge.problems[0]?.includes("Large quantities"), (await stockOf("ZZSC-106"))?.SELLABLE], [false, true, 18]);
+  const barcode = await receive([["1234567890120", "", 1]], today, "barcode.xlsx");
+  check("a barcode in the Model column is not made a model", [barcode.ok, barcode.problems[0]?.includes("barcode")], [false, true]);
+  const download = await readReceivingSheet(await inventoryWorkbook(rangeOf(START, today), today, null, settings.timezone));
+  check("the Inventory download uploaded here is refused", [download.entries.length, download.problems[0]?.includes("Inventory download")], [0, true]);
+  check("a sheet of zeros adds nothing", (await receive([[M.kept, "", 0]], today, "zeros.xlsx")).ok, false);
+  const badReceipt = await receive([[M.kept, "", 1], ["ZZSC 107", "", 1]], today, "bad.xlsx");
+  check("a new model number with a space: refused, nothing added", [badReceipt.ok, (await stockOf(M.kept))?.SELLABLE], [false, keptAfter!.SELLABLE]);
+  const badQty = await readReceivingSheet(await sheet(QTY, [[M.kept, "", "ten"]]));
+  check("an unreadable quantity is named, nothing added", badQty.problems.some((p) => p.includes("Quantity")), true);
+  await receive([["71", "", 1]], today, "zeros-dropped.xlsx");
+  check("a 71 received is the catalogue's 0071", (await stockOf("71")) === null, true);
+  const withReceipts = new ExcelJS.Workbook();
+  await withReceipts.xlsx.load(await inventoryWorkbook(rangeOf(START, today), today, null, settings.timezone));
+  const receivedRows: unknown[][] = [];
+  withReceipts.getWorksheet("Received")!.eachRow((row, n) => { if (n > 2) receivedRows.push((row.values as unknown[]).slice(1)); });
+  check("the download lists where each delivery went", receivedRows.filter((r) => r[1] === "ZZSC-106").reduce((n, r) => n + Number(r[3]), 0), 20);
 
   /* --------------------------------------------------- a sheet of nothing */
   const empty = await readStartingCount(await sheet(NEW, [[M.kept, "", null, null, null, null]]));

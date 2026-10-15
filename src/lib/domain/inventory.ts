@@ -74,6 +74,42 @@ export function startingCountLines(
 }
 
 /**
+ * Where a delivery of one model goes (Samuel, 10/14). Whoever receives it only
+ * counts how many came; the app places them, so a model never has more than
+ * one of each sample and nothing is ever taken out of one:
+ *
+ *   has both samples already      → all of it Sellable
+ *   missing a sample, 4 or more   → 1 to each missing sample, the rest Sellable
+ *   missing a sample, exactly 3   → 1 to each missing sample, the rest Sellable
+ *                                   (both missing: 1 / 1 / 1)
+ *   missing a sample, 1 or 2      → Random pulls, as on the starting count
+ *
+ * What is already in Random pulls stays there.
+ */
+export function placeReceived(
+  qty: number,
+  has: { tiktokSample: boolean; ebaySample: boolean },
+): Record<CountedPlace, number> {
+  const out: Record<CountedPlace, number> = { SELLABLE: 0, SAMPLE_TIKTOK: 0, SAMPLE_EBAY: 0, RANDOM_PULLS: 0 };
+  if (qty <= 0) return out;
+  const missing: CountedPlace[] = [
+    ...(has.tiktokSample ? [] : (["SAMPLE_TIKTOK"] as const)),
+    ...(has.ebaySample ? [] : (["SAMPLE_EBAY"] as const)),
+  ];
+  if (missing.length === 0) {
+    out.SELLABLE = qty;
+    return out;
+  }
+  if (qty < 3) {
+    out.RANDOM_PULLS = qty;
+    return out;
+  }
+  for (const p of missing) out[p] = 1;
+  out.SELLABLE = qty - missing.length;
+  return out;
+}
+
+/**
  * A model number as the scanner and the reports read it.
  *
  * Trimmed and upper-cased, and nothing else: model numbers mix digits, letters

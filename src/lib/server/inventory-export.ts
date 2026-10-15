@@ -7,6 +7,7 @@ import type { CountedPlace } from "@/lib/domain/inventory";
 import type { DateISO } from "@/lib/domain/types";
 import type { StockUpToDate } from "./deduction";
 import { listStock } from "./inventory";
+import { receiptsBetween } from "./receive";
 
 /**
  * Inventory as an Excel file (Samuel, 10/14: "download excel of inventory —
@@ -18,6 +19,7 @@ import { listStock } from "./inventory";
  *   Sales subtracted every watch taken off, one row each: when, which show,
  *                    the order, what it sold as, the model, the place, and
  *                    whether it has shipped
+ *   Received         every shipment received: day, model, place, pieces
  *   Not taken off    sold, but nothing to take it off from
  */
 
@@ -188,6 +190,25 @@ export async function inventoryWorkbook(
       isCounted(s.place) ? COUNTED_LABEL[s.place] : (PLACE_NAME[s.place] ?? s.place),
       s.status === "SENT" ? (s.sentAt ? `Yes, ${shipDay(s.sentAt)}` : "Yes") : "Waiting to ship",
       s.flag,
+    ]);
+  }
+
+  /* --------------------------------------------------------------- received */
+  const received = titled(wb, "Received", `Inventory received ${since}, by the day it arrived.`, [
+    { header: "Received on", width: 14 },
+    { header: "Model", width: 14 },
+    { header: "Place", width: 14 },
+    { header: "Pieces", width: 10 },
+    { header: "File", width: 50 },
+  ]);
+  received.getColumn(2).numFmt = "@";
+  for (const r of await receiptsBetween(range.from, range.to)) {
+    received.addRow([
+      formatDate(r.receivedOn),
+      r.product.model,
+      isCounted(r.place) ? COUNTED_LABEL[r.place] : (PLACE_NAME[r.place] ?? r.place),
+      r.qty,
+      r.note.replace(/^Received \S+ — /, ""),
     ]);
   }
 

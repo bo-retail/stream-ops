@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  placeReceived,
   startingCountLines,
   badModelNumber,
   catalogueSpelling,
@@ -241,5 +242,34 @@ describe("the starting count", () => {
 
   it("writes nothing for a model already right", () => {
     expect(startingCountLines({ ...none, SELLABLE: 2 }, { SELLABLE: 2 })).toEqual([]);
+  });
+});
+
+describe("where a delivery goes (Samuel, 10/14)", () => {
+  const none = { tiktokSample: false, ebaySample: false };
+  const both = { tiktokSample: true, ebaySample: true };
+  const place = (s: number, t: number, e: number, r: number) => ({ SELLABLE: s, SAMPLE_TIKTOK: t, SAMPLE_EBAY: e, RANDOM_PULLS: r });
+
+  it("a model that already has both samples: all of it Sellable", () => {
+    expect(placeReceived(100, both)).toEqual(place(100, 0, 0, 0));
+    expect(placeReceived(1, both)).toEqual(place(1, 0, 0, 0));
+  });
+  it("no samples yet, 4 or more: one of each sample, the rest Sellable", () => {
+    expect(placeReceived(10, none)).toEqual(place(8, 1, 1, 0));
+    expect(placeReceived(4, none)).toEqual(place(2, 1, 1, 0));
+  });
+  it("no samples yet, exactly 3: one of each", () => {
+    expect(placeReceived(3, none)).toEqual(place(1, 1, 1, 0));
+  });
+  it("no samples yet, 1 or 2: Random pulls", () => {
+    expect(placeReceived(1, none)).toEqual(place(0, 0, 0, 1));
+    expect(placeReceived(2, none)).toEqual(place(0, 0, 0, 2));
+  });
+  it("one sample missing: only that one is filled", () => {
+    expect(placeReceived(10, { tiktokSample: true, ebaySample: false })).toEqual(place(9, 0, 1, 0));
+    expect(placeReceived(3, { tiktokSample: false, ebaySample: true })).toEqual(place(2, 1, 0, 0));
+  });
+  it("nothing received, nothing placed", () => {
+    expect(placeReceived(0, none)).toEqual(place(0, 0, 0, 0));
   });
 });
