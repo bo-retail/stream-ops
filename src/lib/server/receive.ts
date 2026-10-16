@@ -258,6 +258,8 @@ export async function saveReceipt(
             `Received ${receivedOn} (${fileName}): ${receiving.length} model(s), ${pieces} piece(s) — ` +
             COUNTED_PLACES.map((p) => `${COUNTED_LABEL[p]} ${placed[p]}`).join(", ") +
             (added.length > 0 ? `; ${added.length} new model(s): ${added.join(", ")}` : ""),
+          // What this delivery created, so an undo switches off only those.
+          after: { added },
         },
       });
       return { ok: true, problems: [], models: receiving.length, pieces, added, placed };
@@ -413,8 +415,20 @@ export async function undoReceipt(userId: string, entryId: string): Promise<{ ok
       const undoId = randomUUID();
       await tx.stockMove.createMany({ data: reversing.map((r) => ({ ...r, entryId: undoId })) });
 
-      // A model this delivery brought in and nothing else ever touched — a typo — is switched off.
+      /*
+        A model this delivery created and nothing else ever touched — a typo —
+        is switched off. Only those: a model already on the list, never counted
+        or sold, stays as it was. What it created is on its record (deliveries
+        before 10/15 have it only in the summary's "new model(s): …").
+      */
+      const record = await tx.auditLog.findFirst({ where: { entityId: entryId, action: "RECEIVED" }, select: { after: true, summary: true } });
+      const createdHere = new Set(
+        (record?.after as { added?: string[] } | null)?.added ??
+          (record?.summary?.split("new model(s): ")[1]?.split(", ") ?? []),
+      );
+      const modelOf = new Map((await tx.product.findMany({ where: { id: { in: productIds } }, select: { id: true, model: true } })).map((p) => [p.id, p.model]));
       for (const productId of productIds) {
+        if (!createdHere.has(modelOf.get(productId)!)) continue;
         const other = await tx.stockMove.findFirst({
           where: { productId, NOT: { entryId: { in: [entryId, undoId] } } },
           select: { id: true },

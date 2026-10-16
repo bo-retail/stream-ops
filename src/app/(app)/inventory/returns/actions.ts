@@ -12,12 +12,14 @@ export interface ReturnsState {
   error?: string;
   ok?: string;
   details?: string[];
+  /** Models never in inventory: the page asks where each goes, then sends the same upload again with the answers. */
+  needsPlace?: { model: string; qty: number }[];
 }
 
 const MAX_BYTES = 15 * 1024 * 1024;
 const NOT_ALLOWED = "Only an admin or a shipping director can change stock.";
 
-/** Returned watches, back to Sellable. Nothing is added unless every row is readable. */
+/** Returned watches, back to stock. Nothing is added unless every row is readable. */
 export async function uploadReturns(_prev: ReturnsState, formData: FormData): Promise<ReturnsState> {
   let user;
   try {
@@ -49,18 +51,28 @@ export async function uploadReturns(_prev: ReturnsState, formData: FormData): Pr
   if (problems.length > 0) return { error: "Nothing was added. Fix these and upload it again:", details: problems.slice(0, 50) };
   if (entries.length === 0) return { error: "No quantities were found. Is the sheet filled in?" };
 
-  const result = await saveReturn(user.id, entries, on, file.name, confirmed, String(formData.get("name") ?? ""));
+  // "place:<model>": where a model never in inventory goes, answered in the page's popup.
+  const placeFor: Record<string, string> = {};
+  for (const [key, value] of formData.entries()) if (key.startsWith("place:")) placeFor[key.slice(6)] = String(value);
+  const result = await saveReturn(user.id, entries, on, file.name, confirmed, String(formData.get("name") ?? ""), placeFor);
+  if (result.needsPlace.length > 0) return { needsPlace: result.needsPlace };
   if (!result.ok) return { error: "Nothing was added.", details: result.problems.slice(0, 50) };
 
   revalidatePath("/inventory");
   revalidatePath("/inventory/returns");
   return {
-    ok: `Back in Sellable: ${result.pieces} piece(s) of ${result.models} model(s), returned ${on}.`,
-    details: notes,
+    ok: `Back in inventory: ${result.pieces} piece(s) of ${result.models} model(s), returned ${on}.`,
+    details: [
+      `Placed: Sellable ${result.placed.SELLABLE}, TT sample ${result.placed.SAMPLE_TIKTOK}, eBay sample ${result.placed.SAMPLE_EBAY}, Random pulls ${result.placed.RANDOM_PULLS}.`,
+      ...(result.added.length > 0
+        ? [`Never in inventory before, so added as new model(s): ${result.added.join(", ")}. Check each number against the watch; a typo can be undone below.`]
+        : []),
+      ...notes,
+    ],
   };
 }
 
-/** Takes returns added with wrong numbers back off Sellable. */
+/** Takes returns added with wrong numbers back off stock. */
 export async function undoReturns(_prev: ReturnsState, formData: FormData): Promise<ReturnsState> {
   let user;
   try {

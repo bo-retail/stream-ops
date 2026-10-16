@@ -2,13 +2,14 @@ import type { Metadata } from "next";
 import { Card, CardHeader, LinkButton, PageHeader } from "@/components/ui";
 import { requireShippingDirector } from "@/lib/auth/guards";
 import { formatDate, todayISO } from "@/lib/domain/dates";
+import { COUNTED_LABEL, COUNTED_PLACES } from "@/lib/domain/inventory";
 import { returnLog } from "@/lib/server/returns";
 import { getSettings } from "@/lib/server/settings";
 import { ReturnsForm, UndoReturns } from "./returns-form";
 
 export const metadata: Metadata = { title: "Returns" };
 
-/** Returns: download the sheet, fill in what came back, upload it. It all goes back to Sellable. */
+/** Returns: download the sheet, fill in what came back, upload it. Placed as a delivery is; a model never in inventory where the page is told. */
 export default async function ReturnsPage() {
   await requireShippingDirector();
   const { timezone } = await getSettings();
@@ -18,14 +19,14 @@ export default async function ReturnsPage() {
     <>
       <PageHeader
         title="Returns"
-        description="Watches that came back are added to Sellable, ready to sell again."
+        description="Watches that came back are added back to inventory, ready to sell again."
         action={<LinkButton href="/inventory">Back to inventory</LinkButton>}
       />
       <div className="max-w-3xl space-y-5">
         <Card>
           <CardHeader
             title="1. Download the sheet"
-            description="Just Model and Quantity: how many of each model came back. Only enter watches that can be sold again — a damaged one is not put back. An order cancelled before it shipped is not a return: it comes back on its own when the corrected sales report is uploaded."
+            description="Just Model and Quantity: how many of each model came back. The app places them the same way as a delivery: a missing TikTok or eBay sample is filled first, 1 or 2 of a model missing its samples go to Random pulls, the rest to Sellable. A model never in inventory: you are asked where it goes. Only enter watches that can be sold again — a damaged one is not put back. An order cancelled before it shipped is not a return: it comes back on its own when the corrected sales report is uploaded."
           />
           <div className="p-4">
             <a
@@ -39,7 +40,7 @@ export default async function ReturnsPage() {
         <Card>
           <CardHeader
             title="2. Upload it"
-            description="Every model must already be in inventory. The same returns uploaded twice on one day are refused unless you say they really are other watches. Nothing is added if any row cannot be read."
+            description="A model at zero is fine. A model never in inventory opens a box asking where it goes — check its number against the watch first. If the upload asks something (the same returns again, or already counted), read it first. Nothing is added if any row cannot be read."
           />
           <div className="p-4">
             <ReturnsForm today={today} />
@@ -72,22 +73,34 @@ export default async function ReturnsPage() {
                       <span className="shrink-0 text-xs text-brand-700">Details</span>
                     </summary>
                     <div className="border-t border-line bg-canvas/50 px-4 py-3">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="text-left text-xs uppercase text-ink-subtle">
-                            <th className="py-1 font-semibold">Model</th>
-                            <th className="py-1 text-right font-semibold">Back to Sellable</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {r.items.map((i) => (
-                            <tr key={i.model} className="border-t border-line">
-                              <td className="py-1 tabular">{i.model}</td>
-                              <td className="py-1 text-right font-semibold tabular">{i.qty}</td>
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[28rem] text-sm">
+                          <thead>
+                            <tr className="text-left text-xs uppercase text-ink-subtle">
+                              <th className="py-1 font-semibold">Model</th>
+                              {COUNTED_PLACES.map((p) => (
+                                <th key={p} className="py-1 text-right font-semibold">
+                                  {COUNTED_LABEL[p]}
+                                </th>
+                              ))}
+                              <th className="py-1 text-right font-semibold">Total</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {r.items.map((i) => (
+                              <tr key={i.model} className="border-t border-line">
+                                <td className="py-1 tabular">{i.model}</td>
+                                {COUNTED_PLACES.map((p) => (
+                                  <td key={p} className="py-1 text-right tabular">
+                                    {i.placed[p] || <span className="text-ink-subtle">—</span>}
+                                  </td>
+                                ))}
+                                <td className="py-1 text-right font-semibold tabular">{i.total}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                       {r.undone ? null : (
                         <div className="mt-3">
                           <UndoReturns entryId={r.entryId} label={r.name} />

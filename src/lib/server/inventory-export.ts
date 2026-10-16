@@ -214,15 +214,22 @@ export async function inventoryWorkbook(
   }
 
   /* --------------------------------------------------------------- returned */
-  const returned = titled(wb, "Returned", `Returns added back to Sellable ${since}, by the day they came back.`, [
+  const returned = titled(wb, "Returned", `Returns added back to inventory ${since}, by the day they came back.`, [
     { header: "Came back on", width: 14 },
     { header: "Model", width: 14 },
+    { header: "Place", width: 14 },
     { header: "Pieces", width: 10 },
     { header: "Returns", width: 50 },
   ]);
   returned.getColumn(2).numFmt = "@";
   for (const r of await returnsBetween(range.from, range.to)) {
-    returned.addRow([formatDate(r.returnedOn), r.product.model, r.qty, r.note.replace(/^Returned \S+ — /, "")]);
+    returned.addRow([
+      formatDate(r.returnedOn),
+      r.product.model,
+      isCounted(r.place) ? COUNTED_LABEL[r.place] : (PLACE_NAME[r.place] ?? r.place),
+      r.qty,
+      r.note.replace(/^Returned \S+ — /, ""),
+    ]);
   }
 
   /* ---------------------------------------------------------- not taken off */

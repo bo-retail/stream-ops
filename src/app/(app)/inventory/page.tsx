@@ -47,25 +47,20 @@ export default async function InventoryPage({
     <>
       <PageHeader
         title="Inventory"
-        description={
-          from
-            ? `What arrives is added on Receive inventory, what comes back on Returns; sales from ${formatDate(from)} on come off automatically when the sales report is uploaded.`
-            : "Nothing counted yet. Do the starting count to begin."
-        }
+        // No line under the title once counting has started (Samuel, 10/15).
+        description={from ? undefined : "Nothing counted yet. Do the starting count to begin."}
         action={
           <div className="flex flex-wrap gap-2">
-            {/* A file download, not a page: a plain link. */}
+            {/* A file download, not a page: a plain link. The one blue button (Samuel, 10/15). */}
             <a
               href={`/api/inventory/export?${rangeQuery}`}
-              className="inline-flex items-center rounded-lg border border-line-strong bg-surface px-3 py-1.5 text-sm font-medium text-ink hover:bg-canvas"
+              className="inline-flex items-center rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
             >
               Download Excel
             </a>
             {/* The starting count is done (10/14); its page stays at /inventory/start for a full recount. */}
             <LinkButton href="/inventory/returns">Returns</LinkButton>
-            <LinkButton href="/inventory/receive" variant="primary">
-              Receive inventory
-            </LinkButton>
+            <LinkButton href="/inventory/receive">Receive inventory</LinkButton>
           </div>
         }
       />
