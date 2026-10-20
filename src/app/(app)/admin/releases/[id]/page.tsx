@@ -140,6 +140,7 @@ export default async function ReleasePage({ params }: { params: Promise<{ id: st
         selected={memberIds}
         sent={release.status !== "DRAFT"}
         editable={editable}
+        addOnly={!editable}
       />
 
       <Card className="mb-5">

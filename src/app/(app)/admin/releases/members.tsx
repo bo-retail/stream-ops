@@ -28,6 +28,7 @@ export function ReleaseMembers({
   selected,
   sent,
   editable,
+  addOnly = false,
 }: {
   releaseId: string;
   streamers: CastMember[];
@@ -36,6 +37,12 @@ export function ReleaseMembers({
   /** Whether this release has already gone out to the team. */
   sent: boolean;
   editable: boolean;
+  /**
+   * The schedule is published: names can be ticked on, never off. A login made
+   * mid-release still has to reach the seat picker; taking somebody off a
+   * schedule people are working to does not happen here.
+   */
+  addOnly?: boolean;
 }) {
   /*
     An empty list means two completely different things, and saying the wrong
@@ -49,15 +56,24 @@ export function ReleaseMembers({
   const wentToEverybody = selected.length === 0 && sent;
   const notChosenYet = selected.length === 0 && !sent;
 
+  // Only the names on screen. A member whose account was since deactivated has
+  // no box, so carrying their id would only make the count disagree with it.
+  const saved = new Set(
+    wentToEverybody ? streamers.map((s) => s.id) : selected.filter((id) => streamers.some((s) => s.id === id)),
+  );
   const [chosen, setChosen] = useState<Set<string>>(
     // A legacy release starts ticked as what it actually was. A new one starts
     // empty: a diamond release wants two people ticked, not fifteen unticked.
-    () => new Set(wentToEverybody ? streamers.map((s) => s.id) : selected),
+    () => new Set(saved),
   );
   const [state, setState] = useState<{ ok?: string; error?: string }>({});
   const [pending, start] = useTransition();
 
   const all = chosen.size === streamers.length;
+  // A published whole-team list (empty) already offers everybody; there is
+  // nothing to add, sent out or not.
+  const canEdit = editable || (addOnly && selected.length > 0);
+  const added = [...chosen].filter((id) => !saved.has(id)).length;
 
   function toggle(id: string) {
     setChosen((prev) => {
@@ -79,7 +95,7 @@ export function ReleaseMembers({
         title="Who it goes to"
         description="They are asked for their availability, and they are the only names offered when you build the schedule."
         action={
-          editable ? (
+          editable && !addOnly ? (
             <Button
               type="button"
               size="sm"
@@ -107,12 +123,21 @@ export function ReleaseMembers({
           </Alert>
         ) : null}
 
+        {addOnly && canEdit ? (
+          <p className="mb-3 text-sm text-ink-muted">
+            The schedule is published, so you can add people here but not take anyone off.
+          </p>
+        ) : null}
+
         {streamers.length === 0 ? (
           <p className="text-sm text-ink-muted">Nobody is set up as a streamer yet.</p>
         ) : (
           <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
             {streamers.map((s) => {
-              const on = chosen.has(s.id);
+              // Once published, anybody saved is on it — including a name another
+              // admin added after this page was opened.
+              const on = chosen.has(s.id) || (addOnly && saved.has(s.id));
+              const locked = !canEdit || (addOnly && saved.has(s.id));
               return (
                 <label
                   key={s.id}
@@ -121,14 +146,14 @@ export function ReleaseMembers({
                     on
                       ? "border-brand-200 bg-brand-50 text-ink"
                       : "border-line bg-surface text-ink-muted hover:bg-canvas",
-                    !editable && "cursor-default opacity-70",
+                    locked && "cursor-default opacity-70",
                   )}
                 >
                   <input
                     type="checkbox"
                     className="h-4 w-4 shrink-0 accent-brand-600"
                     checked={on}
-                    disabled={!editable || pending}
+                    disabled={locked || pending}
                     onChange={() => toggle(s.id)}
                   />
                   <span className="truncate">{s.name}</span>
@@ -138,11 +163,20 @@ export function ReleaseMembers({
           </div>
         )}
 
-        {editable ? (
+        {canEdit ? (
           <div className="mt-3 flex flex-wrap items-center gap-3">
-            <Button type="button" size="sm" onClick={save} disabled={pending || chosen.size === 0}>
+            <Button
+              type="button"
+              size="sm"
+              onClick={save}
+              disabled={pending || chosen.size === 0 || (addOnly && added === 0)}
+            >
               <Users className="h-4 w-4" aria-hidden />
-              {pending ? "Saving…" : `Save — ${chosen.size} of ${streamers.length}`}
+              {pending
+                ? "Saving…"
+                : addOnly
+                  ? `Add ${added} ${added === 1 ? "person" : "people"}`
+                  : `Save — ${chosen.size} of ${streamers.length}`}
             </Button>
             {/* Nobody is not a choice: an empty list reads as everybody, so
                 saving one would send the release to the whole team. */}

@@ -39,3 +39,51 @@ export function isOnRelease(memberIds: readonly string[], userId: string): boole
 export function askedCount(memberIds: readonly string[], teamSize: number): number {
   return memberIds.length === 0 ? teamSize : memberIds.length;
 }
+
+export type MemberChange =
+  | { error: string }
+  | { list: string[]; add: string[] };
+
+/**
+ * What saving the "Who it goes to" list would do, or why it must not.
+ *
+ * Before the schedule is published the list is whatever the boss ticks:
+ * `list` is the whole new list, saved as a replacement. After, it can only
+ * grow. A new account made mid-release — somebody's login replaced, a new hire
+ * — has to be offered in the seat picker, and adding a name changes nothing
+ * anyone is already on. Taking a name off a schedule people are working to is
+ * a different matter, so once published a name the page did not send is left
+ * as it is: only `add` is saved. That also means a second admin's page, opened
+ * before somebody else added a name, cannot take that name back off.
+ *
+ * `current` is the saved list. `streamerIds` is every active streamer — a member
+ * whose account has since been deactivated has no tick box, so a page that
+ * still carries their id is not asking to add them.
+ */
+export function planMemberChange(input: {
+  published: boolean;
+  current: readonly string[];
+  wanted: readonly string[];
+  streamerIds: readonly string[];
+}): MemberChange {
+  const streamers = new Set(input.streamerIds);
+  const current = new Set(input.current);
+
+  const asked = [...new Set(input.wanted)].filter((id) => !(current.has(id) && !streamers.has(id)));
+  if (asked.some((id) => !streamers.has(id))) {
+    return { error: "Only active streamers can be put on a release." };
+  }
+  if (asked.length === 0) return { error: "Pick at least one person." };
+
+  const add = asked.filter((id) => !current.has(id));
+  if (!input.published) return { list: asked, add };
+
+  if (current.size === 0) {
+    // Made before a release could be aimed: it already offers every streamer,
+    // and saving a fixed list now would only narrow it.
+    return {
+      error: "This release already includes the whole team, so there is nobody to add.",
+    };
+  }
+  return { list: [...current, ...add], add };
+}

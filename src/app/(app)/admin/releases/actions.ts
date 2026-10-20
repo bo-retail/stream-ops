@@ -16,6 +16,8 @@ import {
 import { BUSINESS_LABEL } from "@/lib/domain/business";
 import { PLATFORM_SHORT, isSlot, slotShort } from "@/lib/domain/types";
 import type { Platform, Slot } from "@/lib/domain/types";
+import { planMemberChange } from "@/lib/domain/release-members";
+import { getReleaseMemberIds } from "@/lib/server/releases";
 import { getSettings } from "@/lib/server/settings";
 
 export interface ReleaseState {
@@ -366,6 +368,8 @@ export async function setReleaseRules(releaseId: string, input: unknown): Promis
  *
  * Replaces the whole list rather than adding and removing, because the screen
  * sends what it shows — a tick box that is off has to be able to mean off.
+ * Once the schedule is published the list can only grow — see
+ * `planMemberChange`.
  *
  * Only streamers can be on it. An admin or a packer put on a release would
  * appear in the seat picker, and neither is ever on a show.
@@ -387,51 +391,88 @@ export async function setReleaseMembers(
   });
   if (!release) return { error: "That release no longer exists." };
 
-  const wanted = [...new Set(userIds)];
-  const eligible = await prisma.user.findMany({
-    where: { id: { in: wanted }, isActive: true, role: "EMPLOYEE", team: "STREAMING" },
-    select: { id: true },
+  const published = release.scheduleStatus === "PUBLISHED";
+  const [current, streamers] = await Promise.all([
+    getReleaseMemberIds(releaseId),
+    prisma.user.findMany({
+      where: { isActive: true, role: "EMPLOYEE", team: "STREAMING" },
+      select: { id: true, name: true },
+    }),
+  ]);
+
+  const plan = planMemberChange({
+    published,
+    current,
+    wanted: userIds,
+    streamerIds: streamers.map((s) => s.id),
   });
-  const allowed = new Set(eligible.map((u) => u.id));
-  const refused = wanted.filter((id) => !allowed.has(id));
-  if (refused.length > 0) {
-    return { error: "Only active streamers can be put on a release." };
-  }
+  if ("error" in plan) return plan;
+  const { list, add } = plan;
+
+  if (published && add.length === 0) return { ok: "Nothing new to add." };
 
   /*
     Somebody already seated who is being taken off the list.
 
     Their assignments are left alone rather than deleted — removing them would
     silently empty seats on a schedule that may already be published — so the
-    boss is told and decides.
+    boss is told and decides. Never happens once published: the list only grows.
   */
   const stranded = await prisma.assignment.count({
-    where: { show: { releaseId }, userId: { notIn: [...allowed] } },
+    where: { show: { releaseId }, userId: { notIn: list } },
   });
 
-  const before = await prisma.releaseMember.count({ where: { releaseId } });
+  const nameOf = new Map(streamers.map((s) => [s.id, s.name]));
+  const summary = published
+    ? `Added ${add.map((id) => nameOf.get(id) ?? id).join(", ")} to the published release`
+    : `Release is for ${list.length} person(s)${current.length === 0 ? " (was everybody)" : ""}`;
 
-  await prisma.$transaction([
-    prisma.releaseMember.deleteMany({ where: { releaseId, userId: { notIn: [...allowed] } } }),
-    ...[...allowed].map((userId) =>
-      prisma.releaseMember.upsert({
-        where: { releaseId_userId: { releaseId, userId } },
-        create: { releaseId, userId },
-        update: {},
-      }),
-    ),
-    prisma.auditLog.create({
-      data: {
-        entityType: "Release",
-        entityId: releaseId,
-        action: "SET_MEMBERS",
-        actorId: boss.id,
-        summary: `Release is for ${allowed.size} person(s)${before === 0 ? " (was everybody)" : ""}`,
-      },
-    }),
-  ]);
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Published while this was being worked out: the plan assumed a draft
+      // and could take people off a schedule now being worked to.
+      const now = await tx.release.findUnique({
+        where: { id: releaseId },
+        select: { scheduleStatus: true },
+      });
+      if ((now?.scheduleStatus === "PUBLISHED") !== published) throw new Error("STATUS_CHANGED");
+
+      // A draft is replaced whole, as it always was: every ticked name is
+      // written, so two saves at once can never leave the list empty — and an
+      // empty list means everybody. A published one only gains names.
+      if (!published) {
+        await tx.releaseMember.deleteMany({ where: { releaseId, userId: { notIn: list } } });
+      }
+      for (const userId of published ? add : list) {
+        await tx.releaseMember.upsert({
+          where: { releaseId_userId: { releaseId, userId } },
+          create: { releaseId, userId },
+          update: {},
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          entityType: "Release",
+          entityId: releaseId,
+          action: "SET_MEMBERS",
+          actorId: boss.id,
+          summary,
+        },
+      });
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message === "STATUS_CHANGED") {
+      return { error: "The schedule was just published or unpublished. Reload the page and try again." };
+    }
+    throw err;
+  }
 
   refresh(releaseId);
+  if (published) {
+    return {
+      ok: `Saved. ${add.length === 1 ? "They are" : "They are all"} in the seat picker now.`,
+    };
+  }
   if (stranded > 0) {
     return {
       ok:
@@ -439,7 +480,7 @@ export async function setReleaseMembers(
         `they have been left in place, so take them off the schedule if that is wrong.`,
     };
   }
-  return { ok: `Saved. This release is for ${allowed.size} person(s).` };
+  return { ok: `Saved. This release is for ${list.length} person(s).` };
 }
 
 const SendSchema = z.object({
