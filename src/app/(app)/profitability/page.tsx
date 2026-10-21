@@ -125,7 +125,6 @@ export default async function ProfitabilityPage({
   const lossDays = days.filter((d) => grossMargin(p.current.byDay.get(d) ?? emptyFigures()) < 0);
 
   const notes: string[] = [];
-  if (t.estimatedUnits > 0) notes.push(`${t.estimatedUnits.toLocaleString("en-US")} unit(s) costed at the model's cost today: no cost was saved when they sold (sold before inventory started, or not taken off stock yet).`);
   if (t.uncostedUnits > 0) notes.push(`${t.uncostedUnits.toLocaleString("en-US")} unit(s) of a model with no cost: their revenue counts, the margin leaves them out. Load the Invicta master to give them one.`);
   if (t.unnamedUnits > 0) notes.push(`${t.unnamedUnits.toLocaleString("en-US")} random pull(s) not named yet: revenue counts, margin leaves them out until packing names the watch.`);
   if (t.cancelledUnits > 0) notes.push(`${t.cancelledUnits.toLocaleString("en-US")} cancelled after payment (${formatMoney(t.cancelledCents)}) are left out.`);

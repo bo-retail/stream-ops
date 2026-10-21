@@ -3,7 +3,7 @@ import { Card, CardHeader, PageHeader } from "@/components/ui";
 import { requireBoss } from "@/lib/auth/guards";
 import { dateTimeFormatter } from "@/lib/domain/dates";
 import { formatMoney } from "@/lib/domain/insights";
-import { masterUploadLog } from "@/lib/server/inventory";
+import { masterGaps, masterUploadLog } from "@/lib/server/inventory";
 import { getSettings } from "@/lib/server/settings";
 import { UploadMaster } from "../../inventory/templates/upload-forms";
 
@@ -22,7 +22,9 @@ export default async function InvictaMasterPage() {
   await requireBoss();
   const { timezone } = await getSettings();
   const when = dateTimeFormatter(timezone);
-  const log = await masterUploadLog();
+  const [log, gaps] = await Promise.all([masterUploadLog(), masterGaps()]);
+  const missing = (what: "Description" | "Cost" | "Picture") => gaps.filter((g) => g.missing.includes(what)).length;
+  const inStock = gaps.filter((g) => g.pieces > 0).length;
 
   return (
     <>
@@ -38,6 +40,31 @@ export default async function InvictaMasterPage() {
           />
           <div className="p-4">
             <UploadMaster />
+          </div>
+        </Card>
+        <Card>
+          <CardHeader
+            title="Missing from the master"
+            description="Models in the app the master has not given a description, a cost or a picture — the list to send Daniel. Models in stock come first."
+          />
+          <div className="space-y-3 p-4 text-sm">
+            {gaps.length === 0 ? (
+              <p className="text-ok-700">Every model has a description, a cost and a picture.</p>
+            ) : (
+              <>
+                <p className="text-ink">
+                  <span className="font-semibold">{gaps.length.toLocaleString("en-US")} model(s)</span> are missing something
+                  {inStock > 0 ? `, ${inStock.toLocaleString("en-US")} of them in stock` : ""}: {missing("Description")} without a
+                  description, {missing("Cost")} without a cost, {missing("Picture")} without a picture.
+                </p>
+                <a
+                  href="/api/inventory/master-gaps"
+                  className="inline-flex items-center rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
+                >
+                  Download the list (Excel)
+                </a>
+              </>
+            )}
           </div>
         </Card>
         <Card>

@@ -371,3 +371,23 @@ export function soldByShow(sales: { day: string; show: string }[]): SoldAtShow[]
     (a, b) => (a.day === b.day ? showRank(a.show) - showRank(b.show) || a.show.localeCompare(b.show) : a.day < b.day ? 1 : -1),
   );
 }
+
+/* --------------------------------------------- what the master has not given */
+
+/**
+ * What a model is missing that Invicta's master should give it — the list
+ * Samuel sends Daniel (21 October). A picture counts as given when the master
+ * gave a link or somebody uploaded a photo.
+ */
+export function missingFromMaster(p: {
+  description: string;
+  costCents: number | null;
+  imageUrl: string;
+  hasPhoto: boolean;
+}): ("Description" | "Cost" | "Picture")[] {
+  const out: ("Description" | "Cost" | "Picture")[] = [];
+  if (p.description.trim() === "") out.push("Description");
+  if (p.costCents === null || p.costCents <= 0) out.push("Cost");
+  if (p.imageUrl.trim() === "" && !p.hasPhoto) out.push("Picture");
+  return out;
+}

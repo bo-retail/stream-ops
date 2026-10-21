@@ -11,6 +11,7 @@ import {
   countLines,
   detailsFromMasterRow,
   masterChanges,
+  missingFromMaster,
   normaliseModel,
   parseQty,
 } from "@/lib/domain/inventory";
@@ -767,4 +768,55 @@ function isMasterRecord(v: unknown): v is MasterUploadRecord {
   if (!v || typeof v !== "object") return false;
   const r = v as Record<string, unknown>;
   return typeof r.fileName === "string" && Array.isArray(r.added) && Array.isArray(r.costsChanged) && Array.isArray(r.costsFilled);
+}
+
+/* ------------------------------------------ models the master has not covered */
+
+export interface MasterGap {
+  model: string;
+  description: string;
+  missing: ("Description" | "Cost" | "Picture")[];
+  /** Pieces held now, so the list can be worked from what is on the shelf. */
+  pieces: number;
+}
+
+/** Every model missing something Invicta's master should give it, those in stock first. */
+export async function masterGaps(): Promise<MasterGap[]> {
+  const products = await prisma.product.findMany({
+    // Active models only: an undone typo or an order that never arrived is not
+    // something to ask Invicta about.
+    where: { active: true },
+    select: { id: true, model: true, description: true, costCents: true, imageUrl: true, photo: { select: { productId: true } } },
+  });
+  const gaps = products
+    .map((p) => ({
+      id: p.id,
+      model: p.model,
+      description: p.description,
+      missing: missingFromMaster({ description: p.description, costCents: p.costCents, imageUrl: p.imageUrl, hasPhoto: p.photo !== null }),
+    }))
+    .filter((g) => g.missing.length > 0);
+  const balances = await balancesFor(prisma, gaps.map((g) => g.id));
+  return gaps
+    .map(({ id, ...g }) => {
+      const b = balances.get(id) ?? zero();
+      return { ...g, pieces: b.SELLABLE + b.SAMPLE_TIKTOK + b.SAMPLE_EBAY + b.RANDOM_PULLS };
+    })
+    .sort((a, b) => b.pieces - a.pieces || a.model.localeCompare(b.model));
+}
+
+/** The list as an Excel file, for Daniel: model, what is missing, what the app has. */
+export async function masterGapsSheet(): Promise<ArrayBuffer> {
+  const gaps = await masterGaps();
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Missing from the master");
+  ws.getCell("A1").value = "Models missing details the Invicta master should give. Please add them to the master. Models in stock are first.";
+  ws.getCell("A1").font = { italic: true, color: { argb: "FF5B6472" } };
+  ws.getRow(2).values = ["Invicta Model", "Missing", "Description we have", "Pieces in stock"];
+  ws.getRow(2).font = { bold: true };
+  ws.columns = [16, 32, 60, 16].map((width) => ({ width }));
+  for (const g of gaps) ws.addRow([g.model, g.missing.join(", "), g.description, g.pieces]);
+  // Model numbers as text, so Excel never turns them into something else.
+  ws.getColumn(1).numFmt = "@";
+  return (await wb.xlsx.writeBuffer()) as ArrayBuffer;
 }

@@ -9,6 +9,7 @@ import {
   countLines,
   detailsFromMasterRow,
   masterChanges,
+  missingFromMaster,
   normaliseModel,
   parseMoney,
   parseQty,
@@ -321,5 +322,21 @@ describe("soldByShow", () => {
       "2026-10-20 TikTok AM 1",
       "2026-10-20 TikTok PM 1",
     ]);
+  });
+});
+
+describe("missingFromMaster", () => {
+  const full = { description: "Pro Diver 40mm", costCents: 2_500, imageUrl: "https://cdn.invictawatch.com/x.png", hasPhoto: false };
+  it("a model with everything is missing nothing", () => {
+    expect(missingFromMaster(full)).toEqual([]);
+  });
+  it("names each thing missing", () => {
+    expect(missingFromMaster({ description: " ", costCents: null, imageUrl: "", hasPhoto: false })).toEqual(["Description", "Cost", "Picture"]);
+  });
+  it("an uploaded photo counts as a picture", () => {
+    expect(missingFromMaster({ ...full, imageUrl: "", hasPhoto: true })).toEqual([]);
+  });
+  it("a cost of 0 is no cost", () => {
+    expect(missingFromMaster({ ...full, costCents: 0 })).toEqual(["Cost"]);
   });
 });
