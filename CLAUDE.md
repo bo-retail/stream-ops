@@ -54,6 +54,16 @@ unless asked:
 STREAMOPS_DB_TESTS=1 npx vitest run db.test
 ```
 
+For any change to pages, menus, layout or permissions, also run the page
+walk-through (about 5 minutes, development database only). It signs in as
+admin, shipping director, packer and streamer, opens every page in each menu at
+phone and laptop width, checks nobody reaches a page that is not theirs, and
+cleans up after itself:
+
+```
+NODE_OPTIONS=--conditions=react-server npx tsx scripts/check-pages.mts
+```
+
 ## How the code goes out
 
 Samuel pushes from GitHub Desktop, signed in as the boss — see the memory note
