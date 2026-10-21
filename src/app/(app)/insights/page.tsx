@@ -210,7 +210,8 @@ export default async function InsightsPage({
           action="/insights"
           method="get"
           className={cn(
-            "inline-flex items-center gap-1 rounded-xl border bg-surface p-1 pl-2.5 shadow-[0_1px_2px_rgba(16,19,26,0.04)]",
+            // Wraps on a phone: the two dates and Apply are wider than 375px in one row.
+            "inline-flex max-w-full flex-wrap items-center gap-1 rounded-xl border bg-surface p-1 pl-2.5 shadow-[0_1px_2px_rgba(16,19,26,0.04)]",
             range.key === "custom" ? "border-brand-500 ring-2 ring-brand-100" : "border-line",
           )}
         >
