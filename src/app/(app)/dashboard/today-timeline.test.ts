@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { TodayTimeline } from "./today-timeline";
+import { TodayTimeline, showName } from "./today-timeline";
 import type { TimelineShow } from "./today-timeline";
 
 /*
@@ -96,5 +96,45 @@ describe("TodayTimeline", () => {
 
   it("is hidden from screen readers, which read the list below instead", () => {
     expect(render([show({})], "15:00")).toMatch(/^<div[^>]*aria-hidden="true"/);
+  });
+});
+
+describe("showName (Samuel 10/21: a full, readable name)", () => {
+  it("names the standard shows", () => {
+    expect(showName("TIKTOK", "DAY")).toBe("TikTok Day");
+    expect(showName("EBAY", "NIGHT")).toBe("eBay Night");
+  });
+  it("does not repeat the platform an extra show's name already has", () => {
+    expect(showName("TIKTOK", "TIKTOK EARLY AM")).toBe("TikTok Early AM");
+  });
+  it("an extra show without the platform in its name", () => {
+    expect(showName("TIKTOK", "EARLY AM")).toBe("TikTok Early AM");
+  });
+});
+
+describe("hovering a bar (Samuel 10/21)", () => {
+  it("shows the whole name, hours and everyone on it", () => {
+    const html = renderToStaticMarkup(
+      createElement(TodayTimeline, {
+        nowHM: "15:38",
+        shows: [
+          {
+            id: "s1", business: "WATCH", platform: "TIKTOK", slot: "DAY", startHM: "13:00", endHM: "19:00",
+            live: true, done: false, short: false, seatsMissing: 0, names: ["Francine Yaffe", "Gideon Kornbluth"],
+          },
+        ],
+      } as never),
+    );
+    expect(html).toContain("TikTok Day · 13:00–19:00");
+    expect(html).toContain("Francine Yaffe and Gideon Kornbluth");
+  });
+});
+
+describe("showName edges (review 10/21)", () => {
+  it("strips the platform only as a whole word", () => {
+    expect(showName("EBAY", "EBAYS PICKS")).toBe("eBay Ebays Picks");
+  });
+  it("a show named just the platform keeps a name, with no trailing space", () => {
+    expect(showName("TIKTOK", "TIKTOK")).toBe("TikTok Tiktok");
   });
 });

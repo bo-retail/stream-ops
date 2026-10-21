@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CalendarRange } from "lucide-react";
-import { Alert, Badge, Card, CardHeader, EmptyState, PageHeader, Table, Td, Th } from "@/components/ui";
+import { Alert, Badge, Card, CardHeader, EmptyState, PageHeader } from "@/components/ui";
 import { DailyBars } from "@/components/charts";
+import { SortableTable, type SortColumn } from "@/components/sortable-table";
 import { WatchImage } from "@/components/watch-image";
 import { requireBoss } from "@/lib/auth/guards";
 import { datesBetween, diffDays, formatDate, formatDateRange, isDateISO } from "@/lib/domain/dates";
@@ -75,20 +76,6 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** One row of figures: revenue, units, average price, cost, gross profit, margin. */
-function FigureCells({ f }: { f: Figures }) {
-  const r = marginRate(f);
-  return (
-    <>
-      <Td className="tabular text-right">{formatMoney(f.revenueCents)}</Td>
-      <Td className="tabular text-right">{f.units.toLocaleString("en-US")}</Td>
-      <Td className="tabular text-right text-ink-muted">{averagePrice(f) === null ? "—" : formatMoney(averagePrice(f)!)}</Td>
-      <Td className="tabular text-right text-ink-muted">{formatMoney(f.cogsCents)}</Td>
-      <Td className="tabular text-right">{formatMoney(grossMargin(f))}</Td>
-      <Td className={cn("tabular text-right font-semibold", r !== null && r < 0 && "text-danger-600")}>{pct(r)}</Td>
-    </>
-  );
-}
 const FIGURE_HEADS = ["Revenue", "Units", "Avg price", "Cost of goods", "Gross profit", "Margin"];
 
 export default async function ProfitabilityPage({
@@ -112,7 +99,6 @@ export default async function ProfitabilityPage({
 
   const models = [...p.current.byModel.values()];
   const name = (m: string) => p.models.get(m);
-  const mostProfit = [...models].sort((a, b) => grossMargin(b) - grossMargin(a)).slice(0, 15);
   // Thinnest margins among watches that sold a few, so one odd sale is not a verdict.
   const thinnest = models
     .filter((m) => m.costedRevenueCents > 0 && m.units >= 3 && m.costedRevenueCents === m.revenueCents)
@@ -129,40 +115,39 @@ export default async function ProfitabilityPage({
   if (t.unnamedUnits > 0) notes.push(`${t.unnamedUnits.toLocaleString("en-US")} random pull(s) not named yet: revenue counts, margin leaves them out until packing names the watch.`);
   if (t.cancelledUnits > 0) notes.push(`${t.cancelledUnits.toLocaleString("en-US")} cancelled after payment (${formatMoney(t.cancelledCents)}) are left out.`);
 
-  const modelCell = (m: string) => {
+  const modelContent = (m: string) => {
     const info = name(m);
     return (
-      <Td>
-        <div className="flex items-center gap-2.5">
-          <WatchImage url={info?.picture ?? ""} model={m} size={36} />
-          <div className="min-w-0">
-            <p className="tabular font-medium text-ink">{m}</p>
-            {info?.description ? <p className="max-w-xs truncate text-xs text-ink-subtle">{info.description}</p> : null}
-          </div>
+      <div className="flex items-center gap-2.5">
+        <WatchImage url={info?.picture ?? ""} model={m} size={36} />
+        <div className="min-w-0">
+          <p className="tabular font-medium text-ink">{m}</p>
+          {info?.description ? <p className="max-w-xs truncate text-xs text-ink-subtle">{info.description}</p> : null}
         </div>
-      </Td>
+      </div>
     );
   };
-  const modelRow = (m: ModelProfit) => (
-    <tr key={m.model}>
-      {modelCell(m.model)}
-      <FigureCells f={m} />
-    </tr>
-  );
-  const modelTable = (rows: ModelProfit[]) => (
-    <Table>
-      <thead>
-        <tr>
-          <Th>Watch</Th>
-          {FIGURE_HEADS.map((h) => (
-            <Th key={h} className="text-right">
-              {h}
-            </Th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>{rows.map(modelRow)}</tbody>
-    </Table>
+  // Every table sorts by clicking its headings, as in Excel (Samuel, 21 October).
+  const figureColumns: SortColumn[] = FIGURE_HEADS.map((label) => ({ label, align: "right" }));
+  const figureCells = (f: Figures): React.ReactNode[] => {
+    const r = marginRate(f);
+    return [
+      <span key="r" className="tabular">{formatMoney(f.revenueCents)}</span>,
+      <span key="u" className="tabular">{f.units.toLocaleString("en-US")}</span>,
+      <span key="a" className="tabular text-ink-muted">{averagePrice(f) === null ? "—" : formatMoney(averagePrice(f)!)}</span>,
+      <span key="c" className="tabular text-ink-muted">{formatMoney(f.cogsCents)}</span>,
+      <span key="g" className="tabular">{formatMoney(grossMargin(f))}</span>,
+      <span key="m" className={cn("tabular font-semibold", r !== null && r < 0 && "text-danger-600")}>{pct(r)}</span>,
+    ];
+  };
+  const figureSort = (f: Figures) => [f.revenueCents, f.units, averagePrice(f), f.cogsCents, grossMargin(f), marginRate(f)];
+  const modelTable = (rows: ModelProfit[], opts: { initial?: number; limit?: number } = {}) => (
+    <SortableTable
+      columns={[{ label: "Watch" }, ...figureColumns]}
+      rows={rows.map((m) => ({ key: m.model, cells: [modelContent(m.model), ...figureCells(m)], sort: [m.model, ...figureSort(m)] }))}
+      initial={opts.initial}
+      limit={opts.limit}
+    />
   );
 
   return (
@@ -249,26 +234,16 @@ export default async function ProfitabilityPage({
             ].map((block) => (
               <Card key={block.title}>
                 <CardHeader title={block.title} />
-                <Table>
-                  <thead>
-                    <tr>
-                      <Th />
-                      {FIGURE_HEADS.map((h) => (
-                        <Th key={h} className="text-right">
-                          {h}
-                        </Th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {block.rows.map(([label, f]) => (
-                      <tr key={label}>
-                        <Td className="whitespace-nowrap font-medium">{label}</Td>
-                        <FigureCells f={f} />
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
+                <SortableTable
+                  columns={[{ label: block.title === "By show" ? "Show" : "Platform" }, ...figureColumns]}
+                  rows={block.rows.map(([label, f], i) => ({
+                    // By its place in the list, which stays with the row as it sorts: two
+                    // raw show names can read the same once tidied.
+                    key: `${i}`,
+                    cells: [<span key="l" className="whitespace-nowrap font-medium">{label}</span>, ...figureCells(f)],
+                    sort: [label, ...figureSort(f)],
+                  }))}
+                />
               </Card>
             ))}
           </div>
@@ -293,8 +268,11 @@ export default async function ProfitabilityPage({
           <SectionTitle>Which watches make money</SectionTitle>
           <div className="space-y-5">
             <Card>
-              <CardHeader title="Most gross profit" description="The 15 watches that made the most, in dollars." />
-              {modelTable(mostProfit)}
+              <CardHeader
+                title="All watches"
+                description="Opens on the 15 that made the most. Click a heading to sort by it, highest first; click again for lowest first. Sorting ranks every watch, not just the ones shown."
+              />
+              {modelTable(models, { initial: 5, limit: 15 })}
             </Card>
             <Card>
               <CardHeader title="Thinnest margins" description="The 15 lowest margins among watches that sold 3 or more, every one costed." />
@@ -306,32 +284,31 @@ export default async function ProfitabilityPage({
                   title={`Sold below cost (${belowCost.length})`}
                   description="Watches with at least one unit sold for less than it cost us."
                 />
-                <Table>
-                  <thead>
-                    <tr>
-                      <Th>Watch</Th>
-                      <Th className="text-right">Below cost</Th>
-                      <Th className="text-right">Of units</Th>
-                      <Th className="text-right">Cost</Th>
-                      <Th className="text-right">Avg price</Th>
-                      <Th className="text-right">Margin</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {belowCost.map((m) => (
-                      <tr key={m.model}>
-                        {modelCell(m.model)}
-                        <Td className="tabular text-right font-semibold text-danger-600">{m.belowCostUnits}</Td>
-                        <Td className="tabular text-right">{m.units}</Td>
-                        <Td className="tabular text-right text-ink-muted">
-                          {name(m.model)?.costCents == null ? "—" : formatMoney(name(m.model)!.costCents!)}
-                        </Td>
-                        <Td className="tabular text-right">{averagePrice(m) === null ? "—" : formatMoney(averagePrice(m)!)}</Td>
-                        <Td className="tabular text-right">{pct(marginRate(m))}</Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
+                <SortableTable
+                  columns={[
+                    { label: "Watch" },
+                    { label: "Below cost", align: "right" },
+                    { label: "Of units", align: "right" },
+                    { label: "Cost", align: "right" },
+                    { label: "Avg price", align: "right" },
+                    { label: "Margin", align: "right" },
+                  ]}
+                  rows={belowCost.map((m) => {
+                    const cost = name(m.model)?.costCents ?? null;
+                    return {
+                      key: m.model,
+                      cells: [
+                        modelContent(m.model),
+                        <span key="b" className="tabular font-semibold text-danger-600">{m.belowCostUnits}</span>,
+                        <span key="u" className="tabular">{m.units}</span>,
+                        <span key="c" className="tabular text-ink-muted">{cost === null ? "—" : formatMoney(cost)}</span>,
+                        <span key="a" className="tabular">{averagePrice(m) === null ? "—" : formatMoney(averagePrice(m)!)}</span>,
+                        <span key="m" className="tabular">{pct(marginRate(m))}</span>,
+                      ],
+                      sort: [m.model, m.belowCostUnits, m.units, cost, averagePrice(m), marginRate(m)],
+                    };
+                  })}
+                />
               </Card>
             ) : null}
           </div>
@@ -348,32 +325,34 @@ export default async function ProfitabilityPage({
           {p.slow.length === 0 ? (
             <EmptyState title="No slow movers in these seven days" />
           ) : (
-            <Table>
-              <thead>
-                <tr>
-                  <Th>Watch</Th>
-                  <Th className="text-right">Shows sold in</Th>
-                  <Th className="text-right">Units</Th>
-                  <Th className="text-right">A show</Th>
-                  <Th className="text-right">Margin</Th>
-                  <Th className="text-right">Target price</Th>
-                  <Th className="text-right">Cost</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {p.slow.map((s) => (
-                  <tr key={s.model}>
-                    {modelCell(s.model)}
-                    <Td className="tabular text-right">{s.shows}</Td>
-                    <Td className="tabular text-right">{s.units}</Td>
-                    <Td className="tabular text-right">{Math.round(s.unitsPerShow * 10) / 10}</Td>
-                    <Td className={cn("tabular text-right font-semibold", s.margin < 0 ? "text-danger-600" : "text-warn-700")}>{pct(s.margin)}</Td>
-                    <Td className="tabular text-right">{name(s.model)?.tpCents == null ? "—" : formatMoney(name(s.model)!.tpCents!)}</Td>
-                    <Td className="tabular text-right text-ink-muted">{name(s.model)?.costCents == null ? "—" : formatMoney(name(s.model)!.costCents!)}</Td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
+            <SortableTable
+              columns={[
+                { label: "Watch" },
+                { label: "Shows sold in", align: "right" },
+                { label: "Units", align: "right" },
+                { label: "A show", align: "right" },
+                { label: "Margin", align: "right" },
+                { label: "Target price", align: "right" },
+                { label: "Cost", align: "right" },
+              ]}
+              rows={p.slow.map((s) => {
+                const tp = name(s.model)?.tpCents ?? null;
+                const cost = name(s.model)?.costCents ?? null;
+                return {
+                  key: s.model,
+                  cells: [
+                    modelContent(s.model),
+                    <span key="s" className="tabular">{s.shows}</span>,
+                    <span key="u" className="tabular">{s.units}</span>,
+                    <span key="a" className="tabular">{Math.round(s.unitsPerShow * 10) / 10}</span>,
+                    <span key="m" className={cn("tabular font-semibold", s.margin < 0 ? "text-danger-600" : "text-warn-700")}>{pct(s.margin)}</span>,
+                    <span key="t" className="tabular">{tp === null ? "—" : formatMoney(tp)}</span>,
+                    <span key="c" className="tabular text-ink-muted">{cost === null ? "—" : formatMoney(cost)}</span>,
+                  ],
+                  sort: [s.model, s.shows, s.units, s.unitsPerShow, s.margin, tp, cost],
+                };
+              })}
+            />
           )}
           <p className="px-4 py-2.5 text-xs text-ink-subtle">
             <Badge tone="neutral">Watches only</Badge> Diamonds have no master cost yet.

@@ -294,7 +294,8 @@ export function Stat({
           !tone && "text-ink",
         )}
       >
-        {value}
+        {/* A plain number reads with commas: 24,004, not 24004. */}
+        {typeof value === "number" ? value.toLocaleString("en-US") : value}
       </p>
       {sub ? <p className="mt-0.5 text-xs text-ink-muted">{sub}</p> : null}
     </Card>

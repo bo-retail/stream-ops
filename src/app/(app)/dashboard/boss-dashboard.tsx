@@ -286,7 +286,9 @@ export async function BossDashboard() {
         </Alert>
       )}
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+      {/* Today across the full width, so the timeline has room to name its
+          shows; requests below it (Samuel, 21 October). */}
+      <div className="mt-5 grid gap-5">
         <Card>
           <CardHeader
             title="Today"

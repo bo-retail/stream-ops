@@ -18,6 +18,22 @@ export interface TimelineShow {
   names: string[];
 }
 
+/**
+ * "TikTok Day", "eBay Night", "TikTok Early AM". An extra show's name may
+ * already start with its platform ("TIKTOK EARLY AM"), which would otherwise
+ * read "TikTok TIKTOK EARLY AM".
+ */
+export function showName(platform: Platform, slot: Slot): string {
+  const p = PLATFORM_SHORT[platform];
+  const s = slotShort(slot);
+  // Only a whole leading word: "EBAYS PICKS" keeps its name, a bare "TIKTOK" keeps itself.
+  const P = p.toUpperCase();
+  const stripped = s.toUpperCase().startsWith(`${P} `) ? s.slice(p.length).trim() : s;
+  const rest = stripped === "" || s.toUpperCase() === P ? s : stripped;
+  const pretty = rest === rest.toUpperCase() ? rest.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\b(Am|Pm)\b/g, (x) => x.toUpperCase()) : rest;
+  return `${p} ${pretty}`;
+}
+
 const minutes = (hm: string) => {
   const [h, m] = hm.split(":").map(Number);
   return h * 60 + m;
@@ -114,9 +130,13 @@ export function TodayTimeline({ shows, nowHM }: { shows: TimelineShow[]; nowHM: 
                           : "bg-surface text-ink ring-1 ring-inset ring-line-strong",
                   )}
                   style={{ left: `${at(start)}%`, width: `calc(${at(end) - at(start)}% - 2px)` }}
+                  // The bar cuts its words short; hovering shows them whole.
+                  title={`${BUSINESS_SHORT[show.business]} · ${showName(show.platform, show.slot)} · ${show.startHM}–${show.endHM}\n${
+                    show.names.length === 0 ? "Nobody on it" : show.names.join(" and ")
+                  }${show.short ? `\n${show.seatsMissing === 1 ? "Seat missing" : `${show.seatsMissing} seats missing`}` : ""}`}
                 >
                   <span className="truncate font-semibold">
-                    {PLATFORM_SHORT[show.platform]} {slotShort(show.slot)}
+                    {showName(show.platform, show.slot)}
                     {show.short
                       ? ` · ${show.seatsMissing === 1 ? "Seat missing" : `${show.seatsMissing} seats missing`}`
                       : show.live
