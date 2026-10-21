@@ -1,24 +1,16 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { NAV } from "@/app/(app)/nav";
 import { navRows } from "./nav-rows";
 
 /*
   The restyle grouped the admin menu under headings. Nobody is to be retrained,
-  so these read the real menus straight out of the app layout and check that
-  grouping only adds headings: every item, in its order, exactly once.
+  so these take the real menus the app layout draws and check that grouping
+  only adds headings: every item, in its order, exactly once.
 */
-const layout = readFileSync(path.resolve(import.meta.dirname, "../app/(app)/layout.tsx"), "utf8");
-function menu(name: string): { href: string; label: string }[] {
-  const block = layout.match(new RegExp(`const ${name}: NavItem\\[\\] = \\[([\\s\\S]*?)\\];`))?.[1];
-  if (!block) throw new Error(`${name} not found in layout.tsx`);
-  return [...block.matchAll(/href: "([^"]+)", label: "([^"]+)"/g)].map((m) => ({ href: m[1], label: m[2] }));
-}
-
-const BOSS = menu("BOSS_NAV");
-const DIRECTOR = menu("SHIPPING_DIRECTOR_NAV");
-const PACKER = menu("PACKER_NAV");
-const STREAMER = menu("STREAMER_NAV");
+const BOSS = NAV.ADMIN;
+const DIRECTOR = NAV.SHIPPING_DIRECTOR;
+const PACKER = NAV.SHIPPING;
+const STREAMER = NAV.STREAMER;
 
 describe("navRows", () => {
   it("keeps every menu exactly as it was: same items, same order", () => {
