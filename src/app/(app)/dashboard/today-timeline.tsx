@@ -134,7 +134,8 @@ export function TodayTimeline({ shows, nowHM }: { shows: TimelineShow[]; nowHM: 
                   style={{ left: `${at(start)}%`, width: `calc(${at(end) - at(start)}% - 2px)` }}
                 >
                   <span className="truncate font-semibold">
-                    {showName(show.platform, show.slot)}
+                    {/* Watch or diamond on the bar itself, first, so it is never cut off (Samuel, 21 October). */}
+                    {BUSINESS_SHORT[show.business]} · {showName(show.platform, show.slot)}
                     {show.short
                       ? ` · ${show.seatsMissing === 1 ? "Seat missing" : `${show.seatsMissing} seats missing`}`
                       : show.live

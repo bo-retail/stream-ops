@@ -120,3 +120,19 @@ describe("showName edges (review 10/21)", () => {
     expect(showName("TIKTOK", "TIKTOK")).toBe("TikTok Tiktok");
   });
 });
+
+describe("each bar says watch or diamond (Samuel 10/21)", () => {
+  it("names the business first on the bar", () => {
+    const html = renderToStaticMarkup(
+      createElement(TodayTimeline, {
+        nowHM: "15:38",
+        shows: [
+          { id: "w", business: "WATCH", platform: "TIKTOK", slot: "DAY", startHM: "13:00", endHM: "19:00", live: true, done: false, short: false, seatsMissing: 0, names: ["A"] },
+          { id: "d", business: "DIAMOND", platform: "TIKTOK", slot: "DAY", startHM: "13:00", endHM: "19:00", live: true, done: false, short: false, seatsMissing: 0, names: ["B"] },
+        ],
+      } as never),
+    );
+    expect(html).toMatch(/Watch · TikTok Day/);
+    expect(html).toMatch(/Diamond · TikTok Day/);
+  });
+});
