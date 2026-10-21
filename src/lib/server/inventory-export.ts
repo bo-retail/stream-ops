@@ -2,9 +2,10 @@ import "server-only";
 import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
 import { addDays, formatDate, fromDbDate, isDateISO, toDbDate } from "@/lib/domain/dates";
-import { COUNTED_LABEL, COUNTED_PLACES } from "@/lib/domain/inventory";
-import type { CountedPlace } from "@/lib/domain/inventory";
+import { COUNTED_LABEL, COUNTED_PLACES, soldByShow } from "@/lib/domain/inventory";
+import type { CountedPlace, SoldAtShow } from "@/lib/domain/inventory";
 import type { DateISO } from "@/lib/domain/types";
+import { bringStockUpToDateQuietly, getStartDate } from "./deduction";
 import type { StockUpToDate } from "./deduction";
 import { listStock } from "./inventory";
 import { receiptsBetween } from "./receive";
@@ -99,6 +100,26 @@ export async function soldByModel(from: DateISO, to: DateISO, today: DateISO): P
   const products = await prisma.product.findMany({ where: { id: { in: counts.map((c) => c.productId) } }, select: { id: true, model: true } });
   const modelOf = new Map(products.map((p) => [p.id, p.model]));
   return new Map(counts.map((c) => [modelOf.get(c.productId) ?? c.productId, c._count._all]));
+}
+
+/**
+ * When one model sold, show by show, since the start day — read from the
+ * same record of watches taken off stock as the Sold column and the counts,
+ * so the three always agree. A corrected upload has already replaced the old
+ * one's sales there, and a random pull counts as the watch it turned out to be.
+ *
+ * Brought up to date first (only if anything changed): an upload made while
+ * the page was open shows the moment the row is opened.
+ */
+export async function modelSoldByShow(model: string, actorId: string | null): Promise<SoldAtShow[]> {
+  await bringStockUpToDateQuietly(actorId, { ifChanged: true });
+  const start = await getStartDate();
+  if (!start) return [];
+  const sales = await prisma.stockSale.findMany({
+    where: { product: { model }, status: { in: ["SOLD", "SENT"] }, showDate: { gte: toDbDate(start) } },
+    select: { showDate: true, show: true },
+  });
+  return soldByShow(sales.map((s) => ({ day: fromDbDate(s.showDate), show: s.show })));
 }
 
 export async function inventoryWorkbook(

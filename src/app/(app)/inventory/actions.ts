@@ -3,11 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
 import { PLACES, PLACE_LABEL, normaliseModel, parseQty } from "@/lib/domain/inventory";
-import type { CountedPlaces } from "@/lib/domain/inventory";
+import type { CountedPlaces, SoldAtShow } from "@/lib/domain/inventory";
 import { isSheetRows } from "@/lib/domain/inventory-sheets";
 import type { SheetRows } from "@/lib/domain/inventory-sheets";
 import { getModel, importMaster, readCountSheet, removePhoto, saveCount, savePhoto, setImageUrl } from "@/lib/server/inventory";
 import type { Balances } from "@/lib/server/inventory";
+import { modelSoldByShow } from "@/lib/server/inventory-export";
 
 /**
  * Who may change stock: admins and shipping directors. The same role that
@@ -211,4 +212,22 @@ export async function savePictureLink(model: string, link: string): Promise<Pict
   if (!r.ok) return { error: r.problem };
   refresh();
   return { ok: link.trim() ? "Link saved." : "Link cleared." };
+}
+
+/* ------------------------------------------------------------- when it sold */
+
+export interface SoldState {
+  error?: string;
+  shows?: SoldAtShow[];
+}
+
+/** When one model sold, show by show — read only when its row is opened. */
+export async function soldShowsOf(model: string): Promise<SoldState> {
+  let user;
+  try {
+    user = await requireShippingDirectorOrThrow();
+  } catch {
+    return { error: NOT_ALLOWED };
+  }
+  return { shows: await modelSoldByShow(String(model ?? "").slice(0, 60), user.id) };
 }

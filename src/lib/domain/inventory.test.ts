@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   placeReceived,
+  soldByShow,
   startingCountLines,
   badModelNumber,
   catalogueSpelling,
@@ -271,5 +272,42 @@ describe("where a delivery goes (Samuel, 10/14)", () => {
   });
   it("nothing received, nothing placed", () => {
     expect(placeReceived(0, none)).toEqual(place(0, 0, 0, 0));
+  });
+});
+
+describe("soldByShow", () => {
+  it("a model never sold: nothing to list", () => {
+    expect(soldByShow([])).toEqual([]);
+  });
+
+  it("counts each watch once per show day and show, newest day first", () => {
+    const sales = [
+      { day: "2026-10-19", show: "eBay PM" },
+      { day: "2026-10-20", show: "TikTok AM" },
+      { day: "2026-10-19", show: "eBay PM" },
+      { day: "2026-10-20", show: "TikTok AM" },
+      { day: "2026-10-19", show: "eBay PM" },
+    ];
+    expect(soldByShow(sales)).toEqual([
+      { day: "2026-10-20", show: "TikTok AM", sold: 2 },
+      { day: "2026-10-19", show: "eBay PM", sold: 3 },
+    ]);
+  });
+
+  it("two platforms the same day stay apart; the day's shows in the order they ran", () => {
+    const sales = [
+      { day: "2026-10-20", show: "TikTok PM" },
+      { day: "2026-10-20", show: "eBay AM" },
+      { day: "2026-10-20", show: "TikTok EARLY AM" },
+      { day: "2026-10-20", show: "TikTok AM" },
+      { day: "2026-10-21", show: "TikTok PM" },
+    ];
+    expect(soldByShow(sales).map((s) => `${s.day} ${s.show} ${s.sold}`)).toEqual([
+      "2026-10-21 TikTok PM 1",
+      "2026-10-20 TikTok EARLY AM 1",
+      "2026-10-20 eBay AM 1",
+      "2026-10-20 TikTok AM 1",
+      "2026-10-20 TikTok PM 1",
+    ]);
   });
 });

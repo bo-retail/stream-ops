@@ -9,6 +9,7 @@ import { getSettings } from "@/lib/server/settings";
 import { COUNTED_LABEL, COUNTED_PLACES } from "@/lib/domain/inventory";
 import { bringStockUpToDateQuietly, getStartDate } from "@/lib/server/deduction";
 import { listStock } from "@/lib/server/inventory";
+import { SoldRow } from "./sold-row";
 
 export const metadata: Metadata = { title: "Inventory" };
 
@@ -160,11 +161,16 @@ export default async function InventoryPage({
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.model}>
-                  <Td className="px-2 py-1">
-                    <WatchImage url={r.picture} model={r.model} size={36} />
-                  </Td>
-                  <Td className="truncate px-2 tabular font-medium" title={r.model}>{r.model}</Td>
+                <SoldRow
+                  key={r.model}
+                  model={r.model}
+                  columns={COUNTED_PLACES.length + 5}
+                  picture={
+                    <Td className="px-2 py-1">
+                      <WatchImage url={r.picture} model={r.model} size={36} />
+                    </Td>
+                  }
+                >
                   <Td className="truncate px-2 text-ink-muted" title={r.description}>{r.description || "—"}</Td>
                   {COUNTED_PLACES.map((p) => (
                     <Td key={p} className={`px-2 tabular text-right ${r.balances[p] < 0 ? "font-semibold text-danger-600" : ""}`}>
@@ -173,7 +179,7 @@ export default async function InventoryPage({
                   ))}
                   <Td className="px-2 tabular text-right font-semibold">{total(r)}</Td>
                   <Td className="px-2 tabular text-right text-ink-muted">{soldIn.get(r.model) ?? ""}</Td>
-                </tr>
+                </SoldRow>
               ))}
             </tbody>
           </Table>

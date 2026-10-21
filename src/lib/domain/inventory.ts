@@ -329,3 +329,37 @@ export function badModelNumber(model: string): string | null {
   if (!/^[A-Z0-9][A-Z0-9\-./]*$/.test(model)) return `"${model}" has characters a model number does not`;
   return null;
 }
+
+/** One show's sales of a model: the show day, the show, and how many came off. */
+export interface SoldAtShow {
+  day: string;
+  show: string;
+  sold: number;
+}
+
+/** Early AM, then AM, then PM, then anything else: the order a day's shows run in. */
+function showRank(show: string): number {
+  const s = show.toUpperCase();
+  if (s.includes("EARLY")) return 0;
+  if (/\bAM\b|\bDAY\b/.test(s)) return 1;
+  if (/\bPM\b|\bNIGHT\b/.test(s)) return 2;
+  return 3;
+}
+
+/**
+ * When a model sold, for the dropdown under it on the Inventory page
+ * (Samuel, 10/21): one line per show day and show, newest day first, the
+ * day's shows in the order they ran. Each watch taken off is one sale.
+ */
+export function soldByShow(sales: { day: string; show: string }[]): SoldAtShow[] {
+  const groups = new Map<string, SoldAtShow>();
+  for (const s of sales) {
+    const key = `${s.day}|${s.show}`;
+    const g = groups.get(key) ?? { day: s.day, show: s.show, sold: 0 };
+    g.sold += 1;
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort(
+    (a, b) => (a.day === b.day ? showRank(a.show) - showRank(b.show) || a.show.localeCompare(b.show) : a.day < b.day ? 1 : -1),
+  );
+}
