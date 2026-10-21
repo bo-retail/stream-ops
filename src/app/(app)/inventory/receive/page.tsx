@@ -76,7 +76,7 @@ export default async function ReceivePage() {
                       <div className="overflow-x-auto">
                       <table className="w-full min-w-[28rem] text-sm">
                         <thead>
-                          <tr className="text-left text-xs uppercase text-ink-subtle">
+                          <tr className="text-left text-[12.5px] font-semibold text-ink-muted">
                             <th className="py-1 font-semibold">Model</th>
                             {COUNTED_PLACES.map((p) => (
                               <th key={p} className="py-1 text-right font-semibold">

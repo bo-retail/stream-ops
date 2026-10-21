@@ -359,7 +359,7 @@ export function ScanClient() {
                 autoFocus
                 autoComplete="off"
                 placeholder={box ? `${ITEM_WORD[box.business].one} barcode` : "shipping label"}
-                className="tabular h-14 w-full rounded-lg border border-line-strong bg-surface pl-11 pr-3 text-lg text-ink placeholder:text-ink-subtle focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                className="tabular h-14 w-full rounded-lg border-2 border-brand-600 bg-brand-50/40 pl-11 pr-3 text-lg text-ink placeholder:text-ink-subtle focus:border-brand-600 focus:bg-surface focus:outline-none focus:ring-4 focus:ring-brass/30"
               />
               {busy ? (
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-ink-subtle">
@@ -640,7 +640,7 @@ export function ScanClient() {
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
                   placeholder="Optional — what happened? e.g. last one damaged"
-                  className="h-10 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                  className="h-10 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink placeholder:text-ink-subtle focus:border-brand-600 focus:outline-none focus:ring-[3px] focus:ring-brass/25"
                 />
                 <div className="flex flex-wrap gap-2">
                   <Button

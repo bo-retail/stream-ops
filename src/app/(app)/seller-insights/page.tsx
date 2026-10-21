@@ -87,7 +87,7 @@ function hours(minutes: number): string {
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-3 pt-1">
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-subtle">{children}</h2>
+      <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">{children}</h2>
       <span className="h-px flex-1 bg-line" aria-hidden />
     </div>
   );

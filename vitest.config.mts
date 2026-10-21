@@ -8,6 +8,8 @@ export default defineConfig({
     // Payroll figures must not depend on where the machine running the tests is.
     env: { TZ: "UTC" },
   },
+  // A few tests render components to markup; Next leaves JSX for its own compiler.
+  oxc: { jsx: { runtime: "automatic" } },
   resolve: {
     alias: { "@": path.resolve(import.meta.dirname, "src") },
   },

@@ -66,7 +66,7 @@ export default function GlobalError({
               </p>
 
               <div className="mt-4 rounded-lg border border-line bg-canvas p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+                <p className="text-[13px] font-semibold text-ink-muted">
                   To fix it
                 </p>
                 <p className="mt-1.5 text-sm text-ink">

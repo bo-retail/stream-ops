@@ -115,7 +115,7 @@ export default async function RequestsPage() {
 
       {open.length > 0 ? (
         <div className="space-y-5">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-subtle">
+          <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">
             Out there now
           </h2>
           {open.map((release) => (
@@ -142,7 +142,7 @@ export default async function RequestsPage() {
 
       {closed.length > 0 ? (
         <div className="mt-8 space-y-5">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-subtle">
+          <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">
             Already asked
           </h2>
           {closed.map((release) => (

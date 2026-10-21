@@ -97,7 +97,7 @@ export default async function InvictaMasterPage() {
                         ) : (
                           <>
                             <section>
-                              <h3 className="mb-1 text-xs font-semibold uppercase text-ink-subtle">
+                              <h3 className="mb-1 text-[13px] font-semibold text-ink-muted">
                                 Costs changed ({r.costsChanged.length})
                               </h3>
                               {r.costsChanged.length === 0 ? (
@@ -106,7 +106,7 @@ export default async function InvictaMasterPage() {
                                 <div className="overflow-x-auto">
                                   <table className="w-full min-w-[22rem]">
                                     <thead>
-                                      <tr className="text-left text-xs uppercase text-ink-subtle">
+                                      <tr className="text-left text-[12.5px] font-semibold text-ink-muted">
                                         <th className="py-1 font-semibold">Model</th>
                                         <th className="py-1 text-right font-semibold">Was</th>
                                         <th className="py-1 text-right font-semibold">Now</th>
@@ -134,7 +134,7 @@ export default async function InvictaMasterPage() {
                             </section>
                             {r.costsFilled.length > 0 ? (
                               <section>
-                                <h3 className="mb-1 text-xs font-semibold uppercase text-ink-subtle">
+                                <h3 className="mb-1 text-[13px] font-semibold text-ink-muted">
                                   Costs filled in where there was none ({r.costsFilled.length})
                                 </h3>
                                 <p className="tabular text-ink-muted">
@@ -144,7 +144,7 @@ export default async function InvictaMasterPage() {
                             ) : null}
                             {r.added.length > 0 ? (
                               <section>
-                                <h3 className="mb-1 text-xs font-semibold uppercase text-ink-subtle">
+                                <h3 className="mb-1 text-[13px] font-semibold text-ink-muted">
                                   New models ({r.added.length})
                                 </h3>
                                 <p className="tabular text-ink-muted">{r.added.join(" · ")}</p>
@@ -152,7 +152,7 @@ export default async function InvictaMasterPage() {
                             ) : null}
                             {r.skipped.length > 0 ? (
                               <section>
-                                <h3 className="mb-1 text-xs font-semibold uppercase text-ink-subtle">
+                                <h3 className="mb-1 text-[13px] font-semibold text-ink-muted">
                                   Rows skipped ({r.skipped.length})
                                 </h3>
                                 <ul className="list-disc pl-5 text-ink-muted">

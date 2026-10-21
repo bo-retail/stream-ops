@@ -16,7 +16,9 @@ import type { DateISO } from "@/lib/domain/types";
  */
 
 export const SERIES = {
-  brand: "var(--color-brand-600, #3f49b8)",
+  // Steel blue rather than the navy of the buttons, so a Day line stays
+  // tellable from the near-black TikTok/Night line beside it.
+  brand: "var(--color-brand-500, #3a5486)",
   tiktok: "#0f172a",
   ebay: "#2563eb",
   /** Diamonds, darker for the day show and TikTok, lighter for night and eBay. */

@@ -101,7 +101,7 @@ export function RatesPanel({
           side, not one from each of two lists.
         */}
         <fieldset className="space-y-2">
-          <legend className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+          <legend className="text-[13px] font-semibold text-ink-muted">
             Watch streamer
           </legend>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -127,7 +127,7 @@ export function RatesPanel({
         </fieldset>
 
         <fieldset className="space-y-2">
-          <legend className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+          <legend className="text-[13px] font-semibold text-ink-muted">
             Diamond streamer
           </legend>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -153,7 +153,7 @@ export function RatesPanel({
         </fieldset>
 
         <fieldset className="space-y-2">
-          <legend className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+          <legend className="text-[13px] font-semibold text-ink-muted">
             Shipping
           </legend>
           <div className="grid gap-3 sm:grid-cols-2">

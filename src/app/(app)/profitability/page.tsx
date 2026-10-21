@@ -54,7 +54,7 @@ function Delta({ c, invert = false }: { c: Movement; invert?: boolean }) {
 function Headline({ label, value, c, before, invert }: { label: string; value: string; c?: Movement; before?: string; invert?: boolean }) {
   return (
     <Card className="p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-ink-subtle">{label}</p>
+      <p className="text-[13px] font-semibold text-ink-muted">{label}</p>
       <p className="tabular mt-1.5 text-2xl font-semibold tracking-tight text-ink">{value}</p>
       {c ? (
         <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
@@ -69,7 +69,7 @@ function Headline({ label, value, c, before, invert }: { label: string; value: s
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-3 pt-1">
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-ink-subtle">{children}</h2>
+      <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">{children}</h2>
       <span className="h-px flex-1 bg-line" aria-hidden />
     </div>
   );

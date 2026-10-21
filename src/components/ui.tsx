@@ -4,6 +4,19 @@ import { cn } from "@/lib/utils";
 /* Shared primitives. Small and local rather than a component library — the app
    needs about eight shapes, and this keeps them all visible in one file. */
 
+/** The StreamOps mark: a brass bezel with two hands. */
+export function DialMark({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn("relative inline-block h-[26px] w-[26px] shrink-0 rounded-full border-2 border-brass", className)}
+      aria-hidden
+    >
+      <span className="absolute bottom-1/2 left-1/2 h-[35%] w-0.5 -translate-x-1/2 rounded-full bg-white" />
+      <span className="absolute bottom-1/2 left-1/2 h-[26%] w-0.5 origin-bottom -translate-x-1/2 rotate-[110deg] rounded-full bg-brass" />
+    </span>
+  );
+}
+
 export function Card({
   className,
   children,
@@ -12,7 +25,7 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-[var(--radius-card)] border border-line bg-surface shadow-[0_1px_2px_rgba(16,19,26,0.04)]",
+        "rounded-[var(--radius-card)] border border-transparent bg-surface shadow-card print:border-line",
         className,
       )}
       {...props}
@@ -41,7 +54,7 @@ export function CardHeader({
       )}
     >
       <div className="min-w-0">
-        <h2 className="text-sm font-semibold text-ink">{title}</h2>
+        <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-ink">{title}</h2>
         {description ? <p className="mt-0.5 text-sm text-ink-muted">{description}</p> : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
@@ -53,12 +66,12 @@ type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 type ButtonSize = "sm" | "md";
 
 const BUTTON_BASE =
-  "inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-[background-color,color,box-shadow,transform] duration-150 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100";
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
   primary: "bg-brand-600 text-white hover:bg-brand-700",
-  secondary: "border border-line-strong bg-surface text-ink hover:bg-canvas",
-  ghost: "text-ink-muted hover:bg-canvas hover:text-ink",
+  secondary: "border border-line-strong bg-surface text-ink shadow-[0_1px_1px_rgb(16_27_49/0.04)] hover:bg-brand-50",
+  ghost: "text-ink-muted hover:bg-brand-50 hover:text-ink",
   danger: "bg-danger-600 text-white hover:bg-danger-700",
 };
 
@@ -97,7 +110,7 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
     <input
       className={cn(
         "h-10 w-full rounded-lg border border-line-strong bg-surface px-3 text-sm text-ink",
-        "placeholder:text-ink-subtle focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100",
+        "placeholder:text-ink-subtle focus:border-brand-600 focus:outline-none focus:ring-[3px] focus:ring-brass/25",
         "disabled:bg-canvas disabled:text-ink-muted",
         className,
       )}
@@ -111,7 +124,7 @@ export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLS
     <select
       className={cn(
         "h-10 w-full rounded-lg border border-line-strong bg-surface px-2.5 text-sm text-ink",
-        "focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-100",
+        "focus:border-brand-600 focus:outline-none focus:ring-[3px] focus:ring-brass/25",
         className,
       )}
       {...props}
@@ -246,12 +259,14 @@ export function PageHeader({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="text-xl font-semibold tracking-tight text-ink sm:text-2xl">{title}</h1>
+        <h1 className="text-2xl font-bold leading-tight tracking-[-0.025em] text-ink sm:text-[30px]">{title}</h1>
         {description ? <p className="mt-1 text-sm text-ink-muted">{description}</p> : null}
       </div>
-      {action ? <div className="shrink-0">{action}</div> : null}
+      {/* max-w-full, so an action that wraps (the dashboard's figures) wraps
+          on a phone instead of pushing the page sideways. */}
+      {action ? <div className="max-w-full shrink-0">{action}</div> : null}
     </div>
   );
 }
@@ -269,10 +284,10 @@ export function Stat({
 }) {
   return (
     <Card className="px-4 py-3.5">
-      <p className="text-xs font-medium uppercase tracking-wide text-ink-subtle">{label}</p>
+      <p className="text-[13px] font-medium text-ink-muted">{label}</p>
       <p
         className={cn(
-          "tabular mt-1 text-2xl font-semibold tracking-tight",
+          "tabular mt-1 text-[26px] font-bold leading-tight tracking-[-0.025em]",
           tone === "ok" && "text-ok-700",
           tone === "warn" && "text-warn-700",
           tone === "danger" && "text-danger-600",
@@ -298,7 +313,7 @@ export function Th({ className, ...props }: React.ThHTMLAttributes<HTMLTableCell
   return (
     <th
       className={cn(
-        "whitespace-nowrap border-b border-line px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-ink-subtle",
+        "whitespace-nowrap border-b border-line bg-brand-50/60 px-3 py-2 text-left text-[12.5px] font-semibold text-ink-muted",
         className,
       )}
       {...props}

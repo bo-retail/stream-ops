@@ -127,7 +127,7 @@ function ProposalPreview({
         ) : null}
 
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+          <p className="text-[13px] font-semibold text-ink-muted">
             Shows each person picks up
           </p>
           <ul className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink">
@@ -143,7 +143,7 @@ function ProposalPreview({
           <ul className="divide-y divide-line">
             {[...byDate.entries()].map(([dateISO, picks]) => (
               <li key={dateISO} className="px-3 py-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink-subtle">
+                <p className="text-[13px] font-semibold text-ink-muted">
                   {picks[0].showLabel.split(" on ")[1]}
                 </p>
                 <ul className="mt-1 space-y-0.5 text-sm text-ink">

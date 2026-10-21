@@ -353,13 +353,13 @@ export function Composer({
           <table className="w-full min-w-[34rem] text-sm">
             <thead>
               <tr className="border-b border-line">
-                <th className="px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-ink-subtle">
+                <th className="px-4 py-2 text-left text-[13px] font-semibold text-ink-muted">
                   Day
                 </th>
                 {columns.map((col) => (
                   <th
                     key={col.key}
-                    className="px-2 py-2 text-center text-xs font-medium uppercase tracking-wide text-ink-subtle"
+                    className="px-2 py-2 text-center text-[13px] font-semibold text-ink-muted"
                   >
                     {PLATFORM_SHORT[col.platform]}
                     <br />
@@ -461,7 +461,7 @@ export function Composer({
 
           {usePriority ? (
             <div className="rounded-lg border border-line bg-canvas p-3">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-ink-subtle">
+              <p className="mb-2 text-[13px] font-semibold text-ink-muted">
                 Priority, best first
               </p>
               <div className="flex flex-wrap gap-1.5">

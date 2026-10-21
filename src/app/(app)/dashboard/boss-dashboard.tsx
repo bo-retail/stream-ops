@@ -12,6 +12,7 @@ import {
 } from "@/components/ui";
 import { BusinessBadge, PlatformBadge, slotTone } from "@/components/show-labels";
 import { MissingReports } from "@/components/missing-reports";
+import { TodayTimeline } from "./today-timeline";
 import { cn } from "@/lib/utils";
 import { prisma } from "@/lib/db";
 import { formatDate, toDbDate } from "@/lib/domain/dates";
@@ -100,6 +101,13 @@ export async function BossDashboard() {
   const planning =
     releases.find((r) => r.showCount > 0 && r.scheduleStatus !== "PUBLISHED") ?? null;
 
+  const nowHM = clock.format(new Date());
+  const answers =
+    open.length === 0
+      ? "—"
+      : `${open.reduce((n, r) => n + r.submittedCount, 0)}/${open.reduce((n, r) => n + r.askedCount, 0)}`;
+  const allAnswered = open.length > 0 && open.every((r) => r.submittedCount === r.askedCount);
+
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
@@ -185,9 +193,30 @@ export async function BossDashboard() {
         title={greeting}
         description={`${formatDate(today, "long")}${liveNow.length > 0 ? " · a show is on air right now" : ""}`}
         action={
-          <LinkButton href="/admin/releases" variant="primary">
-            Releases
-          </LinkButton>
+          <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+            {/* Today's four figures sit in the header, beside the greeting,
+                so the page below it starts with what needs doing. */}
+            <HeaderFigure label="Shows today" value={todayShows.length} sub={`${liveNow.length} on air now`} />
+            <HeaderFigure
+              label="People on today"
+              value={todayShows.reduce((n, s) => n + s.names.length, 0)}
+              sub="Two to a show"
+            />
+            <HeaderFigure
+              label="Out with the team"
+              value={open.length}
+              sub={open.length === 1 ? "1 request open" : `${open.length} requests open`}
+            />
+            <HeaderFigure
+              label="Answers in"
+              value={answers}
+              ok={allAnswered}
+              sub={open.length === 0 ? "Nothing out" : "Across open requests"}
+            />
+            <LinkButton href="/admin/releases" variant="primary">
+              Releases
+            </LinkButton>
+          </div>
         }
       />
 
@@ -219,36 +248,8 @@ export async function BossDashboard() {
         </Link>
       ) : null}
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Shows today" value={todayShows.length} sub={`${liveNow.length} on air now`} />
-        <Stat
-          label="People on today"
-          value={todayShows.reduce((n, s) => n + s.names.length, 0)}
-          sub="Two to a show"
-        />
-        <Stat
-          label="Out with the team"
-          value={open.length}
-          sub={open.length === 1 ? "1 request open" : `${open.length} requests open`}
-        />
-        <Stat
-          label="Answers in"
-          value={
-            open.length === 0
-              ? "—"
-              : `${open.reduce((n, r) => n + r.submittedCount, 0)}/${open.reduce((n, r) => n + r.askedCount, 0)}`
-          }
-          tone={
-            open.length > 0 && open.every((r) => r.submittedCount === r.askedCount)
-              ? "ok"
-              : undefined
-          }
-          sub={open.length === 0 ? "Nothing out" : "Across open requests"}
-        />
-      </div>
-
       {actions.length > 0 ? (
-        <Card className="mt-5">
+        <Card>
           <CardHeader
             title="Needs your attention"
             description="Everything waiting on you, in one place."
@@ -280,7 +281,7 @@ export async function BossDashboard() {
           </ul>
         </Card>
       ) : (
-        <Alert tone="ok" className="mt-5" title="Nothing needs you right now">
+        <Alert tone="ok" title="Nothing needs you right now">
           Nothing is waiting to go out, and every request has been answered.
         </Alert>
       )}
@@ -298,6 +299,13 @@ export async function BossDashboard() {
                 </Badge>
               ) : null
             }
+          />
+          <TodayTimeline
+            nowHM={nowHM}
+            shows={todayShows.map((show) => ({
+              ...show,
+              short: show.seatsMissing > 0 && !show.done,
+            }))}
           />
           {todayShows.length === 0 ? (
             <EmptyState title="No shows today" />
@@ -455,5 +463,27 @@ export async function BossDashboard() {
         </Card>
       ) : null}
     </>
+  );
+}
+
+function HeaderFigure({
+  label,
+  value,
+  sub,
+  ok,
+}: {
+  label: string;
+  value: React.ReactNode;
+  sub: string;
+  ok?: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <p className={cn("tabular text-2xl font-bold leading-none tracking-[-0.02em]", ok ? "text-ok-700" : "text-ink")}>
+        {value}
+      </p>
+      <p className="mt-1 text-[13px] font-medium text-ink">{label}</p>
+      <p className="text-xs text-ink-subtle">{sub}</p>
+    </div>
   );
 }

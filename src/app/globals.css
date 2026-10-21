@@ -6,23 +6,40 @@
   Deliberately light-only: this is a tool people use on a warehouse floor and on
   phones between shows, and a half-maintained dark theme reads as broken. The
   explicit color-scheme stops browsers auto-inverting it.
+
+  The look is "control room": a watch-dial navy frame around a steel-grey sheet,
+  with brass kept for the one thing that says where you are or what is
+  happening now. Red, amber and green keep their meanings untouched.
 */
 
 @theme {
-  --color-canvas: #f6f7f9;
+  --color-canvas: #e9edf2;
   --color-surface: #ffffff;
-  --color-ink: #10131a;
-  --color-ink-muted: #5b6472;
-  --color-ink-subtle: #8b94a3;
-  --color-line: #e3e7ed;
-  --color-line-strong: #cbd2dc;
+  --color-ink: #0f1829;
+  --color-ink-muted: #4f5b6e;
+  --color-ink-subtle: #687387;
+  --color-line: #dde3ea;
+  --color-line-strong: #c3ccd8;
 
-  --color-brand-50: #eef2ff;
-  --color-brand-100: #e0e7ff;
-  --color-brand-200: #c7d2fe;
-  --color-brand-500: #4f5bd5;
-  --color-brand-600: #3f49b8;
-  --color-brand-700: #333c99;
+  /* The dial: the navy frame around every page. */
+  --color-dial: #101b31;
+  --color-dial-2: #1a2a47;
+  --color-dial-ink: #aab5c8;
+  --color-dial-muted: #7a879d;
+
+  /* The brass hand: the page you are on, focus, and "now". Never a status. */
+  --color-brass: #c79a45;
+  --color-brass-soft: #f4ead6;
+  --color-brass-ink: #7d5a1c;
+
+  /* Everything that acts — buttons, links, selected tabs — is dial navy. */
+  --color-brand-50: #eef2f8;
+  --color-brand-100: #dfe6f1;
+  --color-brand-200: #c4d0e3;
+  --color-brand-300: #9cafcd;
+  --color-brand-500: #3a5486;
+  --color-brand-600: #1a2a4a;
+  --color-brand-700: #22396a;
 
   --color-danger-50: #fef2f2;
   --color-danger-100: #fee2e2;
@@ -47,6 +64,9 @@
   --color-ebay: #2563eb;
 
   --radius-card: 0.75rem;
+
+  /* Cards lift on a hairline ring and two soft depths rather than a grey border. */
+  --shadow-card: 0 0 0 1px rgb(16 27 49 / 0.08), 0 1px 2px rgb(16 27 49 / 0.05), 0 3px 10px rgb(16 27 49 / 0.04);
 }
 
 :root {
@@ -65,6 +85,17 @@ body {
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+::selection {
+  background: var(--color-brass-soft);
+  color: var(--color-ink);
+}
+
 /* Numbers in tables and money figures must align vertically to be scannable. */
 .tabular {
   font-variant-numeric: tabular-nums;
@@ -72,7 +103,7 @@ body {
 
 /* Visible focus for keyboard users on every interactive element. */
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-brand-500);
+  outline: 2px solid var(--color-brass);
   outline-offset: 2px;
   border-radius: 0.375rem;
 }
