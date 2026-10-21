@@ -6,6 +6,7 @@ import { Td } from "@/components/ui";
 import { formatDate } from "@/lib/domain/dates";
 import type { SoldAtShow } from "@/lib/domain/inventory";
 import { soldShowsOf } from "./actions";
+import { formatCount } from "@/lib/domain/insights";
 
 /**
  * One model's row on the Inventory page. Pressing the model opens a line
@@ -85,7 +86,7 @@ export function SoldRow({
                     <li key={`${s.day}|${s.show}`}>
                       <span className="inline-block w-24">{formatDate(s.day)}</span>
                       <span className="inline-block w-36 text-ink-muted">{s.show}</span>
-                      <span className="font-medium">{s.sold} sold</span>
+                      <span className="font-medium">{formatCount(s.sold)} sold</span>
                     </li>
                   ))}
                 </ul>

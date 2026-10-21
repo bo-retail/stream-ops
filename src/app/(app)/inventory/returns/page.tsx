@@ -6,6 +6,7 @@ import { COUNTED_LABEL, COUNTED_PLACES } from "@/lib/domain/inventory";
 import { returnLog } from "@/lib/server/returns";
 import { getSettings } from "@/lib/server/settings";
 import { ReturnsForm, UndoReturns } from "./returns-form";
+import { formatCount } from "@/lib/domain/insights";
 
 export const metadata: Metadata = { title: "Returns" };
 
@@ -65,7 +66,7 @@ export default async function ReturnsPage() {
                           {r.undone ? <span className="ml-2 text-xs font-semibold uppercase text-danger-700">Undone</span> : null}
                         </p>
                         <p className="text-xs text-ink-muted">
-                          Came back {formatDate(r.returnedOn)} · {r.pieces} piece(s), {r.items.length} model(s) · uploaded{" "}
+                          Came back {formatDate(r.returnedOn)} · {formatCount(r.pieces)} piece(s), {formatCount(r.items.length)} model(s) · uploaded{" "}
                           {r.at.toLocaleString("en-US", { timeZone: timezone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                           {r.by ? ` by ${r.by}` : ""}
                         </p>
@@ -95,7 +96,7 @@ export default async function ReturnsPage() {
                                     {i.placed[p] || <span className="text-ink-subtle">—</span>}
                                   </td>
                                 ))}
-                                <td className="py-1 text-right font-semibold tabular">{i.total}</td>
+                                <td className="py-1 text-right font-semibold tabular">{formatCount(i.total)}</td>
                               </tr>
                             ))}
                           </tbody>

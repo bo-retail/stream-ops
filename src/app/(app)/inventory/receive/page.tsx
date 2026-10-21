@@ -6,6 +6,7 @@ import { COUNTED_LABEL, COUNTED_PLACES } from "@/lib/domain/inventory";
 import { deliveryLog } from "@/lib/server/receive";
 import { getSettings } from "@/lib/server/settings";
 import { ReceiveForm, UndoDelivery } from "./receive-form";
+import { formatCount } from "@/lib/domain/insights";
 
 export const metadata: Metadata = { title: "Receive inventory" };
 
@@ -65,7 +66,7 @@ export default async function ReceivePage() {
                           {d.undone ? <span className="ml-2 text-xs font-semibold uppercase text-danger-700">Undone</span> : null}
                         </p>
                         <p className="text-xs text-ink-muted">
-                          Received {formatDate(d.receivedOn)} · {d.pieces} piece(s), {d.models} model(s) · uploaded{" "}
+                          Received {formatDate(d.receivedOn)} · {formatCount(d.pieces)} piece(s), {formatCount(d.models)} model(s) · uploaded{" "}
                           {d.at.toLocaleString("en-US", { timeZone: timezone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                           {d.by ? ` by ${d.by}` : ""}
                         </p>
@@ -95,7 +96,7 @@ export default async function ReceivePage() {
                                   {i.placed[p] || <span className="text-ink-subtle">—</span>}
                                 </td>
                               ))}
-                              <td className="py-1 text-right font-semibold tabular">{i.total}</td>
+                              <td className="py-1 text-right font-semibold tabular">{formatCount(i.total)}</td>
                             </tr>
                           ))}
                         </tbody>

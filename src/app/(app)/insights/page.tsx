@@ -20,6 +20,7 @@ import { formatChange, formatMoney, formatMoneyShort } from "@/lib/domain/insigh
 import type { Change } from "@/lib/domain/insights";
 import { getSalesInsights, rangePresets, resolveRange } from "@/lib/server/insights";
 import { cn } from "@/lib/utils";
+import { formatCount } from "@/lib/domain/insights";
 
 export const metadata: Metadata = { title: "Sales insights" };
 
@@ -263,9 +264,9 @@ export default async function InsightsPage({
             />
             <Headline
               label="Watches sold"
-              value={String(totals.units)}
+              value={formatCount(totals.units)}
               change={changes.units}
-              format={(n) => String(n)}
+              format={formatCount}
             />
             <Headline
               label="Average watch price"
@@ -275,9 +276,9 @@ export default async function InsightsPage({
             />
             <Headline
               label={hasDiamonds ? "Watch buyers" : "Distinct buyers"}
-              value={String(totals.buyers)}
+              value={formatCount(totals.buyers)}
               change={changes.buyers}
-              format={(n) => String(n)}
+              format={formatCount}
             />
           </div>
 
@@ -291,9 +292,9 @@ export default async function InsightsPage({
               />
               <Headline
                 label="Diamond pieces sold"
-                value={String(diamonds.units)}
+                value={formatCount(diamonds.units)}
                 change={diamondChanges.units}
-                format={(n) => String(n)}
+                format={formatCount}
               />
               <Headline
                 label="Average diamond price"
@@ -320,14 +321,14 @@ export default async function InsightsPage({
               {insights.latestDay.watches > 0 || insights.latestDay.diamondPieces === 0 ? (
                 <>
                   <span className="tabular">{formatMoney(insights.latestDay.watchRevenueCents)}</span> from{" "}
-                  <span className="tabular">{insights.latestDay.watches}</span> watches
+                  <span className="tabular">{formatCount(insights.latestDay.watches)}</span> watches
                 </>
               ) : null}
               {insights.latestDay.watches > 0 && insights.latestDay.diamondPieces > 0 ? ", and " : null}
               {insights.latestDay.diamondPieces > 0 ? (
                 <>
                   <span className="tabular">{formatMoney(insights.latestDay.diamondRevenueCents)}</span> from{" "}
-                  <span className="tabular">{insights.latestDay.diamondPieces}</span> diamond pieces
+                  <span className="tabular">{formatCount(insights.latestDay.diamondPieces)}</span> diamond pieces
                 </>
               ) : null}
               . Sales arrive the morning after a show, so today&rsquo;s are not in yet.
@@ -419,7 +420,7 @@ export default async function InsightsPage({
                       </Badge>
                     </Td>
                     <Td className="tabular font-semibold">{formatMoney(s.revenueCents)}</Td>
-                    <Td className="tabular">{s.units}</Td>
+                    <Td className="tabular">{formatCount(s.units)}</Td>
                     <Td className="tabular text-ink-muted">{formatMoney(s.avgPriceCents)}</Td>
                     <Td>
                       <span className="flex items-center gap-2">
@@ -475,14 +476,14 @@ export default async function InsightsPage({
                       <Td>
                         <span className="flex items-center gap-2.5">
                           <span className="tabular w-8 shrink-0 text-right font-semibold">
-                            {m.units}
+                            {formatCount(m.units)}
                           </span>
                           <MiniBar value={m.units} max={topUnits} />
                         </span>
                       </Td>
                       <Td className="tabular">{formatMoney(m.revenueCents)}</Td>
                       <Td className="tabular text-ink-muted">{formatMoney(m.avgPriceCents)}</Td>
-                      <Td className="tabular text-ink-muted">{m.allTimeUnits}</Td>
+                      <Td className="tabular text-ink-muted">{formatCount(m.allTimeUnits)}</Td>
                     </tr>
                   ))}
                 </tbody>
@@ -530,7 +531,7 @@ export default async function InsightsPage({
                               <MiniBar value={d.watchRevenueCents} max={topDay} />
                             </span>
                           </Td>
-                          <Td className="tabular">{d.watches}</Td>
+                          <Td className="tabular">{formatCount(d.watches)}</Td>
                           <Td className="tabular text-ink-muted">
                             {d.watches === 0 ? "—" : formatMoney(Math.round(d.watchRevenueCents / d.watches))}
                           </Td>
@@ -539,7 +540,7 @@ export default async function InsightsPage({
                               <Td className="tabular font-semibold">
                                 {d.diamondPieces === 0 ? "—" : formatMoney(d.diamondRevenueCents)}
                               </Td>
-                              <Td className="tabular">{d.diamondPieces}</Td>
+                              <Td className="tabular">{formatCount(d.diamondPieces)}</Td>
                               <Td className="tabular text-ink-muted">
                                 {d.diamondPieces === 0
                                   ? "—"

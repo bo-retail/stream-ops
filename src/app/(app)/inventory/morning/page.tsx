@@ -16,6 +16,7 @@ import { getMorningGoal, getMorningNumbers, latestShowDay } from "@/lib/server/m
 import { getSettings } from "@/lib/server/settings";
 import { DayPicker } from "./day-picker";
 import { GoalForm } from "./goal-form";
+import { formatCount } from "@/lib/domain/insights";
 
 export const metadata: Metadata = { title: "Morning numbers" };
 
@@ -136,7 +137,7 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
                         <Td>{s}</Td>
                         <Td className="text-right tabular-nums">{formatMoney(f.revenueCents)}</Td>
                         <Td className="text-right tabular-nums">{t.revenueCents ? `${Math.round((f.revenueCents / t.revenueCents) * 100)}%` : "—"}</Td>
-                        <Td className="text-right tabular-nums">{f.units}</Td>
+                        <Td className="text-right tabular-nums">{formatCount(f.units)}</Td>
                         <Td className="text-right tabular-nums">{money(averagePrice(f))}</Td>
                         {seeCost ? (
                           <>

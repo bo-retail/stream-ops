@@ -8,6 +8,7 @@ import { PLACES, PLACE_LABEL } from "@/lib/domain/inventory";
 import { getModel } from "@/lib/server/inventory";
 import { DetailsEditor } from "./details-editor";
 import { PictureEditor } from "./picture-editor";
+import { formatCount } from "@/lib/domain/insights";
 
 export const metadata: Metadata = { title: "Inventory" };
 
@@ -132,7 +133,7 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
                     </Td>
                     <Td>{PLACE_LABEL[m.place]}</Td>
                     <Td className="tabular text-right">
-                      {m.qty === 0 ? <span className="text-ink-subtle">matched</span> : m.qty > 0 ? `+${m.qty}` : m.qty}
+                      {m.qty === 0 ? <span className="text-ink-subtle">matched</span> : m.qty > 0 ? `+${formatCount(m.qty)}` : formatCount(m.qty)}
                     </Td>
                     <Td className="text-ink-muted">{m.by?.name ?? "—"}</Td>
                   </tr>

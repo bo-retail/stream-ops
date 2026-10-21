@@ -115,9 +115,31 @@ export function TodayTimeline({ shows, nowHM }: { shows: TimelineShow[]; nowHM: 
 
         <div className="space-y-1.5 pt-1.5">
           {spans.map(({ show, start, end }) => (
-            <div key={show.id} className="grid grid-cols-[4.5rem_1fr] items-center sm:grid-cols-[5.5rem_1fr]">
+            <div
+              key={show.id}
+              // The whole row is the hover target, not just the bar: the card
+              // shows at once, wherever the pointer is on the line (Samuel, 21 October).
+              className="group/row grid grid-cols-[4.5rem_1fr] items-center rounded-lg hover:bg-canvas sm:grid-cols-[5.5rem_1fr]"
+            >
               <span className="truncate text-xs font-medium text-ink-muted">{BUSINESS_SHORT[show.business]}</span>
               <div className="relative h-9">
+                <div
+                  className={cn(
+                    "pointer-events-none absolute bottom-full z-30 mb-1.5 hidden w-max max-w-[min(20rem,45%)] rounded-lg bg-ink px-3 py-2 text-xs leading-snug text-white shadow-lg group-hover/row:block",
+                  )}
+                  // Opens to the left when the show sits on the right, so it never runs off the card.
+                  style={at(start) > 55 ? { right: `${100 - at(end)}%` } : { left: `${at(start)}%` }}
+                >
+                  <p className="font-semibold">
+                    {BUSINESS_SHORT[show.business]} · {showName(show.platform, show.slot)} · {show.startHM}–{show.endHM}
+                  </p>
+                  <p className="opacity-90">{show.names.length === 0 ? "Nobody on it" : show.names.join(" and ")}</p>
+                  {show.short ? (
+                    <p className="font-semibold text-danger-200">
+                      {show.seatsMissing === 1 ? "Seat missing" : `${show.seatsMissing} seats missing`}
+                    </p>
+                  ) : null}
+                </div>
                 <div
                   className={cn(
                     "absolute inset-y-0 flex min-w-0 flex-col justify-center overflow-hidden rounded-lg px-2.5 text-xs leading-tight",
@@ -130,10 +152,6 @@ export function TodayTimeline({ shows, nowHM }: { shows: TimelineShow[]; nowHM: 
                           : "bg-surface text-ink ring-1 ring-inset ring-line-strong",
                   )}
                   style={{ left: `${at(start)}%`, width: `calc(${at(end) - at(start)}% - 2px)` }}
-                  // The bar cuts its words short; hovering shows them whole.
-                  title={`${BUSINESS_SHORT[show.business]} · ${showName(show.platform, show.slot)} · ${show.startHM}–${show.endHM}\n${
-                    show.names.length === 0 ? "Nobody on it" : show.names.join(" and ")
-                  }${show.short ? `\n${show.seatsMissing === 1 ? "Seat missing" : `${show.seatsMissing} seats missing`}` : ""}`}
                 >
                   <span className="truncate font-semibold">
                     {showName(show.platform, show.slot)}

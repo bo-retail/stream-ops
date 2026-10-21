@@ -15,6 +15,7 @@ import { PLATFORM_SHORT, slotShort } from "@/lib/domain/types";
 import { rangePresets, resolveRange } from "@/lib/server/insights";
 import { getProfitability } from "@/lib/server/profit";
 import { cn } from "@/lib/utils";
+import { formatCount } from "@/lib/domain/insights";
 
 export const metadata: Metadata = { title: "Profitability" };
 
@@ -300,7 +301,7 @@ export default async function ProfitabilityPage({
                       cells: [
                         modelContent(m.model),
                         <span key="b" className="tabular font-semibold text-danger-600">{m.belowCostUnits}</span>,
-                        <span key="u" className="tabular">{m.units}</span>,
+                        <span key="u" className="tabular">{formatCount(m.units)}</span>,
                         <span key="c" className="tabular text-ink-muted">{cost === null ? "—" : formatMoney(cost)}</span>,
                         <span key="a" className="tabular">{averagePrice(m) === null ? "—" : formatMoney(averagePrice(m)!)}</span>,
                         <span key="m" className="tabular">{pct(marginRate(m))}</span>,
@@ -343,7 +344,7 @@ export default async function ProfitabilityPage({
                   cells: [
                     modelContent(s.model),
                     <span key="s" className="tabular">{s.shows}</span>,
-                    <span key="u" className="tabular">{s.units}</span>,
+                    <span key="u" className="tabular">{formatCount(s.units)}</span>,
                     <span key="a" className="tabular">{Math.round(s.unitsPerShow * 10) / 10}</span>,
                     <span key="m" className={cn("tabular font-semibold", s.margin < 0 ? "text-danger-600" : "text-warn-700")}>{pct(s.margin)}</span>,
                     <span key="t" className="tabular">{tp === null ? "—" : formatMoney(tp)}</span>,

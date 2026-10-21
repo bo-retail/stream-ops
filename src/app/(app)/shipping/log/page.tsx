@@ -28,6 +28,7 @@ import { PLATFORM_SHORT } from "@/lib/domain/types";
 import { packingDayISO } from "@/lib/server/shipping";
 import { getSettings } from "@/lib/server/settings";
 import { MarkDaySent } from "./mark-sent";
+import { formatCount } from "@/lib/domain/insights";
 
 export const metadata: Metadata = { title: "Shipping log" };
 
@@ -101,9 +102,9 @@ export default async function ShippingLogPage({
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Stat
             label="Boxes sent"
-            value={counters.total === 0 ? "—" : `${counters.sent} of ${counters.total}`}
+            value={counters.total === 0 ? "—" : `${formatCount(counters.sent)} of ${formatCount(counters.total)}`}
             tone={counters.total > 0 && counters.sent === counters.total ? "ok" : undefined}
-            sub={counters.total === 0 ? "No report loaded for this day" : `${toGo} still to go`}
+            sub={counters.total === 0 ? "No report loaded for this day" : `${formatCount(toGo)} still to go`}
           />
           <Stat label="People packing" value={packers.length || "—"} sub="From their scans" />
           <Stat
@@ -251,7 +252,7 @@ export default async function ShippingLogPage({
                         {p.name}
                       </Link>
                     </Td>
-                    <Td className="tabular">{p.boxes}</Td>
+                    <Td className="tabular">{formatCount(p.boxes)}</Td>
                     <Td className="tabular">{p.items}</Td>
                     <Td className="tabular whitespace-nowrap text-ink-muted">{time(p.firstScan)}</Td>
                     <Td className="tabular whitespace-nowrap text-ink-muted">{time(p.lastScan)}</Td>

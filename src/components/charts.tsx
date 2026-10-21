@@ -1,6 +1,7 @@
 import { formatDate } from "@/lib/domain/dates";
 import { movingAverage } from "@/lib/domain/insights";
 import type { DateISO } from "@/lib/domain/types";
+import { formatCount } from "@/lib/domain/insights";
 
 /**
  * Charts as inline SVG, rendered on the server.
@@ -124,9 +125,7 @@ export function DailyBars({
                 rx={2}
                 fill={p.value === 0 ? SERIES.muted : "url(#bar-fill)"}
                 opacity={p.value === 0 ? 0.3 : 1}
-              >
-                <title>{`${formatDate(p.dateISO)} — ${format(p.value)}`}</title>
-              </rect>
+              />
               {i % labelEvery === 0 ? (
                 <text
                   x={pad.left + i * step + step / 2}
@@ -151,6 +150,39 @@ export function DailyBars({
               opacity={0.5}
             />
           ) : null}
+
+          {/* The hover layer, drawn last so it sits on top. Each day's whole
+              column is the target, not the thin bar, and its figure shows at
+              once (Samuel, 21 October: the hover was hard to catch). */}
+          {points.map((p, i) => {
+            const label = formatDate(p.dateISO);
+            const value = format(p.value);
+            const boxW = Math.max(label.length, value.length) * 6.2 + 18;
+            const centre = pad.left + i * step + step / 2;
+            const boxX = Math.min(Math.max(centre - boxW / 2, 2), width - boxW - 2);
+            const boxY = Math.max(2, Math.min(y(p.value), baseline) - 46);
+            return (
+              <g key={`hover-${p.dateISO}`} className="group/day">
+                <rect x={pad.left + i * step} y={pad.top - 20} width={step} height={plotH + 20} fill="transparent" />
+                <rect
+                  x={pad.left + i * step}
+                  y={pad.top}
+                  width={step}
+                  height={plotH}
+                  className="pointer-events-none fill-ink opacity-0 group-hover/day:opacity-[0.06]"
+                />
+                <g className="pointer-events-none opacity-0 group-hover/day:opacity-100">
+                  <rect x={boxX} y={boxY} width={boxW} height={38} rx={6} className="fill-ink" />
+                  <text x={boxX + 9} y={boxY + 15} className="fill-white" style={{ fontSize: 10 }}>
+                    {label}
+                  </text>
+                  <text x={boxX + 9} y={boxY + 30} className="fill-white" style={{ fontSize: 12, fontWeight: 700 }}>
+                    {value}
+                  </text>
+                </g>
+              </g>
+            );
+          })}
         </svg>
       </div>
       {points.length > 3 ? (
@@ -253,7 +285,7 @@ export function SplitBar({
               <span className="font-semibold text-ink">{format(s.value)}</span>
               <span className="text-ink-subtle">
                 {" "}
-                · {s.units} {s.units === 1 ? (s.unitWord?.one ?? "watch") : (s.unitWord?.many ?? "watches")}
+                · {formatCount(s.units)} {s.units === 1 ? (s.unitWord?.one ?? "watch") : (s.unitWord?.many ?? "watches")}
               </span>
             </span>
           </li>

@@ -6,6 +6,7 @@ import { formatMoney } from "@/lib/domain/insights";
 import { masterGaps, masterUploadLog } from "@/lib/server/inventory";
 import { getSettings } from "@/lib/server/settings";
 import { UploadMaster } from "../../inventory/templates/upload-forms";
+import { formatCount } from "@/lib/domain/insights";
 
 export const metadata: Metadata = { title: "Invicta master" };
 
@@ -85,7 +86,7 @@ export default async function InvictaMasterPage() {
                             {when(u.at)}
                             {u.by ? ` by ${u.by}` : ""}
                             {r
-                              ? ` · ${r.models} model(s) · ${r.added.length} added · ${r.costsChanged.length} cost(s) changed · ${r.costsFilled.length} filled`
+                              ? ` · ${formatCount(r.models)} model(s) · ${formatCount(r.added.length)} added · ${formatCount(r.costsChanged.length)} cost(s) changed · ${formatCount(r.costsFilled.length)} filled`
                               : ""}
                           </p>
                         </div>
@@ -163,7 +164,7 @@ export default async function InvictaMasterPage() {
                               </section>
                             ) : null}
                             <p className="text-xs text-ink-subtle">
-                              {r.updated} model(s) updated, {r.unchanged} unchanged
+                              {formatCount(r.updated)} model(s) updated, {formatCount(r.unchanged)} unchanged
                               {r.flagged > 0 ? ` · ${r.flagged} still need a description` : ""}.
                             </p>
                           </>

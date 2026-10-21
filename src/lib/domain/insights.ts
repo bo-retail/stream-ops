@@ -68,6 +68,11 @@ export function previousRange(from: DateISO, to: DateISO): { from: DateISO; to: 
 /** Whole cents to pounds-and-pence as a number, for display and for a chart. */
 export const fromCents = (cents: number): number => Math.round(cents) / 100;
 
+/** A count as people read it: 24,004, not 24004 (Samuel, 21 October). */
+export function formatCount(n: number): string {
+  return n.toLocaleString("en-US");
+}
+
 export function formatMoney(cents: number): string {
   return `$${fromCents(cents).toLocaleString("en-US", {
     minimumFractionDigits: 2,

@@ -6,6 +6,7 @@ import { Trash2 } from "lucide-react";
 import { Alert, Button } from "@/components/ui";
 import { getRemovalImpact, removeReport } from "./actions";
 import type { RemovalImpact } from "@/lib/server/shipping";
+import { formatCount } from "@/lib/domain/insights";
 
 /**
  * Undoes an upload — the wrong files, or the wrong day.
@@ -46,7 +47,7 @@ export function RemoveReport({ batchId, dateISO }: { batchId: string; dateISO: s
       <div className="w-full space-y-2 rounded-lg border border-danger-200 bg-danger-50 p-3 text-left">
         <p className="text-sm font-semibold text-danger-700">Remove the report for {dateISO}?</p>
         <p className="text-sm text-danger-700">
-          This removes {impact.watches} sale{impact.watches === 1 ? "" : "s"}, {impact.boxes} box
+          This removes {formatCount(impact.watches)} sale{impact.watches === 1 ? "" : "s"}, {formatCount(impact.boxes)} box
           {impact.boxes === 1 ? "" : "es"} and everything loaded for that day — the watch and the
           diamond reports alike. It cannot be undone.
         </p>
