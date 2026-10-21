@@ -8,9 +8,9 @@
  *     never overwriting a cost; the same date uploaded again replaces it
  *   - a shipping list: nothing in stock until counted; uploaded twice before
  *     its count replaces, after its count is refused
- *   - a count: good pieces to Sellable, damaged to Damaged, cost averaged, the
- *     model made active; the same count twice moves nothing; a correction
- *     moves only the difference and puts the cost back
+ *   - a count: good pieces to Sellable, damaged to Damaged, the cost never
+ *     averaged (the master is the cost; a model with none takes the list price), the model made active; the same count twice moves nothing; a correction
+ *     moves only the difference and leaves the cost alone
  *   - short, over, damaged, a model not on the list, a listed model counted 0
  *   - a difference settled; a recount after settling reopens it, the same
  *     numbers again do not
@@ -181,8 +181,8 @@ try {
   check("a first, partial count saves", [c1.ok, c1.changed, c1.activated], [true, 2, [`${P}NEW1`]]);
   check("good pieces go to Sellable, damaged to Damaged", [(await stock(`${P}NEW1`)).SELLABLE, (await stock(`${P}NEW1`)).DAMAGED], [7, 1]);
   check("the new model is now active", (await product(`${P}NEW1`)).active, true);
-  check("a model with nothing on hand takes the shipping-list price", (await product(`${P}NEW1`)).costCents, 3200);
-  check("a model with a cost but nothing on hand takes the new price ($30)", (await product(`${P}K100`)).costCents, 3000);
+  check("a model that already has a cost (from its offer, $30) keeps it: the master sets cost", (await product(`${P}NEW1`)).costCents, 3000);
+  check("a model with a cost keeps it: the master is the cost, a shipment does not move it", (await product(`${P}K100`)).costCents, 2500);
   const receivedLine = await prisma.stockMove.findFirstOrThrow({ where: { shipment: { sop: SOP1 }, product: { model: `${P}NEW1` }, place: "SELLABLE" } });
   check("each receipt carries its cost and its shipment", [receivedLine.kind, receivedLine.unitCostCents], ["RECEIVED", 3200]);
 
@@ -192,9 +192,9 @@ try {
   // Weighted average: KNOWN has 7 at $30; 5 more counted on a second shipment at $40.
   await importShippingList(boss.id, `${P}list2.xlsx`, sheet([listRow(SOP2, `${P}K100`, 5, 40)]));
   await saveShipmentCount(boss.id, SOP2, [{ model: `${P}K100`, counted: 5, damaged: 0 }], "check");
-  check("more of a model at another price: the cost is the weighted average", (await product(`${P}K100`)).costCents, Math.round((3000 * 7 + 4000 * 5) / 12));
+  check("more of a model at another price: still not averaged", (await product(`${P}K100`)).costCents, 2500);
   await saveShipmentCount(boss.id, SOP2, [{ model: `${P}K100`, counted: 0, damaged: 0 }], "check");
-  check("counted back to 0: stock goes back, and the cost to within a cent", [(await stock(`${P}K100`)).SELLABLE, Math.abs((await product(`${P}K100`)).costCents! - 3000) <= 1], [7, true]);
+  check("counted back to 0: stock goes back, and the cost does not move", [(await stock(`${P}K100`)).SELLABLE, (await product(`${P}K100`)).costCents], [7, 2500]);
 
   const fix = await saveShipmentCount(boss.id, SOP1, [{ model: `${P}NEW1`, counted: 10, damaged: 0 }], "check");
   check("a corrected count moves only the difference", [fix.ok, (await stock(`${P}NEW1`)).SELLABLE, (await stock(`${P}NEW1`)).DAMAGED], [true, 10, 0]);
@@ -310,7 +310,7 @@ try {
   const d1 = await saveDetails(boss.id, [{ model: `${P}NEW1`, values: { Description: "Pro Diver 40mm, blue", TP: 45, "Weight (lb)": 0.8, "Length (in)": 6, "Width (in)": 4, "Height (in)": 3, "eBay shipping profile": "Watch small", UPC: "886678123456", Cost: 99 } }], "check");
   const nd = await product(`${P}NEW1`);
   check("details typed in are saved and the flag goes", [d1.ok, nd.description, nd.tpCents, nd.weightLb, nd.upc, nd.needsDetails], [true, "Pro Diver 40mm, blue", 4500, 0.8, "886678123456", false]);
-  check("  but a cost already set is kept, and said so", [nd.costCents, d1.costKept], [3200, [`${P}NEW1`]]);
+  check("  but a cost already set is kept, and said so", [nd.costCents, d1.costKept], [3000, [`${P}NEW1`]]);
   check("a blank keeps what is there", [(await saveDetails(boss.id, [{ model: `${P}NEW1`, values: { Description: "", TP: null } }], "check")).ok, (await product(`${P}NEW1`)).description], [true, "Pro Diver 40mm, blue"]);
   check("a barcode Excel turned into 8.87E+11: refused", (await saveDetails(boss.id, [{ model: `${P}NEW1`, values: { UPC: "8.87E+11" } }], "check")).ok, false);
   check("a model not in the catalogue: refused", (await saveDetails(boss.id, [{ model: `${P}X999`, values: { Description: "x" } }], "check")).ok, false);

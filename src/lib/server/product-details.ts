@@ -14,7 +14,7 @@ import { storableLink } from "@/lib/domain/watch-images";
  * here, so they behave the same. What is filled in replaces what the model has
  * (the product details always win over the master and the offer); a blank
  * keeps it. Cost is the exception: this only fills a missing one, because a
- * cost already set came from a shipment and only a cost correction changes it.
+ * cost already set is the Invicta master's, and only a master upload changes it.
  */
 
 export interface DetailsEntry {

@@ -127,7 +127,7 @@ export function DetailsEditor({ model, details }: { model: string; details: Deta
           <label key={col} className={kind === "wide" ? "col-span-2" : ""}>
             <span className="block text-xs text-ink-muted">
               {LABEL[col] ?? col}
-              {col === "Cost" && details.costCents !== null ? " (set — only a cost correction changes it)" : ""}
+              {col === "Cost" && details.costCents !== null ? " (set by the Invicta master)" : ""}
             </span>
             <Input
               value={values[col]}

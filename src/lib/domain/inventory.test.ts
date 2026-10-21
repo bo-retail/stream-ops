@@ -107,7 +107,7 @@ describe("loading the master over a model already there", () => {
   };
   const incoming = { ...blank, model: "1", description: "New text", costCents: 4000, tpCents: 6100 };
 
-  it("never overwrites what the team typed in the app, but updates the rest", () => {
+  it("never overwrites details the team typed in the app, but updates the rest", () => {
     const typed = { ...blank, description: "Typed by Claudia", tpCents: 5000, collection: "Old" };
     const incoming2 = { ...incoming, collection: "Pro Diver", tpCents: 6100 };
     expect(masterChanges(typed, incoming2, ["description", "tpCents"])).toEqual({ collection: "Pro Diver", costCents: 4000 });
@@ -118,8 +118,20 @@ describe("loading the master over a model already there", () => {
   it("fills a missing cost", () => {
     expect(masterChanges(blank, incoming).costCents).toBe(4000);
   });
-  it("never changes a cost already set", () => {
-    expect(masterChanges({ ...blank, costCents: 3500 }, incoming).costCents).toBeUndefined();
+  // Samuel 10/21: the newest master's cost is the cost. $8, then a master
+  // saying $10: the cost becomes $10. Nothing is averaged.
+  it("the newest master's cost replaces the app's", () => {
+    expect(masterChanges({ ...blank, costCents: 800 }, { ...incoming, costCents: 1000 }).costCents).toBe(1000);
+  });
+  it("replaces a cost even if somebody typed one in the app", () => {
+    expect(masterChanges({ ...blank, costCents: 3500 }, incoming, ["costCents"]).costCents).toBe(4000);
+  });
+  it("a blank or zero cost in the master never wipes the app's cost", () => {
+    expect(masterChanges({ ...blank, costCents: 3500 }, { ...incoming, costCents: null }).costCents).toBeUndefined();
+    expect(masterChanges({ ...blank, costCents: 3500 }, { ...incoming, costCents: 0 }).costCents).toBeUndefined();
+  });
+  it("the same cost is not a change", () => {
+    expect(masterChanges({ ...blank, costCents: 4000 }, incoming).costCents).toBeUndefined();
   });
   it("does not take a cost of 0 as a cost", () => {
     expect(masterChanges(blank, { ...incoming, costCents: 0 }).costCents).toBeUndefined();

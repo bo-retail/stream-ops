@@ -262,11 +262,19 @@ export function detailsFromMasterRow(row: Record<string, unknown>): ProductDetai
 /**
  * What loading the master changes on a model already in the catalogue.
  *
- * Details the master gives replace what is there. Cost is the exception: the
- * master fills a missing cost but never changes one, because a cost already
- * set came from a real shipment and only a cost correction moves it. A cost of
- * zero in the master is treated as no cost — the master shows 0 for models
- * that have none. Returns only the fields that actually change.
+ * Details the master gives replace what is there, except what the team typed
+ * in the app.
+ *
+ * Cost is different: the newest master's cost is the cost, whoever set the one
+ * in the app (Samuel, 21 October — "standard cost"). Nothing averages it: a
+ * master has no quantities, Receive inventory records pieces and no prices, and
+ * a shipment count only gives a cost to a model with none (see
+ * `saveShipmentCount`). Past profit does not move, because each sale keeps the
+ * cost it had the day it sold. No button decides it, so nobody can mis-click.
+ *
+ * A blank or zero cost in the master is "no figure" and changes nothing — the
+ * master shows 0 for models that have none — so loading it never wipes a cost.
+ * Returns only the fields that actually change.
  */
 export function masterChanges(
   current: Omit<ProductDetails, "model">,
@@ -286,7 +294,7 @@ export function masterChanges(
   for (const f of numbers) {
     if (incoming[f] !== null && incoming[f] !== current[f] && !ours.has(f)) changes[f] = incoming[f];
   }
-  if (current.costCents === null && incoming.costCents !== null && incoming.costCents > 0) {
+  if (incoming.costCents !== null && incoming.costCents > 0 && incoming.costCents !== current.costCents) {
     changes.costCents = incoming.costCents;
   }
   return changes;

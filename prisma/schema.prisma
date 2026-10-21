@@ -931,7 +931,7 @@ model Product {
   imageUrl    String @default("")
 
   /// What one costs us, in cents. Set by the master, the offer or the shipping
-  /// list only when it is missing; changed afterwards only by a cost correction.
+  /// list only when it is missing; afterwards the newest Invicta master sets it.
   costCents Int?
   /// Target price, in cents.
   tpCents   Int?

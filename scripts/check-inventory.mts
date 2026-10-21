@@ -4,7 +4,7 @@
  * The situations it will meet on the floor, run rather than reasoned about:
  *
  *   - the master loaded, loaded again, edited and loaded again
- *   - a cost already set is never changed by the master; a missing one is filled
+ *   - the master's cost is the cost: a cost already set is changed, a missing one filled
  *   - a model missing from a later master is not deleted
  *   - a first count, a recount, a blank box, a zero, a count that matched
  *   - a watch on the shelf that is not on the list: added, flagged, later
@@ -129,7 +129,7 @@ try {
     { "Invicta Model": `${P}TM-525003`, Cost: 150 },
   ]));
   check("an edited description is taken", (await product(`${P}49888`)).description, "Speedway 51mm, steel");
-  check("a cost already set is never changed by the master", (await product(`${P}49888`)).costCents, 3500);
+  check("the master's cost replaces a cost already set ($35 to $40)", [(await product(`${P}49888`)).costCents, edited.costsChanged, edited.costsUp], [4000, 1, 1]);
   check("a missing cost is filled", (await product(`${P}TM-525003`)).costCents, 15000);
   check("and the screen says so", edited.costsFilled, 1);
   check("a model left out of the new file is not deleted", (await prisma.product.count({ where: { model: `${P}28684` } })), 1);

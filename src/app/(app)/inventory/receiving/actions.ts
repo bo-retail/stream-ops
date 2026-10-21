@@ -187,7 +187,7 @@ export async function saveModelDetails(model: string, values: DetailsEntry["valu
   refresh();
   return {
     ok: r.updated.length > 0 ? "Details saved." : "Nothing changed.",
-    details: r.costKept.length > 0 ? ["The cost was not changed: it is already set, and only a cost correction changes it."] : undefined,
+    details: r.costKept.length > 0 ? ["The cost was not changed: it is already set, and the Invicta master sets cost."] : undefined,
   };
 }
 
@@ -206,6 +206,6 @@ export async function uploadDetails(_prev: ReceivingState, formData: FormData): 
   refresh();
   return {
     ok: `Saved: ${r.updated.length} model(s) changed, ${r.unchanged} unchanged.`,
-    details: r.costKept.length > 0 ? [`Cost left as it was (already set; only a cost correction changes it): ${r.costKept.slice(0, 30).join(", ")}.`] : undefined,
+    details: r.costKept.length > 0 ? [`Cost left as it was (already set — the Invicta master sets cost): ${r.costKept.slice(0, 30).join(", ")}.`] : undefined,
   };
 }

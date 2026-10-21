@@ -251,6 +251,9 @@ export function readLineCount(countedRaw: unknown, damagedRaw: unknown): { ok: t
 }
 
 /**
+ * Not used since 21 October: a shipment no longer averages a model's cost —
+ * the Invicta master sets it. Kept, with its tests, should averaging return.
+ *
  * A model's cost after pieces arrive at a price: the weighted average of what
  * was on hand and what came in. A model with nothing on hand, or no cost yet,
  * simply takes the new price. A correction that takes pieces back out moves

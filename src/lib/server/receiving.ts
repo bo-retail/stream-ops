@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import ExcelJS from "exceljs";
 import { prisma } from "@/lib/db";
 import { fromDbDate, toDbDate, todayISO } from "@/lib/domain/dates";
-import { PLACES, badModelNumber, normaliseModel } from "@/lib/domain/inventory";
+import { badModelNumber, normaliseModel } from "@/lib/domain/inventory";
 import { sheetRows } from "@/lib/domain/inventory-sheets";
 import type { SheetRows } from "@/lib/domain/inventory-sheets";
 import {
@@ -14,7 +14,6 @@ import {
   readShippingList,
   receiptChange,
   stillToCome,
-  weightedCost,
 } from "@/lib/domain/receiving";
 import type { DifferenceKind, LineCount } from "@/lib/domain/receiving";
 import type { DateISO } from "@/lib/domain/types";
@@ -26,8 +25,9 @@ import { getSettings } from "./settings";
  *
  * Daniel's offer creates the models he ordered (inactive until they arrive),
  * Invicta's shipping list says what to expect, and Gladys's count of the
- * shipment is what moves stock — at the shipping-list cost, with the model's
- * cost becoming the weighted average. Differences with Invicta stay on screen
+ * shipment is what moves stock — each receipt carries its shipping-list cost,
+ * and a model with no cost yet takes it. A model's cost is otherwise the
+ * Invicta master's (Samuel, 21 October: standard cost, no averaging). Differences with Invicta stay on screen
  * until somebody settles them.
  *
  * Every write takes the same lock as a shelf count, so stock is only ever
@@ -254,8 +254,8 @@ export interface ShipmentCountResult {
  *
  * For each model counted, stock changes by the difference from what was saved
  * for it before (nothing, the first time): good pieces to Sellable, damaged to
- * Damaged, at the shipping-list cost. The model's cost becomes the weighted
- * average, and a model created inactive becomes active once a good piece is
+ * Damaged, at the shipping-list cost. A model with no cost yet takes that
+ * price (the master sets cost otherwise), and a model created inactive becomes active once a good piece is
  * in. A model that came in the boxes without being on the list is added as a
  * line of its own. All or nothing.
  */
@@ -394,9 +394,11 @@ export async function saveShipmentCount(
         });
       }
 
-      const onHand = PLACES.reduce((n, place) => n + (balances.get(line.productId) ?? zero())[place], 0);
+      // The master is the cost. A shipment only gives a cost to a model that
+      // has none, and only when pieces actually come in — never averages it,
+      // and a count corrected down never moves it.
       const was = costs.get(line.productId) ?? null;
-      const now = weightedCost(was, onHand, line.unitCostCents, change.pieces);
+      const now = was === null && change.pieces > 0 && line.unitCostCents !== null ? line.unitCostCents : was;
       const product = [...products.values()].find((p) => p.id === line.productId)!;
       const data: { costCents?: number | null; active?: boolean } = {};
       if (now !== was) {

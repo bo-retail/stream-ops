@@ -48,7 +48,7 @@ export default async function TemplatesPage() {
         <Card>
           <CardHeader
             title="Product details"
-            description="Everything about a model the offer does not say: description, target price, TikTok weight and box, eBay profile, barcode. Models still needing theirs are at the top. A blank keeps what is there; cost only fills a missing one."
+            description="Everything about a model the offer does not say: description, target price, TikTok weight and box, eBay profile, barcode. Models still needing theirs are at the top. A blank keeps what is there; cost only fills a missing one — the Invicta master sets cost."
           />
           <div className="space-y-4 p-4">
             <a
@@ -75,10 +75,17 @@ export default async function TemplatesPage() {
         <Card>
           <CardHeader
             title="Invicta master file"
-            description="Their file, as it comes. Adds new models and updates details; never deletes a model, and never changes a cost that is already set."
+            description="Their file, as it comes. Adds new models and updates details, and its cost becomes each model's cost — every sale keeps the cost it had the day it sold. Never deletes a model; a blank or $0 cost changes nothing."
           />
-          <div className="p-4">
+          <div className="space-y-3 p-4">
             <UploadMaster />
+            <p className="text-sm text-ink-muted">
+              Every upload, and every cost it changed:{" "}
+              <Link href="/inventory/masters" className="underline">
+                Master uploads
+              </Link>
+              .
+            </p>
           </div>
         </Card>
       </div>

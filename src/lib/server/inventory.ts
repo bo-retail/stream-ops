@@ -35,6 +35,10 @@ export interface MasterResult {
   updated: number;
   unchanged: number;
   costsFilled: number;
+  /** Costs the master changed on models that already had one. */
+  costsChanged: number;
+  costsUp: number;
+  costsDown: number;
   /** Models with no description, flagged until they get one. */
   flagged: number;
   /** Rows skipped because their model number cannot be one ("Total", a mangled number). */
@@ -43,7 +47,7 @@ export interface MasterResult {
 }
 
 const failed = (problem: string): MasterResult => ({
-  ok: false, added: 0, updated: 0, unchanged: 0, costsFilled: 0, flagged: 0, skipped: [], problems: [problem],
+  ok: false, added: 0, updated: 0, unchanged: 0, costsFilled: 0, costsChanged: 0, costsUp: 0, costsDown: 0, flagged: 0, skipped: [], problems: [problem],
 });
 
 /**
@@ -54,8 +58,23 @@ const failed = (problem: string): MasterResult => ({
  * `inventory-sheets`). Every sheet is read — 19 models are only on the Sample
  * or Random Pulls sheet — and a model on several sheets takes each detail from
  * the first sheet that has it. It adds and updates; it never deletes a model,
- * and never changes a cost already set (see `masterChanges`).
+ * Its cost is the cost (see `masterChanges`). Each upload is recorded whole —
+ * what it added, and every cost it filled or changed, old and new — for the
+ * Master uploads history.
  */
+/** What one master upload did, kept on its activity-log row for the history. */
+export interface MasterUploadRecord {
+  fileName: string;
+  models: number;
+  added: string[];
+  updated: number;
+  unchanged: number;
+  costsFilled: { model: string; to: number }[];
+  costsChanged: { model: string; from: number; to: number }[];
+  flagged: number;
+  skipped: string[];
+}
+
 export async function importMaster(userId: string, fileName: string, sheets: SheetRows): Promise<MasterResult> {
   if (sheets.length === 0) return failed('No sheet has an "Invicta Model" column. Is this the master file?');
 
@@ -102,7 +121,9 @@ export async function importMaster(userId: string, fileName: string, sheets: She
       }
       let updated = 0;
       let unchanged = 0;
-      let costsFilled = 0;
+      const costsFilled: MasterUploadRecord["costsFilled"] = [];
+      const costChanges: { productId: string; model: string; from: number; to: number }[] = [];
+      for (const d of fresh) if (d.costCents !== null) costsFilled.push({ model: d.model, to: d.costCents });
       for (const d of incoming.values()) {
         const current = existing.get(d.model);
         if (!current) continue;
@@ -112,7 +133,10 @@ export async function importMaster(userId: string, fileName: string, sheets: She
           unchanged++;
           continue;
         }
-        if (changes.costCents !== undefined) costsFilled++;
+        if (changes.costCents !== undefined && changes.costCents !== null) {
+          if (current.costCents === null) costsFilled.push({ model: d.model, to: changes.costCents });
+          else costChanges.push({ productId: current.id, model: d.model, from: current.costCents, to: changes.costCents });
+        }
         await tx.product.update({ where: { id: current.id }, data: { ...changes, needsDetails } });
         updated++;
       }
@@ -124,10 +148,47 @@ export async function importMaster(userId: string, fileName: string, sheets: She
           entityId: "catalogue",
           action: "MASTER_LOADED",
           actorId: userId,
-          summary: `Loaded the master file ${fileName}: ${fresh.length} added, ${updated} updated, ${unchanged} unchanged.`,
+          summary:
+            `Loaded the master file ${fileName}: ${fresh.length} added, ${updated} updated, ${unchanged} unchanged, ` +
+            `${costChanges.length} cost(s) changed.`,
+          after: {
+            fileName,
+            models: incoming.size,
+            added: fresh.map((d) => d.model),
+            updated,
+            unchanged,
+            costsFilled,
+            costsChanged: costChanges.map(({ model, from, to }) => ({ model, from, to })),
+            flagged,
+            skipped,
+          } satisfies MasterUploadRecord,
         },
       });
-      return { ok: true, added: fresh.length, updated, unchanged, costsFilled, flagged, skipped, problems: [] };
+      if (costChanges.length > 0) {
+        const dollars = (c: number) => `${(c / 100).toFixed(2)}`;
+        await tx.auditLog.createMany({
+          data: costChanges.map((c) => ({
+            entityType: "Product",
+            entityId: c.productId,
+            action: "COST_FROM_MASTER",
+            actorId: userId,
+            summary: `${c.model}: cost ${dollars(c.from)} → ${dollars(c.to)} from the master file ${fileName}`,
+          })),
+        });
+      }
+      return {
+        ok: true,
+        added: fresh.length,
+        updated,
+        unchanged,
+        costsFilled: costsFilled.length,
+        costsChanged: costChanges.length,
+        costsUp: costChanges.filter((c) => c.to > c.from).length,
+        costsDown: costChanges.filter((c) => c.to < c.from).length,
+        flagged,
+        skipped,
+        problems: [],
+      };
     },
     { timeout: 120_000, maxWait: 30_000 },
   );
@@ -668,4 +729,42 @@ export async function readPhoto(model: string): Promise<{ data: Uint8Array; cont
     select: { data: true, contentType: true },
   });
   return photo ? { data: photo.data, contentType: photo.contentType } : null;
+}
+
+/* --------------------------------------------------------- master uploads */
+
+export interface MasterUploadEntry {
+  id: string;
+  at: Date;
+  by: string | null;
+  /** Null for an upload made before uploads were recorded in full. */
+  record: MasterUploadRecord | null;
+  summary: string;
+}
+
+/**
+ * Every master upload, newest first — the history the uploads stack into, the
+ * way deliveries and returns do. Uploads from before 21 October carry only
+ * their one-line summary.
+ */
+export async function masterUploadLog(take = 100): Promise<MasterUploadEntry[]> {
+  const rows = await prisma.auditLog.findMany({
+    where: { action: "MASTER_LOADED" },
+    orderBy: { createdAt: "desc" },
+    take,
+    select: { id: true, createdAt: true, summary: true, after: true, actor: { select: { name: true } } },
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    at: r.createdAt,
+    by: r.actor?.name ?? null,
+    record: isMasterRecord(r.after) ? r.after : null,
+    summary: r.summary ?? "",
+  }));
+}
+
+function isMasterRecord(v: unknown): v is MasterUploadRecord {
+  if (!v || typeof v !== "object") return false;
+  const r = v as Record<string, unknown>;
+  return typeof r.fileName === "string" && Array.isArray(r.added) && Array.isArray(r.costsChanged) && Array.isArray(r.costsFilled);
 }

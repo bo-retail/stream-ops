@@ -151,7 +151,16 @@ export async function uploadMasterRows(fileName: string, sheets: SheetRows): Pro
   if (!r.ok) return { error: r.problems.join(" ") };
   refresh();
   const details: string[] = [];
-  if (r.costsFilled > 0) details.push(`${r.costsFilled} missing cost(s) filled in. Costs already set were not changed.`);
+  if (r.costsFilled > 0) details.push(`${r.costsFilled} missing cost(s) filled in.`);
+  if (r.costsChanged > 0) {
+    details.push(
+      `${r.costsChanged} cost(s) changed to this file's: ${r.costsUp} went up, ${r.costsDown} went down. Each one is listed on Master uploads, old and new.`,
+    );
+    // An older master picked by mistake moves costs back, mostly one way.
+    if (r.costsChanged >= 20 && Math.max(r.costsUp, r.costsDown) / r.costsChanged >= 0.8) {
+      details.push("Most of them moved the same way — check this is the newest master, not an older copy.");
+    }
+  }
   if (r.flagged > 0) details.push(`${r.flagged} model(s) have no description and are flagged until they get one.`);
   if (r.skipped.length > 0) {
     details.push(`${r.skipped.length} row(s) skipped, because what is in their model column cannot be a model number:`);
