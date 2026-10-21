@@ -38,6 +38,11 @@ export interface MorningLine extends SaleLine {
 export interface SoldUnit {
   status: "SOLD" | "SENT" | "UNDONE" | "CANCELLED" | "RETURNED";
   costCents: number | null;
+  /**
+   * The watch that came off stock for it — for a random pull, the one packing
+   * scanned, which the report may not name or may name differently.
+   */
+  model?: string;
 }
 
 export interface Figures {
@@ -94,16 +99,54 @@ export function morningFigures(
   costToday: ReadonlyMap<string, number | null>,
   days: readonly DateISO[],
 ): Map<DateISO, DayFigures> {
-  const wanted = new Set(days);
   const out = new Map<DateISO, DayFigures>(days.map((d) => [d, { byShow: new Map(), total: emptyFigures() }]));
+  for (const u of costedUnits(lines, sold, costToday, days)) {
+    const day = out.get(u.day)!;
+    day.byShow.set(u.show, addUnit(day.byShow.get(u.show) ?? emptyFigures(), u));
+  }
+  for (const day of out.values()) day.total = [...day.byShow.values()].reduce(addFigures, emptyFigures());
+  return out;
+}
+
+/** One watch sold, with what was paid for it and what it cost us — see `costedUnits`. */
+export interface CostedUnit {
+  day: DateISO;
+  show: string;
+  platform: SaleLine["platform"];
+  /** The model it is, or null for a random pull nothing names yet. */
+  model: string | null;
+  /** Its share of the line's money, after discounts. */
+  cents: number;
+  /** What it cost us, or null when there is no cost to be had. */
+  costCents: number | null;
+  /** Cost from today's catalogue rather than a snapshot taken when it sold. */
+  estimated: boolean;
+  cancelled: boolean;
+}
+
+/**
+ * Every watch sold on the days asked for, one by one, priced and costed.
+ *
+ * The one place a sale's cost is decided, so Morning numbers and the
+ * Profitability tab can never disagree: the snapshot taken when it came off
+ * stock, else the model's cost today (marked estimated), else none. A
+ * cancelled order is marked and carries its money for the count of what was
+ * left out.
+ */
+export function costedUnits(
+  lines: MorningLine[],
+  sold: ReadonlyMap<string, SoldUnit>,
+  costToday: ReadonlyMap<string, number | null>,
+  days: readonly DateISO[],
+): CostedUnit[] {
+  const wanted = new Set(days);
+  const out: CostedUnit[] = [];
   // Each line's money shared over its units, the odd cents on the first one seen.
   const seen = new Map<SaleLine, number>();
 
   for (const w of wantedSales(lines, new Map(), (m) => costToday.has(m), catalogueSpelling(costToday.keys())).wanted) {
     const line = w.line as MorningLine;
     if (!wanted.has(line.showDate)) continue;
-    const day = out.get(line.showDate)!;
-    const f = day.byShow.get(line.show) ?? emptyFigures();
     const units = Math.max(1, line.qty);
     const each = Math.floor(line.netCents / units);
     const n = seen.get(line) ?? 0;
@@ -111,27 +154,39 @@ export function morningFigures(
     const cents = each + (n === 0 ? line.netCents - each * units : 0);
 
     const sale = sold.get(w.key);
-    if (sale?.status === "CANCELLED") {
-      f.cancelledUnits++;
-      f.cancelledCents += cents;
-    } else {
-      f.revenueCents += cents;
-      f.units++;
-      let cost = sale && sale.status !== "UNDONE" ? sale.costCents : null;
-      if (cost === null && w.model) {
-        cost = costToday.get(w.model) ?? null;
-        if (cost !== null) f.estimatedUnits++;
-      }
-      if (cost !== null) {
-        f.cogsCents += cost;
-        f.costedRevenueCents += cents;
-      } else if (w.model) f.uncostedUnits++;
-      else f.unnamedUnits++;
+    const cancelled = sale?.status === "CANCELLED";
+    // The watch that actually came off stock wins: a random pull packing named,
+    // or one packed as a different model than the report said. Decided first,
+    // so a cost looked up today is that watch's.
+    const model = sale && sale.status !== "UNDONE" && sale.model ? sale.model : w.model;
+    let cost = !cancelled && sale && sale.status !== "UNDONE" ? sale.costCents : null;
+    let estimated = false;
+    if (!cancelled && cost === null && model) {
+      cost = costToday.get(model) ?? null;
+      estimated = cost !== null;
     }
-    day.byShow.set(line.show, f);
+    out.push({ day: line.showDate, show: line.show, platform: line.platform, model, cents, costCents: cost, estimated, cancelled });
   }
-  for (const day of out.values()) day.total = [...day.byShow.values()].reduce(addFigures, emptyFigures());
   return out;
+}
+
+/** A unit added to a set of figures. */
+export function addUnit(f: Figures, u: CostedUnit): Figures {
+  const g = { ...f };
+  if (u.cancelled) {
+    g.cancelledUnits++;
+    g.cancelledCents += u.cents;
+    return g;
+  }
+  g.revenueCents += u.cents;
+  g.units++;
+  if (u.estimated) g.estimatedUnits++;
+  if (u.costCents !== null) {
+    g.cogsCents += u.costCents;
+    g.costedRevenueCents += u.cents;
+  } else if (u.model) g.uncostedUnits++;
+  else g.unnamedUnits++;
+  return g;
 }
 
 export interface Goal {

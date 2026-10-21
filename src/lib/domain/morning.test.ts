@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { saleKey } from "./deduction";
-import { averagePrice, grossMargin, marginRate, morningFigures, readGoal, type MorningLine, type SoldUnit } from "./morning";
+import { averagePrice, costedUnits, grossMargin, marginRate, morningFigures, readGoal, type MorningLine, type SoldUnit } from "./morning";
 
 const DAY = "2026-10-03";
 const line = (over: Partial<MorningLine> = {}): MorningLine => ({
@@ -134,6 +134,54 @@ describe("the goal, as typed", () => {
   it("refuses a blank, a zero, a typo, an extra zero, and a margin of 100% or more", () => {
     for (const [r, m] of [["", "35"], ["0", "35"], ["35k", "35"], ["350000000", "35"], ["35000", ""], ["35000", "135"], ["35000", "0"], ["0.004", "35"], ["35000", "0.001"], ["35,5", "35"]]) {
       expect(readGoal(r, m).ok, `${r} / ${m}`).toBe(false);
+    }
+  });
+});
+
+describe("costedUnits: which watch it was (review 10/21)", () => {
+  const PULLS = "#300 - Invicta Random Pulls";
+  it("a random pull packing named is credited to the watch scanned", () => {
+    const units = costedUnits(
+      [line({ stockNumber: PULLS })],
+      sold([[saleKey("TIKTOK", "O1", PULLS, 0), { status: "SENT", costCents: 2_000, model: "70271" }]]),
+      costs([["70271", 2_000]]),
+      [DAY],
+    );
+    expect(units[0]).toMatchObject({ model: "70271", costCents: 2_000 });
+  });
+
+  it("packed as a different watch than the report said: the packed one, at its cost", () => {
+    const units = costedUnits(
+      [line({ stockNumber: PULLS, modelNumber: "49888" })],
+      sold([[saleKey("TIKTOK", "O1", PULLS, 0), { status: "SENT", costCents: 3_000, model: "70271" }]]),
+      costs([["49888", 1_000], ["70271", 3_000]]),
+      [DAY],
+    );
+    expect(units[0]).toMatchObject({ model: "70271", costCents: 3_000 });
+  });
+
+  it("a sale put back (undone) does not name the watch", () => {
+    const units = costedUnits(
+      [line()],
+      sold([[saleKey("TIKTOK", "O1", "49888", 0), { status: "UNDONE", costCents: 2_000, model: "OTHER" }]]),
+      costs([["49888", 1_500]]),
+      [DAY],
+    );
+    expect(units[0]).toMatchObject({ model: "49888", costCents: 1_500, estimated: true });
+  });
+});
+
+describe("costedUnits: a sale with no saved cost (review 10/21)", () => {
+  const PULLS = "#300 - Invicta Random Pulls";
+  it("costs it at the packed watch's cost today, not the report's", () => {
+    for (const modelNumber of ["", "49888"]) {
+      const units = costedUnits(
+        [line({ stockNumber: PULLS, modelNumber })],
+        sold([[saleKey("TIKTOK", "O1", PULLS, 0), { status: "SOLD", costCents: null, model: "70271" }]]),
+        costs([["49888", 1_000], ["70271", 3_000]]),
+        [DAY],
+      );
+      expect(units[0]).toMatchObject({ model: "70271", costCents: 3_000, estimated: true });
     }
   });
 });

@@ -40,6 +40,28 @@ const MARGIN_DAYS = 14;
  */
 export async function getMorningNumbers(date: DateISO): Promise<MorningNumbers> {
   const from = addDays(date, -6);
+  const days = datesBetween(from, date);
+  const [{ lines, sold, costToday }, missingReports, startDate] = await Promise.all([
+    loadSaleInputs(from, date),
+    missingReportsOn(date),
+    getStartDate(),
+  ]);
+  const figures = morningFigures(lines, sold, costToday, days);
+  const week = days.map((d): MorningDay => ({ date: d, ...(figures.get(d) ?? { byShow: new Map(), total: emptyFigures() }) }));
+  return { day: week[week.length - 1], week, missingReports, startDate };
+}
+
+/**
+ * What costing the watch sales of `from`–`to` needs: the report lines (read a
+ * fortnight either side, as stock deduction reads them), each unit's cost
+ * snapshot, and every model's cost today. Shared by Morning numbers and the
+ * Profitability tab, so they read sales the same way.
+ */
+export async function loadSaleInputs(
+  from: DateISO,
+  to: DateISO,
+): Promise<{ lines: MorningLine[]; sold: Map<string, SoldUnit>; costToday: Map<string, number | null> }> {
+  const date = to;
   const batchIds = await latestBatchIds(addDays(from, -MARGIN_DAYS), addDays(date, MARGIN_DAYS));
   const rows = batchIds.length
     ? await prisma.salesRecord.findMany({
@@ -56,22 +78,29 @@ export async function getMorningNumbers(date: DateISO): Promise<MorningNumbers> 
     ...r, showDate: fromDbDate(r.showDate), uploadedAt: batch.uploadedAt.getTime(), netCents: netItemPriceCents,
   }));
 
-  const days = datesBetween(from, date);
+  // By order number — a sale keeps the show day it was first taken off on, so
+  // a date window could miss one whose report was later filed under another
+  // day. In chunks: a quarter's orders are tens of thousands, past what one
+  // query can carry.
   const orderRefs = [...new Set(lines.filter((l) => l.showDate >= from && l.showDate <= date).map((l) => l.orderRef))];
-  const [sales, products, missingReports, startDate] = await Promise.all([
-    orderRefs.length
-      ? prisma.stockSale.findMany({ where: { orderRef: { in: orderRefs } }, select: { key: true, status: true, costCents: true } })
-      : Promise.resolve([]),
+  const chunks: string[][] = [];
+  for (let i = 0; i < orderRefs.length; i += 5_000) chunks.push(orderRefs.slice(i, i + 5_000));
+  const [salesByChunk, products] = await Promise.all([
+    Promise.all(
+      chunks.map((refs) =>
+        prisma.stockSale.findMany({
+          where: { orderRef: { in: refs } },
+          select: { key: true, status: true, costCents: true, product: { select: { model: true } } },
+        }),
+      ),
+    ),
     prisma.product.findMany({ select: { model: true, costCents: true } }),
-    missingReportsOn(date),
-    getStartDate(),
   ]);
-  const sold = new Map<string, SoldUnit>(sales.map((s) => [s.key, { status: s.status, costCents: s.costCents }]));
+  const sold = new Map<string, SoldUnit>(
+    salesByChunk.flat().map((s) => [s.key, { status: s.status, costCents: s.costCents, model: s.product.model }]),
+  );
   const costToday = new Map(products.map((p) => [p.model, p.costCents]));
-
-  const figures = morningFigures(lines, sold, costToday, days);
-  const week = days.map((d): MorningDay => ({ date: d, ...(figures.get(d) ?? { byShow: new Map(), total: emptyFigures() }) }));
-  return { day: week[week.length - 1], week, missingReports, startDate };
+  return { lines, sold, costToday };
 }
 
 /**
