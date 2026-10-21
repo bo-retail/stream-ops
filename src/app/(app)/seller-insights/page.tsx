@@ -115,6 +115,8 @@ export default async function SellerInsightsPage({
   const name = (id: string) => data.names[id]?.name ?? "Unknown";
   const ranked = data.sellers.filter((s) => s.ranked);
   const early = data.sellers.filter((s) => !s.ranked);
+  // Watches have a master cost; diamonds do not yet, so their list shows no margin.
+  const hasMargin = data.sellers.some((s) => s.margin !== null);
   const max = Math.max(0.2, ...data.sellers.flatMap((s) => [Math.abs(s.index), Math.abs(s.effect)]));
 
   const href = (over: { business?: Business; period?: string }) => {
@@ -194,6 +196,13 @@ export default async function SellerInsightsPage({
             disagree, the partner is the reason. Both are pulled toward average while someone has few
             shows, and nobody is ranked under {CONFIDENCE_FAIR} shows.
           </p>
+          {hasMargin ? (
+            <p className="mt-2">
+              <span className="font-semibold text-ink">Margin vs typical</span> sets each person&apos;s gross margin against the
+              normal margin of the same kinds of show, in points: +3 pts means they sell at three points better. Costed exactly
+              as on the Profitability tab.
+            </p>
+          ) : null}
         </Card>
 
         {data.sellers.length === 0 ? (
@@ -220,6 +229,15 @@ export default async function SellerInsightsPage({
                       <Th className="text-right">Hours</Th>
                       <Th className="text-right">Net sales</Th>
                       <Th className="text-right">Per hour</Th>
+                      {hasMargin ? (
+                        <>
+                          <Th className="text-right">Gross profit</Th>
+                          <Th className="text-right">Margin</Th>
+                          <Th className="text-right" title="Their margin against the normal margin of the same kinds of show, in percentage points">
+                            Margin vs typical
+                          </Th>
+                        </>
+                      ) : null}
                       <Th>Vs expected</Th>
                       <Th>Partner-adjusted</Th>
                       <Th>How sure</Th>
@@ -243,6 +261,28 @@ export default async function SellerInsightsPage({
                           <Td className="tabular text-right text-ink-muted">
                             {formatMoneyShort(s.minutes === 0 ? 0 : Math.round(s.revenueCents / (s.minutes / 60)))}
                           </Td>
+                          {hasMargin ? (
+                            <>
+                              <Td className="tabular text-right">
+                                {s.grossProfitCents === null ? "—" : formatMoneyShort(s.grossProfitCents)}
+                              </Td>
+                              <Td className="tabular text-right">
+                                {s.margin === null ? "—" : `${Math.round(s.margin * 1000) / 10}%`}
+                              </Td>
+                              <Td
+                                className={cn(
+                                  "tabular text-right font-semibold",
+                                  s.marginVsTypical !== null && s.marginVsTypical >= 1 && "text-ok-700",
+                                  s.marginVsTypical !== null && s.marginVsTypical <= -1 && "text-danger-600",
+                                  (s.marginVsTypical === null || Math.abs(s.marginVsTypical) < 1) && "text-ink-muted",
+                                )}
+                              >
+                                {s.marginVsTypical === null
+                                  ? "—"
+                                  : `${s.marginVsTypical >= 0 ? "+" : "−"}${Math.abs(s.marginVsTypical).toFixed(1)} pts`}
+                              </Td>
+                            </>
+                          ) : null}
                           <Td>
                             <Score
                               index={s.index}

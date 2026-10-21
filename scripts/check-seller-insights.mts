@@ -42,8 +42,11 @@ async function clearFixtures() {
   await prisma.importBatch.deleteMany({ where: { flags: { path: ["fixture"], equals: FIXTURE } } });
   await prisma.release.deleteMany({ where: { name: { startsWith: FIXTURE } } });
   await prisma.user.deleteMany({ where: { email: { endsWith: DOMAIN } } });
+  await prisma.product.deleteMany({ where: { model: "ZZSELLTEST" } });
 }
 await clearFixtures();
+// Every watch sold in these fixtures, at a cost of $10.
+await prisma.product.create({ data: { model: "ZZSELLTEST", description: "check-seller-insights", costCents: 1_000 } });
 
 /* --------------------------------------------------------------- fixtures */
 
@@ -130,7 +133,7 @@ async function uploadLine(
             orderRef: `${FIXTURE}-${line}`,
             lineRef: `${line}`,
             buyer: `buyer${line}`,
-            stockNumber: "TEST",
+            stockNumber: "ZZSELLTEST",
             netItemPriceCents: s.cents,
             sourceFile: FIXTURE,
           };
@@ -265,6 +268,14 @@ check(
 );
 
 check("somebody who left is still listed, marked as left", w.names[people.Cy]?.active === false);
+
+// Margin: every watch here costs $10, so a show that sells higher has the fatter margin.
+check(
+  "watch sellers carry a margin; the best seller beats the typical margin, the weakest falls short",
+  byName("Ava")!.margin !== null && byName("Ava")!.marginVsTypical! > 0 && byName("Di")!.marginVsTypical! < 0,
+  JSON.stringify(["Ava", "Di"].map((n) => [n, byName(n)?.margin, byName(n)?.marginVsTypical])),
+);
+check("diamond sellers have no margin (no master cost)", dm.sellers.every((s) => s.margin === null));
 
 const empty = await getSellerInsights("WATCH", "2031-06-01", "2031-06-30");
 check("a period with no shows: an empty result", empty.sellers.length === 0 && empty.showsScored === 0);

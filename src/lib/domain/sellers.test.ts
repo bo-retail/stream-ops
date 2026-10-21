@@ -14,6 +14,7 @@ function show(over: Partial<SellerShow> & { people: string[]; revenue: number })
     revenueCents: over.revenue,
     units: over.units ?? 10,
     people: over.people,
+    ...(over.costedRevenueCents !== undefined ? { costedRevenueCents: over.costedRevenueCents, cogsCents: over.cogsCents } : {}),
   };
 }
 const seller = (r: ReturnType<typeof scoreSellers>, id: string) => {
@@ -386,5 +387,49 @@ describe("fileLoadedFor", () => {
   it("another day's file covers nothing", () => {
     const loaded = new Set([`TIKTOK|NIGHT|2026-10-19`]);
     expect(fileLoadedFor(loaded, { platform: "TIKTOK", slot: "NIGHT", dateISO: day })).toBe(false);
+  });
+});
+
+describe("margin per seller (review 10/21: profitability in Seller insights)", () => {
+  const costed = (people: string[], revenue: number, cogs: number, over: Partial<SellerShow> = {}) =>
+    show({ people, revenue, costedRevenueCents: revenue, cogsCents: cogs, ...over });
+
+  it("gross profit and margin on their shows", () => {
+    const r = scoreSellers([costed(["a"], 10_000, 6_000), costed(["a"], 10_000, 7_000)]);
+    const a = seller(r, "a");
+    expect(a.grossProfitCents).toBe(7_000);
+    expect(a.margin).toBeCloseTo(0.35, 6);
+  });
+
+  it("judged against the same kind of show: a fat-margin slot is not credit", () => {
+    // Nights run 50% margins, days 20%. Nina nights at 50%, Dee days at 20%:
+    // both are exactly typical.
+    const r = scoreSellers([
+      ...Array.from({ length: 5 }, () => costed(["nina"], 10_000, 5_000, { slot: "NIGHT" })),
+      ...Array.from({ length: 5 }, () => costed(["dee"], 10_000, 8_000, { slot: "DAY" })),
+    ]);
+    expect(seller(r, "nina").marginVsTypical).toBeCloseTo(0, 6);
+    expect(seller(r, "dee").marginVsTypical).toBeCloseTo(0, 6);
+  });
+
+  it("better than typical is positive points, worse is negative", () => {
+    const r = scoreSellers([
+      ...Array.from({ length: 5 }, () => costed(["good"], 10_000, 6_000)),
+      ...Array.from({ length: 5 }, () => costed(["thin"], 10_000, 8_000)),
+    ]);
+    // Typical night: 30%. Good sells at 40% (+10 pts), thin at 20% (−10 pts).
+    expect(seller(r, "good").marginVsTypical).toBeCloseTo(10, 6);
+    expect(seller(r, "thin").marginVsTypical).toBeCloseTo(-10, 6);
+  });
+
+  it("no cost to be had (diamonds) means no margin, not zero", () => {
+    const r = scoreSellers([show({ revenue: 10_000, people: ["d"] })]);
+    expect(seller(r, "d")).toMatchObject({ grossProfitCents: null, margin: null, marginVsTypical: null });
+  });
+
+  it("both people on a show share its margin", () => {
+    const r = scoreSellers([costed(["p", "q"], 10_000, 6_000)]);
+    expect(seller(r, "p").grossProfitCents).toBe(4_000);
+    expect(seller(r, "q").grossProfitCents).toBe(4_000);
   });
 });

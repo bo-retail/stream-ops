@@ -35,6 +35,13 @@ export interface SellerShow {
   minutes: number;
   revenueCents: number;
   units: number;
+  /**
+   * Revenue of the units that have a cost, and what those cost us — from the
+   * same costing as the Profitability tab. Absent where there is no cost to be
+   * had (diamonds today).
+   */
+  costedRevenueCents?: number;
+  cogsCents?: number;
   /** Who was on it. A show nobody was on still sets what its kind normally makes. */
   people: string[];
 }
@@ -73,6 +80,17 @@ export interface SellerScore {
   mainPartner: { userId: string; share: number } | null;
   /** Vs expected on each kind of show they worked, unpulled. */
   byKind: KindScore[];
+  /** Gross profit on their shows' costed sales, shared like revenue. Null with no cost to be had. */
+  grossProfitCents: number | null;
+  /** Gross margin on their shows, or null with no costed sales. */
+  margin: number | null;
+  /**
+   * Their margin against what the same kinds of show normally make, in
+   * percentage points: +3 is three points better. Judged like the rest of the
+   * page — a night show against night shows — so being rota'd where margins are
+   * fat does not count as selling well.
+   */
+  marginVsTypical: number | null;
 }
 
 export interface Pairing {
@@ -280,6 +298,43 @@ export function scoreSellers(shows: readonly SellerShow[], opts: SellerOptions =
     return best ? { userId: best.userId, share: best.count / total } : null;
   };
 
+  /*
+    Margin, judged like everything else here: each kind of show's normal margin
+    is pooled over all its costed sales, and a person's margin is set against
+    the normal margin of the shows they worked, weighted by those shows' costed
+    sales. Both people on a show share its margin, as they share its revenue.
+  */
+  const kindMargin = new Map<string, { revenue: number; cogs: number }>();
+  for (const s of timed) {
+    if (!s.costedRevenueCents) continue;
+    const k = kindMargin.get(kindOf(s)) ?? { revenue: 0, cogs: 0 };
+    k.revenue += s.costedRevenueCents;
+    k.cogs += s.cogsCents ?? 0;
+    kindMargin.set(kindOf(s), k);
+  }
+  const normalMargin = (kind: string) => {
+    const k = kindMargin.get(kind);
+    return k && k.revenue > 0 ? (k.revenue - k.cogs) / k.revenue : null;
+  };
+  const marginPer = new Map<string, { revenue: number; cogs: number; typical: number }>();
+  for (const s of scored) {
+    const normal = normalMargin(kindOf(s));
+    if (!s.costedRevenueCents || normal === null) continue;
+    for (const id of s.people) {
+      const m = marginPer.get(id) ?? { revenue: 0, cogs: 0, typical: 0 };
+      m.revenue += s.costedRevenueCents;
+      m.cogs += s.cogsCents ?? 0;
+      m.typical += normal * s.costedRevenueCents;
+      marginPer.set(id, m);
+    }
+  }
+  const marginOf = (id: string) => {
+    const m = marginPer.get(id);
+    if (!m || m.revenue <= 0) return { grossProfitCents: null, margin: null, marginVsTypical: null };
+    const margin = (m.revenue - m.cogs) / m.revenue;
+    return { grossProfitCents: m.revenue - m.cogs, margin, marginVsTypical: (margin - m.typical / m.revenue) * 100 };
+  };
+
   const sellers: SellerScore[] = [...per]
     .map(([userId, p]) => {
       const avgExpected = p.expected / p.shows;
@@ -296,6 +351,7 @@ export function scoreSellers(shows: readonly SellerShow[], opts: SellerOptions =
         confidence: confidenceFor(p.shows),
         ranked: p.shows >= CONFIDENCE_FAIR,
         mainPartner: mainPartnerOf(userId),
+        ...marginOf(userId),
         byKind: [...p.kinds]
           .map(([kind, k]) => ({ kind, shows: k.shows, index: k.revenue / k.expected - 1 }))
           .sort((a, b) => b.shows - a.shows),

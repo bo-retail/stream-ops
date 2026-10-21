@@ -1,12 +1,15 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import type { Business } from "@/lib/domain/business";
-import { fromDbDate, toDbDate } from "@/lib/domain/dates";
+import { datesBetween, fromDbDate, toDbDate } from "@/lib/domain/dates";
+import { slotOfSalesShow } from "@/lib/domain/imports/types";
+import { costedUnits } from "@/lib/domain/morning";
 import { showKey } from "@/lib/domain/payroll";
 import { fileLoadedFor, scoreSellers } from "@/lib/domain/sellers";
 import type { SellerResult, SellerShow } from "@/lib/domain/sellers";
 import type { DateISO } from "@/lib/domain/types";
 import { salesByShow } from "./payroll";
+import { loadSaleInputs } from "./morning";
 import { latestBatches } from "./sales-data";
 
 export interface SellerInsights extends SellerResult {
@@ -38,6 +41,8 @@ export async function getSellerInsights(
   from: DateISO,
   to: DateISO,
 ): Promise<SellerInsights> {
+  // Started now, alongside the rest, rather than after it.
+  const costInputs = business === "WATCH" ? loadSaleInputs(from, to) : null;
   const [sales, batches, rota] = await Promise.all([
     salesByShow(from, to),
     latestBatches(from, to),
@@ -68,6 +73,23 @@ export async function getSellerInsights(
       .map((b) => `${b.platform ?? "*"}|${b.slot ?? ""}|${b.dateISO}`),
   );
 
+  /*
+    What each show's sales cost us, by the same costing as the Profitability
+    tab (`costedUnits`): watches only, since diamonds have no master cost.
+  */
+  const costByShow = new Map<string, { revenue: number; cogs: number }>();
+  if (costInputs) {
+    const { lines, sold, costToday } = await costInputs;
+    for (const u of costedUnits(lines, sold, costToday, datesBetween(from, to))) {
+      if (u.cancelled || u.costCents === null) continue;
+      const key = showKey({ business, dateISO: u.day, platform: u.platform, slot: slotOfSalesShow(u.show) });
+      const c = costByShow.get(key) ?? { revenue: 0, cogs: 0 };
+      c.revenue += u.cents;
+      c.cogs += u.costCents;
+      costByShow.set(key, c);
+    }
+  }
+
   const shows: SellerShow[] = [];
   let showsWithoutSales = 0;
   for (const show of rota) {
@@ -76,7 +98,9 @@ export async function getSellerInsights(
       showsWithoutSales += 1;
       continue;
     }
-    const sold = sales.get(showKey({ business, dateISO, platform: show.platform, slot: show.slot }));
+    const key = showKey({ business, dateISO, platform: show.platform, slot: show.slot });
+    const sold = sales.get(key);
+    const cost = costByShow.get(key);
     shows.push({
       id: show.id,
       platform: show.platform,
@@ -85,6 +109,7 @@ export async function getSellerInsights(
       minutes: Math.max(0, Math.round((show.endsAt.getTime() - show.startsAt.getTime()) / 60_000)),
       revenueCents: sold?.netRevenueCents ?? 0,
       units: sold?.units ?? 0,
+      ...(cost ? { costedRevenueCents: cost.revenue, cogsCents: cost.cogs } : {}),
       people: show.assignments
         .filter((a) => a.user.team === "STREAMING" && a.user.role === "EMPLOYEE")
         .map((a) => a.userId),
