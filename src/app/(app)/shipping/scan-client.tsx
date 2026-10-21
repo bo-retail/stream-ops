@@ -536,6 +536,26 @@ export function ScanClient() {
             </div>
           </div>
 
+          {box.status === "OPEN" && box.waitingOn.length > 0 ? (
+            /*
+              A show's report is not uploaded yet, and TikTok may have put what
+              this buyer bought in it on this same label. Said before anything
+              is scanned, so a slip listing more than the screen is expected,
+              not a mystery.
+            */
+            <div className="border-b border-warn-200 bg-warn-50 px-4 py-2.5 text-sm text-warn-700">
+              <p className="font-medium">
+                <TriangleAlert className="mr-1.5 inline h-4 w-4" aria-hidden />
+                The slip may list more {ITEM_WORD[box.business].many} than this screen.
+              </p>
+              <p className="mt-0.5">
+                Not uploaded yet: {box.waitingOn.join("; ")}. Anything this buyer bought there can be on this label.
+                If the slip lists {ITEM_WORD[box.business].many} that are not here, put the parcel aside — they
+                appear here once that report is uploaded.
+              </p>
+            </div>
+          ) : null}
+
           {box.items.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-ink-muted">
               Scan the {ITEM_WORD[box.business].many} as they go in.
@@ -665,10 +685,12 @@ export function ScanClient() {
                   <span className="text-xs text-ink-subtle">
                     {over
                       ? "Something was added that is not on the report."
-                      : box.isUnrecognised
+                      : box.isUnrecognised || box.waitingOn.length > 0
                         ? `${box.totalExpected - box.totalScanned} still to go in.`
                         : `${box.totalExpected - box.totalScanned} still to go in — it closes by itself after the last one.`}
                   </span>
+                ) : box.waitingOn.length > 0 ? (
+                  <span className="text-xs text-ink-subtle">Everything on the screen is in. If the slip agrees, press Close box.</span>
                 ) : null}
               </div>
             )}
