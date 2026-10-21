@@ -114,6 +114,27 @@ describe("money", () => {
   it("shortens a big one so a stat tile stays readable", () => {
     expect(formatMoneyShort(22_537_96)).toBe("$23k");
   });
+
+  // Samuel 10/21: insights read "$1070k" for $1,070,000.
+  it("writes a million as millions, never as a thousand-odd k", () => {
+    expect(formatMoneyShort(1_070_000_00)).toBe("$1.07M");
+    expect(formatMoneyShort(1_000_000_00)).toBe("$1M");
+    expect(formatMoneyShort(1_500_000_00)).toBe("$1.5M");
+    expect(formatMoneyShort(12_345_678_00)).toBe("$12.35M");
+    expect(formatMoneyShort(999_999_00)).toBe("$1M");
+    expect(formatMoneyShort(999_400_00)).toBe("$999k");
+  });
+
+  it("keeps the minus sign in front of the dollar sign", () => {
+    expect(formatMoneyShort(-1_070_000_00)).toBe("-$1.07M");
+    expect(formatMoneyShort(-22_537_96)).toBe("-$23k");
+    expect(formatMoneyShort(-500_00)).toBe("-$500");
+  });
+
+  it("zero and blank-ish values stay plain", () => {
+    expect(formatMoneyShort(0)).toBe("$0");
+    expect(formatMoneyShort(49)).toBe("$0");
+  });
 });
 
 describe("the trend line", () => {
@@ -138,5 +159,21 @@ describe("the trend line", () => {
   it("changes nothing with a window of one", () => {
     const points = [{ dateISO: "2026-09-01", value: 5 }, { dateISO: "2026-09-02", value: 9 }];
     expect(movingAverage(points, 1)).toEqual(points);
+  });
+});
+
+describe("formatMoneyShort at the edges", () => {
+  it("rounds across the million line the way the eye expects", () => {
+    expect(formatMoneyShort(999_499_99)).toBe("$999k");
+    expect(formatMoneyShort(999_500_00)).toBe("$1M");
+  });
+
+  it("rounds across the thousand line", () => {
+    expect(formatMoneyShort(9_999_50)).toBe("$10,000");
+  });
+
+  it("a few cents below zero is zero, not minus zero", () => {
+    expect(formatMoneyShort(-49)).toBe("$0");
+    expect(formatMoneyShort(-50)).toBe("-$1");
   });
 });

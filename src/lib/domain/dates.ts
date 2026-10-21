@@ -188,3 +188,26 @@ export function minutesToHours(minutes: number): string {
 export function instantsOverlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date): boolean {
   return aStart.getTime() < bEnd.getTime() && bStart.getTime() < aEnd.getTime();
 }
+
+/**
+ * "Oct 21, 3:42 PM" in the business's time zone — a moment people look back
+ * on, where the time alone leaves them guessing which day it was.
+ * `seconds` for a scan-by-scan trail, where two scans can share a minute.
+ */
+export function dateTimeFormatter(
+  timeZone: string,
+  opts: { seconds?: boolean } = {},
+): (at: Date | null) => string {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    ...(opts.seconds ? { second: "2-digit" } : {}),
+    hour12: true,
+  });
+  // Some engines put a narrow no-break space before AM/PM; plain space reads
+  // and copies the same everywhere.
+  return (at) => (at ? fmt.format(at).replace(/ /g, " ") : "—");
+}

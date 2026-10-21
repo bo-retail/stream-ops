@@ -546,3 +546,24 @@ export function checkCandidate(
 
   return { ok: true };
 }
+
+/**
+ * Empty seats on today's shows, grouped by the release each show is in — the
+ * dashboard's red "seats missing" line links to that release's schedule, and a
+ * watch show and a diamond show short on the same day are two releases.
+ *
+ * Only shows still to run or running: a finished one is past helping.
+ * Cancelled shows are left out by the caller, which only asks for scheduled.
+ */
+export function missingSeatsByRelease(
+  shows: readonly { releaseId: string; assigned: number; done: boolean }[],
+  seatsPerShow: number,
+): { releaseId: string; seats: number }[] {
+  const out = new Map<string, number>();
+  for (const s of shows) {
+    const missing = Math.max(0, seatsPerShow - s.assigned);
+    if (missing === 0 || s.done) continue;
+    out.set(s.releaseId, (out.get(s.releaseId) ?? 0) + missing);
+  }
+  return [...out].map(([releaseId, seats]) => ({ releaseId, seats }));
+}

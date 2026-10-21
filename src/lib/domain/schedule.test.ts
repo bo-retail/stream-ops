@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkCandidate, pickerGroup, planCopyForward, sentAvailability, validateSchedule } from "./schedule";
+import { checkCandidate, missingSeatsByRelease, pickerGroup, planCopyForward, sentAvailability, validateSchedule } from "./schedule";
 import type {
   AssignmentInput,
   AvailabilityInput,
@@ -695,5 +695,39 @@ describe("the picker's groups (10/14)", () => {
     expect(group("no")).toBe("no");
     expect(group("never", { timeOffByUser: { never: [DATE] } })).toBe("no");
     expect(group("yes", { assignments: [one(other, "yes", 1)] })).toBe("cant");
+  });
+});
+
+describe("missingSeatsByRelease", () => {
+  const show = (releaseId: string, assigned: number, done = false) => ({ releaseId, assigned, done });
+
+  it("counts the empty seats on shows still to run", () => {
+    expect(missingSeatsByRelease([show("w", 1), show("w", 0), show("w", 2)], 2)).toEqual([
+      { releaseId: "w", seats: 3 },
+    ]);
+  });
+
+  it("a fully staffed day has nothing missing", () => {
+    expect(missingSeatsByRelease([show("w", 2), show("d", 2)], 2)).toEqual([]);
+  });
+
+  it("a day with no shows has nothing missing", () => {
+    expect(missingSeatsByRelease([], 2)).toEqual([]);
+  });
+
+  it("a finished show is past helping and is not counted", () => {
+    expect(missingSeatsByRelease([show("w", 0, true)], 2)).toEqual([]);
+  });
+
+  it("three people on a two-seat show is not a negative seat", () => {
+    expect(missingSeatsByRelease([show("w", 3), show("w", 1)], 2)).toEqual([{ releaseId: "w", seats: 1 }]);
+  });
+
+  // Watches and diamonds are separate releases: each gets its own link.
+  it("keeps a watch release and a diamond release apart", () => {
+    expect(missingSeatsByRelease([show("w", 1), show("d", 0)], 2)).toEqual([
+      { releaseId: "w", seats: 1 },
+      { releaseId: "d", seats: 2 },
+    ]);
   });
 });

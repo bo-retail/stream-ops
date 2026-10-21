@@ -15,7 +15,9 @@ import { MissingReports } from "@/components/missing-reports";
 import { cn } from "@/lib/utils";
 import { prisma } from "@/lib/db";
 import { formatDate, toDbDate } from "@/lib/domain/dates";
-import { slotShort } from "@/lib/domain/types";
+import { SEATS_PER_SHOW, slotShort } from "@/lib/domain/types";
+import { BUSINESS_LABEL } from "@/lib/domain/business";
+import { missingSeatsByRelease } from "@/lib/domain/schedule";
 import { getReleaseView } from "@/lib/server/schedule";
 import { listReleases } from "@/lib/server/releases";
 import { getSettings, getWeekContext } from "@/lib/server/settings";
@@ -61,6 +63,7 @@ export async function BossDashboard() {
       slot: true,
       startsAt: true,
       endsAt: true,
+      releaseId: true,
       release: { select: { scheduleStatus: true } },
       assignments: { select: { user: { select: { name: true } } }, orderBy: { seat: "asc" } },
     },
@@ -79,8 +82,16 @@ export async function BossDashboard() {
     done: s.endsAt.getTime() < now,
     published: s.release.scheduleStatus === "PUBLISHED",
     names: s.assignments.map((a) => a.user.name),
+    releaseId: s.releaseId,
+    seatsMissing: Math.max(0, SEATS_PER_SHOW - s.assignments.length),
   }));
   const liveNow = todayShows.filter((s) => s.live);
+  // Empty seats on shows still to run — the one thing on this page somebody
+  // has to act on before air time. A finished one is noted but not shouted.
+  const shortToday = missingSeatsByRelease(
+    todayShows.map((s) => ({ releaseId: s.releaseId, assigned: s.names.length, done: s.done })),
+    SEATS_PER_SHOW,
+  );
 
   const open = releases.filter((r) => r.status === "OPEN");
   const drafts = releases.filter((r) => r.status === "DRAFT");
@@ -95,6 +106,18 @@ export async function BossDashboard() {
   // Everything waiting on the boss, gathered into one list rather than scattered
   // across the pages that happen to know about each one.
   const actions: { label: string; href: string; tone: "danger" | "warn" | "info" }[] = [];
+
+  // One line per release, each opening that release's schedule — with no
+  // release named the schedule page opens the next draft, not today's.
+  for (const { releaseId, seats } of shortToday) {
+    const business = todayRows.find((r) => r.releaseId === releaseId)?.business;
+    const name = business ? BUSINESS_LABEL[business] : null;
+    actions.push({
+      label: `${seats} ${seats === 1 ? "seat is" : "seats are"} missing on today's shows${shortToday.length > 1 && name ? ` (${name})` : ""}`,
+      href: `/admin/schedule?release=${releaseId}`,
+      tone: "danger",
+    });
+  }
 
   for (const release of open) {
     const missing = release.askedCount - release.submittedCount;
@@ -280,8 +303,16 @@ export async function BossDashboard() {
             <EmptyState title="No shows today" />
           ) : (
             <ul className="divide-y divide-line">
-              {todayShows.map((show) => (
-                <li key={show.id} className="px-4 py-2.5">
+              {todayShows.map((show) => {
+                const short = show.seatsMissing > 0 && !show.done;
+                return (
+                <li
+                  key={show.id}
+                  className={cn(
+                    "px-4 py-2.5",
+                    short && "mx-2 my-2 rounded-lg border-2 border-danger-500 bg-danger-50 px-3",
+                  )}
+                >
                   <div className="flex items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-1.5">
                       {/* The one place both kinds of show sit side by side, so
@@ -305,10 +336,21 @@ export async function BossDashboard() {
                   </div>
                   <p className="mt-1 text-sm text-ink-muted">
                     {show.names.length === 0 ? "Nobody on it" : show.names.join(" and ")}
-                    {show.names.length === 1 ? " — needs one more" : ""}
                   </p>
+                  {show.seatsMissing > 0 ? (
+                    <p
+                      className={cn(
+                        "mt-1 flex items-center gap-1.5 text-sm font-semibold",
+                        short ? "text-danger-600" : "text-ink-subtle",
+                      )}
+                    >
+                      {short ? <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden /> : null}
+                      {show.seatsMissing === 1 ? "Seat missing" : `${show.seatsMissing} seats missing`}
+                    </p>
+                  ) : null}
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </Card>

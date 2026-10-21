@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  dateTimeFormatter,
   addDays,
   dayOfWeek,
   diffDays,
@@ -179,5 +180,33 @@ describe("presentation helpers", () => {
     // 03:00 UTC on the 17th is still the 16th in New York.
     expect(todayISO(TZ, new Date("2026-08-17T03:00:00Z"))).toBe("2026-08-16");
     expect(todayISO(TZ, new Date("2026-08-17T13:00:00Z"))).toBe("2026-08-17");
+  });
+});
+
+describe("dateTimeFormatter", () => {
+  // Samuel 10/21: the shipping log showed the time only.
+  it("gives the month, day and time in the business's zone", () => {
+    const f = dateTimeFormatter("America/New_York");
+    expect(f(new Date("2026-10-21T19:42:00Z"))).toBe("Oct 21, 3:42 PM");
+  });
+
+  it("a scan late at night lands on the local day, not the UTC one", () => {
+    const f = dateTimeFormatter("America/New_York");
+    expect(f(new Date("2026-10-22T02:15:00Z"))).toBe("Oct 21, 10:15 PM");
+  });
+
+  it("shows seconds when asked", () => {
+    const f = dateTimeFormatter("America/New_York", { seconds: true });
+    expect(f(new Date("2026-10-21T19:42:07Z"))).toBe("Oct 21, 3:42:07 PM");
+  });
+
+  it("a scan that never came shows a dash", () => {
+    expect(dateTimeFormatter("America/New_York")(null)).toBe("—");
+  });
+});
+
+describe("dateTimeFormatter at midnight", () => {
+  it("a scan on the stroke of midnight belongs to the new day", () => {
+    expect(dateTimeFormatter("America/New_York")(new Date("2026-10-22T04:00:00Z"))).toBe("Oct 22, 12:00 AM");
   });
 });

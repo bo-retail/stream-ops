@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Card, CardHeader, EmptyState, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
 import { requireShippingDirector } from "@/lib/auth/guards";
-import { formatDate, isDateISO, toDbDate } from "@/lib/domain/dates";
+import { dateTimeFormatter, formatDate, isDateISO, toDbDate } from "@/lib/domain/dates";
 import { getPersonDay } from "@/lib/server/packing";
 import { packingDayISO } from "@/lib/server/shipping";
 import { getSettings } from "@/lib/server/settings";
@@ -36,12 +36,7 @@ export default async function PersonDayPage({
   ]);
   if (!day) notFound();
 
-  const clock = new Intl.DateTimeFormat("en-GB", {
-    timeZone: settings.timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
+  const time = dateTimeFormatter(settings.timezone);
 
   const short = day.boxes.filter((b) => b.status === "CLOSED_INCOMPLETE").length;
 
@@ -104,7 +99,7 @@ export default async function PersonDayPage({
                         <span className="text-ink-subtle"> of {b.expected}</span>
                       ) : null}
                     </Td>
-                    <Td className="tabular text-ink-muted">{b.closedAt ? clock.format(b.closedAt) : "—"}</Td>
+                    <Td className="tabular whitespace-nowrap text-ink-muted">{time(b.closedAt)}</Td>
                     <Td>
                       {b.status === "CLOSED_INCOMPLETE" ? (
                         <Badge tone="warn">Incomplete</Badge>

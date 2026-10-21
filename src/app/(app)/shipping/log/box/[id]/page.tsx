@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Card, CardHeader, EmptyState, PageHeader, Table, Td, Th } from "@/components/ui";
 import { requireShippingDirector } from "@/lib/auth/guards";
-import { formatDate } from "@/lib/domain/dates";
+import { dateTimeFormatter, formatDate } from "@/lib/domain/dates";
 import { PLATFORM_SHORT } from "@/lib/domain/types";
 import { WatchImage } from "@/components/watch-image";
 import { picturesFor } from "@/lib/server/inventory";
@@ -61,13 +61,7 @@ export default async function BoxPage({ params }: { params: Promise<{ id: string
       ])
     : new Map<string, string>();
 
-  const stamp = new Intl.DateTimeFormat("en-GB", {
-    timeZone: settings.timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
+  const stamp = dateTimeFormatter(settings.timezone, { seconds: true });
 
   return (
     <>
@@ -170,7 +164,7 @@ export default async function BoxPage({ params }: { params: Promise<{ id: string
                   const label = KIND_LABEL[s.kind] ?? { text: s.kind, tone: "neutral" as const };
                   return (
                     <tr key={i}>
-                      <Td className="tabular whitespace-nowrap text-ink-muted">{stamp.format(s.at)}</Td>
+                      <Td className="tabular whitespace-nowrap text-ink-muted">{stamp(s.at)}</Td>
                       <Td>
                         <Badge tone={label.tone}>{label.text}</Badge>
                       </Td>

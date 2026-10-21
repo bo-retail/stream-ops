@@ -16,7 +16,7 @@ import {
   Th,
 } from "@/components/ui";
 import { requireShippingDirector } from "@/lib/auth/guards";
-import { addDays, formatDate, isDateISO, toDbDate } from "@/lib/domain/dates";
+import { addDays, dateTimeFormatter, formatDate, isDateISO, toDbDate } from "@/lib/domain/dates";
 import {
   getDayCounters,
   getPackerDays,
@@ -61,13 +61,7 @@ export default async function ShippingLogPage({
     listOpenBoxes(showDate),
   ]);
 
-  const clock = new Intl.DateTimeFormat("en-GB", {
-    timeZone: settings.timezone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  const time = (at: Date | null) => (at ? clock.format(at) : "—");
+  const time = dateTimeFormatter(settings.timezone);
 
   const toGo = Math.max(0, counters.total - counters.sent);
   const link = (d: string) => `/shipping/log?date=${d}`;
@@ -259,8 +253,8 @@ export default async function ShippingLogPage({
                     </Td>
                     <Td className="tabular">{p.boxes}</Td>
                     <Td className="tabular">{p.items}</Td>
-                    <Td className="tabular text-ink-muted">{time(p.firstScan)}</Td>
-                    <Td className="tabular text-ink-muted">{time(p.lastScan)}</Td>
+                    <Td className="tabular whitespace-nowrap text-ink-muted">{time(p.firstScan)}</Td>
+                    <Td className="tabular whitespace-nowrap text-ink-muted">{time(p.lastScan)}</Td>
                     <Td className="text-right">
                       <Link
                         href={`/shipping/log/person/${p.userId}?date=${dateISO}`}

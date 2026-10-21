@@ -75,11 +75,24 @@ export function formatMoney(cents: number): string {
   })}`;
 }
 
-/** Money without the pennies, for headline figures where they only add noise. */
+/**
+ * Money without the pennies, for headline figures where they only add noise.
+ *
+ * A million reads as millions — "$1.07M", never "$1070k", which looks like a
+ * thousand-odd dollars at a glance. Anything that would round to $1000k is
+ * already a million.
+ */
 export function formatMoneyShort(cents: number): string {
   const value = fromCents(cents);
-  if (Math.abs(value) >= 10_000) return `$${Math.round(value / 1000)}k`;
-  return `$${Math.round(value).toLocaleString("en-US")}`;
+  const sign = value < 0 ? "-" : "";
+  const abs = Math.abs(value);
+  if (Math.round(abs) === 0) return "$0";
+  if (abs >= 999_500) {
+    const millions = Number((abs / 1_000_000).toFixed(2));
+    return `${sign}$${millions.toLocaleString("en-US", { maximumFractionDigits: 2 })}M`;
+  }
+  if (abs >= 10_000) return `${sign}$${Math.round(abs / 1000)}k`;
+  return `${sign}$${Math.round(abs).toLocaleString("en-US")}`;
 }
 
 /**
