@@ -34,18 +34,6 @@ export function showName(platform: Platform, slot: Slot): string {
   return `${p} ${pretty}`;
 }
 
-/**
- * Where a show's hover card goes, from where its bar starts and ends (percent
- * of the timeline): right of the bar when it ends before 60%, else left of it
- * when it starts after 40%, else (a bar across most of the day) over its own
- * start. Never over the row above.
- */
-export function cardPlace(startPct: number, endPct: number): React.CSSProperties {
-  if (endPct <= 60) return { left: `calc(${endPct}% + 8px)` };
-  if (startPct >= 40) return { right: `calc(${100 - startPct}% + 8px)` };
-  return { left: `${startPct}%` };
-}
-
 const minutes = (hm: string) => {
   const [h, m] = hm.split(":").map(Number);
   return h * 60 + m;
@@ -127,35 +115,11 @@ export function TodayTimeline({ shows, nowHM }: { shows: TimelineShow[]; nowHM: 
 
         <div className="space-y-1.5 pt-1.5">
           {spans.map(({ show, start, end }) => (
-            <div
-              key={show.id}
-              // The whole row is the hover target, not just the bar: the card
-              // shows at once, wherever the pointer is on the line (Samuel, 21 October).
-              className="group/row grid grid-cols-[4.5rem_1fr] items-center rounded-lg hover:bg-canvas sm:grid-cols-[5.5rem_1fr]"
-            >
+            <div key={show.id} className="grid grid-cols-[4.5rem_1fr] items-center sm:grid-cols-[5.5rem_1fr]">
               <span className="truncate text-xs font-medium text-ink-muted">{BUSINESS_SHORT[show.business]}</span>
               <div className="relative h-9">
-                {/*
-                  The card opens BESIDE the show, level with its row, so it
-                  covers empty timeline rather than the shows above (Samuel,
-                  21 October). Right of the bar when there is room, else left
-                  of it; a bar spanning nearly the whole day gets it on top of
-                  itself. White with a brass stripe, so it never reads as a show.
-                */}
-                <div
-                  className="pointer-events-none absolute top-1/2 z-30 hidden w-max max-w-[min(20rem,40%)] -translate-y-1/2 rounded-lg border border-line-strong border-l-4 border-l-brass bg-surface px-3 py-2 text-xs leading-snug text-ink shadow-lg group-hover/row:block"
-                  style={cardPlace(at(start), at(end))}
-                >
-                  <p className="font-semibold">
-                    {BUSINESS_SHORT[show.business]} · {showName(show.platform, show.slot)} · {show.startHM}–{show.endHM}
-                  </p>
-                  <p className="text-ink-muted">{show.names.length === 0 ? "Nobody on it" : show.names.join(" and ")}</p>
-                  {show.short ? (
-                    <p className="font-semibold text-danger-600">
-                      {show.seatsMissing === 1 ? "Seat missing" : `${show.seatsMissing} seats missing`}
-                    </p>
-                  ) : null}
-                </div>
+                {/* No hover card: full width, the bars show their names whole
+                    (Samuel, 21 October). */}
                 <div
                   className={cn(
                     "absolute inset-y-0 flex min-w-0 flex-col justify-center overflow-hidden rounded-lg px-2.5 text-xs leading-tight",
@@ -166,8 +130,6 @@ export function TodayTimeline({ shows, nowHM }: { shows: TimelineShow[]; nowHM: 
                         : show.done
                           ? "bg-brand-50 text-ink-subtle"
                           : "bg-surface text-ink ring-1 ring-inset ring-line-strong",
-                    // The show the card belongs to, outlined in brass (a short one keeps its red).
-                    !show.short && "group-hover/row:ring-2 group-hover/row:ring-inset group-hover/row:ring-brass",
                   )}
                   style={{ left: `${at(start)}%`, width: `calc(${at(end) - at(start)}% - 2px)` }}
                 >

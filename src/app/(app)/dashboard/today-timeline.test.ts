@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { TodayTimeline, cardPlace, showName } from "./today-timeline";
+import { TodayTimeline, showName } from "./today-timeline";
 import type { TimelineShow } from "./today-timeline";
 
 /*
@@ -112,58 +112,11 @@ describe("showName (Samuel 10/21: a full, readable name)", () => {
   });
 });
 
-describe("hovering a bar (Samuel 10/21)", () => {
-  it("shows the whole name, hours and everyone on it", () => {
-    const html = renderToStaticMarkup(
-      createElement(TodayTimeline, {
-        nowHM: "15:38",
-        shows: [
-          {
-            id: "s1", business: "WATCH", platform: "TIKTOK", slot: "DAY", startHM: "13:00", endHM: "19:00",
-            live: true, done: false, short: false, seatsMissing: 0, names: ["Francine Yaffe", "Gideon Kornbluth"],
-          },
-        ],
-      } as never),
-    );
-    expect(html).toContain("TikTok Day · 13:00–19:00");
-    expect(html).toContain("Francine Yaffe and Gideon Kornbluth");
-  });
-});
-
 describe("showName edges (review 10/21)", () => {
   it("strips the platform only as a whole word", () => {
     expect(showName("EBAY", "EBAYS PICKS")).toBe("eBay Ebays Picks");
   });
   it("a show named just the platform keeps a name, with no trailing space", () => {
     expect(showName("TIKTOK", "TIKTOK")).toBe("TikTok Tiktok");
-  });
-});
-
-describe("the hover card sits beside its show, not over the row above (Samuel 10/21)", () => {
-  it("right of a show that ends before the middle", () => {
-    expect(cardPlace(10, 45)).toEqual({ left: "calc(45% + 8px)" });
-  });
-  it("left of a show that runs late in the day", () => {
-    expect(cardPlace(70, 95)).toEqual({ right: "calc(30% + 8px)" });
-  });
-  it("over its own start when the show spans most of the day", () => {
-    expect(cardPlace(5, 95)).toEqual({ left: "5%" });
-  });
-  it("is light, with a brass stripe, level with its row", () => {
-    const html = renderToStaticMarkup(
-      createElement(TodayTimeline, {
-        nowHM: "15:38",
-        shows: [
-          {
-            id: "s1", business: "WATCH", platform: "TIKTOK", slot: "DAY", startHM: "13:00", endHM: "19:00",
-            live: true, done: false, short: false, seatsMissing: 0, names: ["Manon Hodeige", "Amaya Anseeuw"],
-          },
-        ],
-      } as never),
-    );
-    expect(html).toContain("border-l-brass");
-    expect(html).toContain("bg-surface");
-    expect(html).not.toContain("bottom-full");
-    expect(html).toContain("group-hover/row:ring-brass");
   });
 });
