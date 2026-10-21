@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { Download } from "lucide-react";
 import { Badge, Card, CardHeader, LinkButton, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
-import { requireShippingDirector } from "@/lib/auth/guards";
+import { canSeeCost, requireShippingDirector } from "@/lib/auth/guards";
 import { getShipment } from "@/lib/server/receiving";
 import { SettleButton, UploadShipmentCount } from "../forms";
 import { CountForm } from "./count-form";
@@ -16,7 +16,7 @@ const KIND_TONE = { short: "warn", over: "warn", "not on the list": "warn", dama
 
 /** One shipment: count it in, and see what differs from Invicta's list. */
 export default async function ShipmentPage({ params }: { params: Promise<{ sop: string }> }) {
-  await requireShippingDirector();
+  const seeCost = canSeeCost(await requireShippingDirector());
   const { sop } = await params;
   const s = await getShipment(sop);
   if (!s) notFound();
@@ -39,7 +39,7 @@ export default async function ShipmentPage({ params }: { params: Promise<{ sop: 
         <Stat label="On the list" value={listed.toLocaleString("en-US")} />
         <Stat label="Counted" value={s.countedAt ? counted.toLocaleString("en-US") : "—"} />
         <Stat label="Models not counted yet" value={notCounted} tone={notCounted > 0 ? "warn" : "ok"} />
-        <Stat label="At list cost" value={`$${(value / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`} />
+        {seeCost ? <Stat label="At list cost" value={`$${(value / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`} /> : null}
       </div>
 
       <div className="space-y-5">
@@ -96,14 +96,16 @@ export default async function ShipmentPage({ params }: { params: Promise<{ sop: 
 
         <CountForm
           key={s.countedAt?.getTime() ?? 0}
+          showCost={seeCost}
           sop={s.sop}
           lines={s.lines.map((l) => ({
             model: l.product.model,
             description: l.product.description,
             picture: l.picture,
             listed: l.listedQty,
-            priceCents: l.unitCostCents,
-            offerCents: l.offer?.costCents ?? null,
+            // Never sent to a page whose viewer may not see cost.
+            priceCents: seeCost ? l.unitCostCents : null,
+            offerCents: seeCost ? (l.offer?.costCents ?? null) : null,
             counted: l.countedQty,
             damaged: l.damagedQty,
           }))}

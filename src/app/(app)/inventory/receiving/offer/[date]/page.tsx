@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Badge, Card, LinkButton, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
-import { requireShippingDirector } from "@/lib/auth/guards";
+import { canSeeCost, requireShippingDirector } from "@/lib/auth/guards";
 import { formatDate, isDateISO } from "@/lib/domain/dates";
 import { getOffer } from "@/lib/server/receiving";
 
@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: "Offer" };
 
 /** One offer, line by line: what Daniel ordered, at what cost, and which models are new. */
 export default async function OfferPage({ params }: { params: Promise<{ date: string }> }) {
-  await requireShippingDirector();
+  const seeCost = canSeeCost(await requireShippingDirector());
   const { date } = await params;
   if (!isDateISO(date)) notFound();
   const o = await getOffer(date);
@@ -32,7 +32,7 @@ export default async function OfferPage({ params }: { params: Promise<{ date: st
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Models" value={o.lines.length} />
         <Stat label="Pieces ordered" value={pieces.toLocaleString("en-US")} />
-        <Stat label="At cost" value={`$${(value / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`} />
+        {seeCost ? <Stat label="At cost" value={`$${(value / 100).toLocaleString("en-US", { maximumFractionDigits: 0 })}`} /> : null}
         <Stat label="Need their details" value={needDetails} tone={needDetails > 0 ? "warn" : "ok"} />
       </div>
       <Card>
@@ -44,7 +44,7 @@ export default async function OfferPage({ params }: { params: Promise<{ date: st
               </Th>
               <Th>Model</Th>
               <Th className="text-right">Ordered</Th>
-              <Th className="text-right">Cost</Th>
+              {seeCost ? <Th className="text-right">Cost</Th> : null}
               <Th>In the app</Th>
             </tr>
           </thead>
@@ -61,7 +61,7 @@ export default async function OfferPage({ params }: { params: Promise<{ date: st
                   {l.product.description ? <span className="block max-w-sm truncate text-xs text-ink-subtle">{l.product.description}</span> : null}
                 </Td>
                 <Td className="tabular text-right">{l.qty}</Td>
-                <Td className="tabular text-right">${(l.costCents / 100).toFixed(2)}</Td>
+                {seeCost ? <Td className="tabular text-right">${(l.costCents / 100).toFixed(2)}</Td> : null}
                 <Td>
                   <span className="flex flex-wrap gap-1">
                     {!l.product.active ? <Badge tone="brand">Not arrived yet</Badge> : null}

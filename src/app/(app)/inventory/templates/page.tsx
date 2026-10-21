@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Download } from "lucide-react";
 import { Card, CardHeader, LinkButton, PageHeader } from "@/components/ui";
-import { requireShippingDirector } from "@/lib/auth/guards";
+import { canSeeCost, requireShippingDirector } from "@/lib/auth/guards";
 import { UploadDetails } from "../receiving/forms";
-import { UploadCount, UploadMaster } from "./upload-forms";
+import { UploadCount } from "./upload-forms";
 
 export const metadata: Metadata = { title: "Templates & uploads" };
 
@@ -16,7 +16,8 @@ export const metadata: Metadata = { title: "Templates & uploads" };
  * screen without any file at all — the template is for whoever prefers it.
  */
 export default async function TemplatesPage() {
-  await requireShippingDirector();
+  const user = await requireShippingDirector();
+  const seeCost = canSeeCost(user);
 
   return (
     <>
@@ -48,7 +49,7 @@ export default async function TemplatesPage() {
         <Card>
           <CardHeader
             title="Product details"
-            description="Everything about a model the offer does not say: description, target price, TikTok weight and box, eBay profile, barcode. Models still needing theirs are at the top. A blank keeps what is there; cost only fills a missing one — the Invicta master sets cost."
+            description={"Everything about a model the offer does not say: description, target price, TikTok weight and box, eBay profile, barcode. Models still needing theirs are at the top. A blank keeps what is there." + (seeCost ? " Cost only fills a missing one — the Invicta master sets cost." : "")}
           />
           <div className="space-y-4 p-4">
             <a
@@ -72,22 +73,6 @@ export default async function TemplatesPage() {
           </div>
         </Card>
 
-        <Card>
-          <CardHeader
-            title="Invicta master file"
-            description="Their file, as it comes. Adds new models and updates details, and its cost becomes each model's cost — every sale keeps the cost it had the day it sold. Never deletes a model; a blank or $0 cost changes nothing."
-          />
-          <div className="space-y-3 p-4">
-            <UploadMaster />
-            <p className="text-sm text-ink-muted">
-              Every upload, and every cost it changed:{" "}
-              <Link href="/inventory/masters" className="underline">
-                Master uploads
-              </Link>
-              .
-            </p>
-          </div>
-        </Card>
       </div>
     </>
   );

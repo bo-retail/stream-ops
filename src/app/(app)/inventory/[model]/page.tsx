@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { Badge, Card, CardHeader, LinkButton, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
 import { pictureFor } from "@/lib/domain/watch-images";
-import { requireShippingDirector } from "@/lib/auth/guards";
+import { canSeeCost, requireShippingDirector } from "@/lib/auth/guards";
 import { PLACES, PLACE_LABEL } from "@/lib/domain/inventory";
 import { getModel } from "@/lib/server/inventory";
 import { DetailsEditor } from "./details-editor";
@@ -22,7 +22,8 @@ const when = new Intl.DateTimeFormat("en-US", {
 
 /** One model: what it is, where its pieces are, and every change. */
 export default async function ModelPage({ params }: { params: Promise<{ model: string }> }) {
-  await requireShippingDirector();
+  const user = await requireShippingDirector();
+  const seeCost = canSeeCost(user);
   const { model } = await params;
   // Next has already decoded it; decoding again would break a model with a "%".
   const found = await getModel(model);
@@ -69,12 +70,14 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
           <DetailsEditor
             key={p.updatedAt.getTime()}
             model={p.model}
+            showCost={seeCost}
             details={{
               brand: p.brand,
               collection: p.collection,
               gender: p.gender,
               description: p.description,
-              costCents: p.costCents,
+              // Never sent to a page whose viewer may not see it.
+              costCents: seeCost ? p.costCents : null,
               tpCents: p.tpCents,
               msrpCents: p.msrpCents,
               weightLb: p.weightLb,
@@ -109,7 +112,7 @@ export default async function ModelPage({ params }: { params: Promise<{ model: s
                     <Td>
                       {m.kind === "RECEIVED" ? (
                         <>
-                          Received{m.unitCostCents !== null ? ` at ${money(m.unitCostCents)}` : ""}
+                          Received{seeCost && m.unitCostCents !== null ? ` at ${money(m.unitCostCents)}` : ""}
                         </>
                       ) : m.kind === "SOLD" ? (
                         <>{(m.place === "WAITING") === (m.qty > 0) ? "Sold" : "Put back (the report no longer has it)"}</>

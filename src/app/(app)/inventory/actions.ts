@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
+import { requireBossOrThrow, requireShippingDirectorOrThrow } from "@/lib/auth/guards";
 import { PLACES, PLACE_LABEL, normaliseModel, parseQty } from "@/lib/domain/inventory";
 import type { CountedPlaces, SoldAtShow } from "@/lib/domain/inventory";
 import { isSheetRows } from "@/lib/domain/inventory-sheets";
@@ -20,6 +20,7 @@ const MAX_BYTES = 15 * 1024 * 1024;
 
 function refresh() {
   revalidatePath("/inventory");
+  revalidatePath("/admin/master");
 }
 
 /** The boxes typed for one model, read the same way as a cell in the count sheet. */
@@ -139,11 +140,12 @@ export async function uploadCount(_prev: FormState, formData: FormData): Promise
  * Checked here as untrusted input all the same.
  */
 export async function uploadMasterRows(fileName: string, sheets: SheetRows): Promise<FormState> {
+  // The master sets cost, and only an admin sees cost.
   let user;
   try {
-    user = await requireShippingDirectorOrThrow();
+    user = await requireBossOrThrow();
   } catch {
-    return { error: NOT_ALLOWED };
+    return { error: "Only an admin can load the Invicta master." };
   }
   if (!isSheetRows(sheets)) return { error: "That file could not be read as Invicta's master file." };
 
@@ -154,7 +156,7 @@ export async function uploadMasterRows(fileName: string, sheets: SheetRows): Pro
   if (r.costsFilled > 0) details.push(`${r.costsFilled} missing cost(s) filled in.`);
   if (r.costsChanged > 0) {
     details.push(
-      `${r.costsChanged} cost(s) changed to this file's: ${r.costsUp} went up, ${r.costsDown} went down. Each one is listed on Master uploads, old and new.`,
+      `${r.costsChanged} cost(s) changed to this file's: ${r.costsUp} went up, ${r.costsDown} went down. Each one is listed on the Invicta master tab, old and new.`,
     );
     // An older master picked by mistake moves costs back, mostly one way.
     if (r.costsChanged >= 20 && Math.max(r.costsUp, r.costsDown) / r.costsChanged >= 0.8) {

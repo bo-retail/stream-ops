@@ -131,6 +131,9 @@ export async function requireUserOrThrow(): Promise<AuthUser> {
   return user;
 }
 
+/** Admins only see cost — the rule lives in `./cost` so scripts can use it. */
+export { canSeeCost } from "./cost";
+
 export async function requireBossOrThrow(): Promise<AuthUser> {
   const user = await requireUserOrThrow();
   if (user.role !== "BOSS") throw new AuthorizationError("Only an admin can do that.");

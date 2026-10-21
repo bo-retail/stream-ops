@@ -39,6 +39,7 @@ const BOSS_NAV: NavItem[] = [
   { href: "/shipping/log", label: "Shipping log", icon: "analytics" },
   { href: "/shipping", label: "Packing", icon: "shipping" },
   { href: "/inventory", label: "Inventory", icon: "inventory" },
+  { href: "/admin/master", label: "Invicta master", icon: "reports" },
   { href: "/admin/timesheets", label: "Payroll", icon: "payroll" },
   { href: "/admin/team", label: "Team", icon: "team" },
   { href: "/admin/activity", label: "Activity log", icon: "analytics" },

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
+import { requireBossOrThrow } from "@/lib/auth/guards";
 import { readGoal } from "@/lib/domain/morning";
 import { saveMorningGoal } from "@/lib/server/morning";
 
@@ -9,9 +9,10 @@ import { saveMorningGoal } from "@/lib/server/morning";
 export async function saveGoal(revenue: string, margin: string): Promise<{ error?: string; ok?: string }> {
   let user;
   try {
-    user = await requireShippingDirectorOrThrow();
+    // The goal includes a margin, and margin is for admins only.
+    user = await requireBossOrThrow();
   } catch {
-    return { error: "Only an admin or a shipping director can do that." };
+    return { error: "Only an admin can change the goal." };
   }
   const r = readGoal(revenue, margin);
   if (!r.ok) return { error: r.why };

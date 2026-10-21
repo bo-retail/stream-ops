@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Alert, Card, CardHeader, EmptyState, LinkButton, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
-import { requireShippingDirector } from "@/lib/auth/guards";
+import { canSeeCost, requireShippingDirector } from "@/lib/auth/guards";
 import { addDays, formatDate, isDateISO, todayISO } from "@/lib/domain/dates";
 import { formatMoney } from "@/lib/domain/insights";
 import {
@@ -30,6 +30,8 @@ const money = (c: number | null) => (c === null ? "—" : c < 0 ? `−${formatMo
  */
 export default async function MorningPage({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
   const user = await requireShippingDirector();
+  // Cost of goods and margin say what a watch costs us: admins only.
+  const seeCost = canSeeCost(user);
   const today = todayISO((await getSettings()).timezone);
   const { date: asked } = await searchParams;
   const date = asked && isDateISO(asked) ? asked : ((await latestShowDay(today)) ?? addDays(today, -1));
@@ -46,16 +48,22 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
     <>
       <PageHeader
         title="Morning numbers"
-        description={`A show day's watch sales: revenue, cost of goods, gross margin, average price and units, against ${formatMoney(DAILY_GOAL_CENTS)} a day at ${pct(MARGIN_GOAL)}.`}
+        description={
+          seeCost
+            ? `A show day's watch sales: revenue, cost of goods, gross margin, average price and units, against ${formatMoney(DAILY_GOAL_CENTS)} a day at ${pct(MARGIN_GOAL)}.`
+            : `A show day's watch sales: revenue, average price and units, against ${formatMoney(DAILY_GOAL_CENTS)} a day.`
+        }
         action={<LinkButton href="/inventory">Back to inventory</LinkButton>}
       />
       <div className="space-y-5">
         <div className="flex flex-wrap items-center gap-3">
           <DayPicker date={date} />
           <span className="text-sm text-ink-muted">{formatDate(date, "long")}</span>
-          <div className="ml-auto">
-            <GoalForm dailyDollars={DAILY_GOAL_CENTS / 100} marginPercent={Math.round(MARGIN_GOAL * 10_000) / 100} />
-          </div>
+          {seeCost ? (
+            <div className="ml-auto">
+              <GoalForm dailyDollars={DAILY_GOAL_CENTS / 100} marginPercent={Math.round(MARGIN_GOAL * 10_000) / 100} />
+            </div>
+          ) : null}
         </div>
 
         {missingReports.length > 0 ? (
@@ -80,13 +88,17 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
                 sub={`${Math.round((t.revenueCents / DAILY_GOAL_CENTS) * 100)}% of the ${formatMoney(DAILY_GOAL_CENTS)} goal`}
                 tone={t.revenueCents >= DAILY_GOAL_CENTS ? "ok" : "warn"}
               />
-              <Stat label="Gross margin" value={pct(m)} sub={`${money(grossMargin(t))} · goal ${pct(MARGIN_GOAL)}`} tone={m === null ? undefined : m >= MARGIN_GOAL ? "ok" : "warn"} />
-              <Stat label="Cost of goods" value={formatMoney(t.cogsCents)} />
+              {seeCost ? (
+                <>
+                  <Stat label="Gross margin" value={pct(m)} sub={`${money(grossMargin(t))} · goal ${pct(MARGIN_GOAL)}`} tone={m === null ? undefined : m >= MARGIN_GOAL ? "ok" : "warn"} />
+                  <Stat label="Cost of goods" value={formatMoney(t.cogsCents)} />
+                </>
+              ) : null}
               <Stat label="Units" value={t.units} />
               <Stat label="Average price" value={money(averagePrice(t))} />
             </div>
 
-            <Notes f={t} startDate={startDate} date={date} />
+            <Notes f={t} startDate={startDate} date={date} seeCost={seeCost} />
 
             <Card>
               <CardHeader title="By show" />
@@ -98,9 +110,13 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
                     <Th className="text-right">Share</Th>
                     <Th className="text-right">Units</Th>
                     <Th className="text-right">Avg price</Th>
-                    <Th className="text-right">Cost of goods</Th>
-                    <Th className="text-right">Gross margin</Th>
-                    <Th className="text-right">GM %</Th>
+                    {seeCost ? (
+                      <>
+                        <Th className="text-right">Cost of goods</Th>
+                        <Th className="text-right">Gross margin</Th>
+                        <Th className="text-right">GM %</Th>
+                      </>
+                    ) : null}
                   </tr>
                 </thead>
                 <tbody>
@@ -110,7 +126,7 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
                       return (
                         <tr key={s}>
                           <Td>{s}</Td>
-                          <Td colSpan={7} className="text-ink-subtle">No sales</Td>
+                          <Td colSpan={seeCost ? 7 : 4} className="text-ink-subtle">No sales</Td>
                         </tr>
                       );
                     }
@@ -122,9 +138,13 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
                         <Td className="text-right tabular-nums">{t.revenueCents ? `${Math.round((f.revenueCents / t.revenueCents) * 100)}%` : "—"}</Td>
                         <Td className="text-right tabular-nums">{f.units}</Td>
                         <Td className="text-right tabular-nums">{money(averagePrice(f))}</Td>
-                        <Td className="text-right tabular-nums">{formatMoney(f.cogsCents)}</Td>
-                        <Td className="text-right tabular-nums">{money(grossMargin(f))}</Td>
-                        <Td className={`text-right tabular-nums ${r !== null && r < MARGIN_GOAL ? "text-warn-700" : ""}`}>{pct(r)}</Td>
+                        {seeCost ? (
+                          <>
+                            <Td className="text-right tabular-nums">{formatMoney(f.cogsCents)}</Td>
+                            <Td className="text-right tabular-nums">{money(grossMargin(f))}</Td>
+                            <Td className={`text-right tabular-nums ${r !== null && r < MARGIN_GOAL ? "text-warn-700" : ""}`}>{pct(r)}</Td>
+                          </>
+                        ) : null}
                       </tr>
                     );
                   })}
@@ -143,7 +163,7 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
                 <Th className="text-right">Revenue</Th>
                 <Th className="text-right">Of goal</Th>
                 <Th className="text-right">Units</Th>
-                <Th className="text-right">GM %</Th>
+                {seeCost ? <Th className="text-right">GM %</Th> : null}
               </tr>
             </thead>
             <tbody>
@@ -155,7 +175,7 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
                   <Td className="text-right tabular-nums">{d.total.units ? formatMoney(d.total.revenueCents) : "—"}</Td>
                   <Td className="text-right tabular-nums">{d.total.units ? `${Math.round((d.total.revenueCents / DAILY_GOAL_CENTS) * 100)}%` : "—"}</Td>
                   <Td className="text-right tabular-nums">{d.total.units || "—"}</Td>
-                  <Td className="text-right tabular-nums">{d.total.units ? pct(marginRate(d.total)) : "—"}</Td>
+                  {seeCost ? <Td className="text-right tabular-nums">{d.total.units ? pct(marginRate(d.total)) : "—"}</Td> : null}
                 </tr>
               ))}
             </tbody>
@@ -166,11 +186,14 @@ export default async function MorningPage({ searchParams }: { searchParams: Prom
   );
 }
 
-/** What the margin rests on, said plainly. */
-function Notes({ f, startDate, date }: { f: Figures; startDate: string | null; date: string }) {
+/**
+ * What the figures rest on, said plainly. Somebody who may not see cost gets
+ * only the notes that say nothing about it.
+ */
+function Notes({ f, startDate, date, seeCost }: { f: Figures; startDate: string | null; date: string; seeCost: boolean }) {
   const notes: string[] = [];
   const are = (n: number) => (n > 1 ? `${n} units are` : "1 unit is");
-  if (f.estimatedUnits > 0) {
+  if (seeCost && f.estimatedUnits > 0) {
     notes.push(
       startDate === null || startDate > date
         ? `${are(f.estimatedUnits)} costed at the model's cost today: sales were not coming off stock yet on this day, so there is no cost from the moment of sale.`
@@ -178,9 +201,13 @@ function Notes({ f, startDate, date }: { f: Figures; startDate: string | null; d
     );
   }
   if (f.unnamedUnits > 0) {
-    notes.push(`${f.unnamedUnits} random pull${f.unnamedUnits > 1 ? "s" : ""} not named yet (no Model # and not scanned): the revenue counts, the margin leaves ${f.unnamedUnits > 1 ? "them" : "it"} out until packing names the watch.`);
+    notes.push(
+      seeCost
+        ? `${f.unnamedUnits} random pull${f.unnamedUnits > 1 ? "s" : ""} not named yet (no Model # and not scanned): the revenue counts, the margin leaves ${f.unnamedUnits > 1 ? "them" : "it"} out until packing names the watch.`
+        : `${f.unnamedUnits} random pull${f.unnamedUnits > 1 ? "s" : ""} not named yet (no Model # and not scanned): packing names the watch when it is scanned.`,
+    );
   }
-  if (f.uncostedUnits > 0) {
+  if (seeCost && f.uncostedUnits > 0) {
     notes.push(`${are(f.uncostedUnits)} of a model with no cost at all: the revenue counts, the margin leaves ${f.uncostedUnits > 1 ? "them" : "it"} out. Add the cost on the model's page, or add the model if it is not in the catalogue yet.`);
   }
   if (f.cancelledUnits > 0) {
@@ -188,7 +215,7 @@ function Notes({ f, startDate, date }: { f: Figures; startDate: string | null; d
   }
   if (notes.length === 0) return null;
   return (
-    <Alert tone={f.uncostedUnits + f.unnamedUnits > 0 ? "warn" : "info"}>
+    <Alert tone={(seeCost ? f.uncostedUnits : 0) + f.unnamedUnits > 0 ? "warn" : "info"}>
       <ul className="list-disc space-y-0.5 pl-5">
         {notes.map((n, i) => <li key={i}>{n}</li>)}
       </ul>

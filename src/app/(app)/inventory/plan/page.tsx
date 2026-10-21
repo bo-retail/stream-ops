@@ -3,8 +3,9 @@ import { DAY_PLAN_OFF_MESSAGE, DAY_PLAN_ON } from "@/lib/domain/features";
 import Link from "next/link";
 import { Alert, Card, CardHeader, LinkButton, PageHeader, Table, Td, Th } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
-import { requireShippingDirector } from "@/lib/auth/guards";
+import { canSeeCost, requireShippingDirector } from "@/lib/auth/guards";
 import { formatDate, isDateISO, todayISO } from "@/lib/domain/dates";
+import { score } from "@/lib/domain/show-plan";
 import { bringStockUpToDateQuietly } from "@/lib/server/deduction";
 import { getSettings } from "@/lib/server/settings";
 import { getPlanDay } from "@/lib/server/show-plan";
@@ -90,7 +91,10 @@ export default async function PlanPage({ searchParams }: { searchParams: Promise
 
         <PlanTable
           date={date}
-          rows={day.rows}
+          // Ranked here, with cost, so cost need not reach the page of somebody
+          // who may not see it.
+          rows={day.rows.map((r) => ({ ...r, rank: score(r), costCents: canSeeCost(user) ? r.costCents : null }))}
+          showCost={canSeeCost(user)}
           proposal={day.proposal}
           saved={day.saved ? { version: day.saved.version, savedAt: day.saved.savedAt.toISOString(), savedBy: day.saved.savedBy } : null}
           current={day.current}

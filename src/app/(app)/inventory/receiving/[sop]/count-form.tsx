@@ -31,7 +31,7 @@ const BOX =
  * ones included; a blank row has not been counted yet and is left alone. A
  * model that came without being on the list is added at the bottom.
  */
-export function CountForm({ sop, lines }: { sop: string; lines: CountLine[] }) {
+export function CountForm({ sop, lines, showCost }: { sop: string; lines: CountLine[]; showCost: boolean }) {
   const before = (l: CountLine) => (l.counted === null ? null : { counted: l.counted, damaged: l.damaged ?? 0 });
   const uncounted = lines.filter((l) => l.listed > 0 && l.counted === null).length;
   const anyCounted = lines.some((l) => l.counted !== null);
@@ -118,11 +118,13 @@ export function CountForm({ sop, lines }: { sop: string; lines: CountLine[] }) {
                   <span className="block text-xs text-ink-muted">On the list</span>
                   <span className="tabular font-medium">{l.listed === 0 ? "not listed" : l.listed}</span>
                 </div>
-                <div className="w-28 text-sm">
-                  <span className="block text-xs text-ink-muted">Price</span>
-                  <span className={`tabular ${priceDiffers ? "font-semibold text-warn-700" : ""}`}>{usd(l.priceCents)}</span>
-                  {priceDiffers ? <span className="block text-xs text-warn-700">offer said {usd(l.offerCents)}</span> : null}
-                </div>
+                {showCost ? (
+                  <div className="w-28 text-sm">
+                    <span className="block text-xs text-ink-muted">Price</span>
+                    <span className={`tabular ${priceDiffers ? "font-semibold text-warn-700" : ""}`}>{usd(l.priceCents)}</span>
+                    {priceDiffers ? <span className="block text-xs text-warn-700">offer said {usd(l.offerCents)}</span> : null}
+                  </div>
+                ) : null}
                 <label>
                   <span className="block text-xs text-ink-muted">Counted (total)</span>
                   <input

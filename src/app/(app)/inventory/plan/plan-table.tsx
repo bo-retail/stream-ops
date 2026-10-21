@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Download } from "lucide-react";
 import { Alert, Button, Card, CardHeader, EmptyState, Input, Select, Table, Td, Th } from "@/components/ui";
 import { WatchImage } from "@/components/watch-image";
-import { EBAY_CAP, defaultSetPrice, marginAtTp, score, type PlanLine } from "@/lib/domain/show-plan";
+import { EBAY_CAP, defaultSetPrice, marginAtTp, type PlanLine } from "@/lib/domain/show-plan";
 import type { PlanRow } from "@/lib/server/show-plan";
 import { releaseFileAction, savePlanAction, type PlanState } from "./actions";
 
@@ -52,9 +52,13 @@ export function PlanTable({
   saved,
   current,
   files,
+  showCost,
 }: {
   date: string;
-  rows: PlanRow[];
+  /** `rank` is worked out on the server, so a row can arrive without its cost. */
+  rows: (PlanRow & { rank: number })[];
+  /** Margin is for admins only: the column is hidden, and cost is not sent. */
+  showCost: boolean;
   proposal: Record<string, { AM: number; PM: number }>;
   saved: { version: number; savedAt: string; savedBy: string | null } | null;
   current: PlanLine[];
@@ -113,7 +117,7 @@ export function PlanTable({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fixedKey]);
 
-  const ordered = useMemo(() => [...rows].sort((a, b) => score(b) - score(a) || a.model.localeCompare(b.model)), [rows]);
+  const ordered = useMemo(() => [...rows].sort((a, b) => b.rank - a.rank || a.model.localeCompare(b.model)), [rows]);
   const shown = filter.trim()
     ? ordered.filter((r) => `${r.model} ${r.description}`.toLowerCase().includes(filter.trim().toLowerCase()))
     : ordered;
@@ -271,7 +275,7 @@ export function PlanTable({
               <Th>Model</Th>
               <Th className="text-right">Shelf</Th>
               <Th className="text-right">TP</Th>
-              <Th className="text-right">Margin</Th>
+              {showCost ? <Th className="text-right">Margin</Th> : null}
               <Th className="text-right">Sold, 7 days</Th>
               <Th className="text-right">AM eBay</Th>
               <Th className="text-right">PM eBay</Th>
@@ -295,7 +299,7 @@ export function PlanTable({
                   </Td>
                   <Td className="text-right tabular-nums">{r.available}</Td>
                   <Td className="text-right tabular-nums">{money(r.tpCents)}</Td>
-                  <Td className="text-right tabular-nums">{m === null ? "—" : `${Math.round(m * 100)}%`}</Td>
+                  {showCost ? <Td className="text-right tabular-nums">{m === null ? "—" : `${Math.round(m * 100)}%`}</Td> : null}
                   <Td className="text-right tabular-nums">{r.soldLast7}</Td>
                   {(["AM", "PM"] as const).map((show) => (
                     <Td key={show} className="text-right">

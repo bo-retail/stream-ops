@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireShippingDirectorOrThrow } from "@/lib/auth/guards";
+import { canSeeCost, requireShippingDirectorOrThrow } from "@/lib/auth/guards";
 import { isDateISO, todayISO } from "@/lib/domain/dates";
 import { isSheetRows } from "@/lib/domain/inventory-sheets";
 import type { SheetRows } from "@/lib/domain/inventory-sheets";
@@ -92,11 +92,11 @@ export async function uploadShippingListRows(fileName: string, sheets: SheetRows
 
 /* -------------------------------------------------------------- the count */
 
-function countMessage(r: ShipmentCountResult): ReceivingState {
+function countMessage(r: ShipmentCountResult, seeCost: boolean): ReceivingState {
   const details: string[] = [];
   if (r.activated.length > 0) details.push(`Now active, ready for shows: ${r.activated.join(", ")}.`);
   if (r.notOnList.length > 0) details.push(`Not on the list, added as a difference with Invicta: ${r.notOnList.join(", ")}.`);
-  for (const c of r.costChanges.slice(0, 20)) details.push(`${c.model}: cost ${money(c.before)} → ${money(c.after)}.`);
+  if (seeCost) for (const c of r.costChanges.slice(0, 20)) details.push(`${c.model}: cost ${money(c.before)} → ${money(c.after)}.`);
   return { ok: r.changed === 0 ? "Saved — nothing changed." : `Saved: ${r.changed} line(s) changed.`, details: details.length > 0 ? details : undefined };
 }
 
@@ -134,7 +134,7 @@ export async function countShipment(
   const r = await saveShipmentCount(user.id, String(sop), entries, "shipment page");
   if (!r.ok) return { error: "Nothing was saved:", details: r.problems };
   refresh();
-  return countMessage(r);
+  return countMessage(r, canSeeCost(user));
 }
 
 /** A filled-in shipment count sheet. */
@@ -153,7 +153,7 @@ export async function uploadShipmentCount(sop: string, _prev: ReceivingState, fo
   const r = await saveShipmentCount(user.id, sop, sheet.entries, `count sheet ${file.name}`, { sheetDownloadedAt: sheet.downloadedAt });
   if (!r.ok) return { error: "Nothing was saved:", details: r.problems.slice(0, 50) };
   refresh();
-  return countMessage(r);
+  return countMessage(r, canSeeCost(user));
 }
 
 /** Every model on the list not counted yet is counted as 0: short, for Invicta. */
@@ -182,7 +182,7 @@ export async function saveModelDetails(model: string, values: DetailsEntry["valu
   const user = await director();
   if (!user) return { error: NOT_ALLOWED };
   if (!values || typeof values !== "object") return { error: "Those details could not be read." };
-  const r = await saveDetails(user.id, [{ model: String(model), values }], "model page");
+  const r = await saveDetails(user.id, [{ model: String(model), values }], "model page", { allowCost: canSeeCost(user) });
   if (!r.ok) return { error: "Not saved:", details: r.problems };
   refresh();
   return {
@@ -201,7 +201,7 @@ export async function uploadDetails(_prev: ReceivingState, formData: FormData): 
   const sheet = await readDetailsSheet(await file.arrayBuffer());
   if (sheet.problems.length > 0) return { error: sheet.problems.join(" ") };
   if (sheet.entries.length === 0) return { error: "No rows with a model number were found." };
-  const r = await saveDetails(user.id, sheet.entries, `product details sheet ${file.name}`);
+  const r = await saveDetails(user.id, sheet.entries, `product details sheet ${file.name}`, { allowCost: canSeeCost(user) });
   if (!r.ok) return { error: "Nothing was saved. Fix these and upload it again:", details: r.problems.slice(0, 50) };
   refresh();
   return {

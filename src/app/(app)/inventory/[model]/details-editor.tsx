@@ -51,11 +51,13 @@ const LABEL: Record<string, string> = { TP: "Target price", "eBay shipping profi
  * product details sheet — what is typed replaces what is there, a blank keeps
  * it, and cost is only filled when the model has none.
  */
-export function DetailsEditor({ model, details }: { model: string; details: Details }) {
+export function DetailsEditor({ model, details, showCost }: { model: string; details: Details; showCost: boolean }) {
   const router = useRouter();
+  // Cost is for admins only: not shown, not typed, never sent.
+  const fields = FIELDS.filter(([col]) => showCost || col !== "Cost");
   const start = () =>
     Object.fromEntries(
-      FIELDS.map(([col, key, kind]) => {
+      fields.map(([col, key, kind]) => {
         const v = details[key];
         return [col, kind === "money" ? money(v as number | null) : kind === "num" ? num(v as number | null) : String(v ?? "")];
       }),
@@ -69,7 +71,7 @@ export function DetailsEditor({ model, details }: { model: string; details: Deta
     ["Brand", details.brand],
     ["Collection", details.collection],
     ["Gender", details.gender],
-    ["Cost", show(details.costCents)],
+    ...(showCost ? ([["Cost", show(details.costCents)]] as [string, string][]) : []),
     ["Target price", show(details.tpCents)],
     ["MSRP", show(details.msrpCents)],
     ["TikTok box", details.weightLb !== null ? `${details.weightLb} lb · ${details.lengthIn ?? "?"}×${details.widthIn ?? "?"}×${details.heightIn ?? "?"} in` : ""],
@@ -123,7 +125,7 @@ export function DetailsEditor({ model, details }: { model: string; details: Deta
       }}
     >
       <div className="grid grid-cols-2 gap-3">
-        {FIELDS.map(([col, , kind]) => (
+        {fields.map(([col, , kind]) => (
           <label key={col} className={kind === "wide" ? "col-span-2" : ""}>
             <span className="block text-xs text-ink-muted">
               {LABEL[col] ?? col}

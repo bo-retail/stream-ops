@@ -88,7 +88,14 @@ export interface DetailsResult {
 }
 
 /** Save product details for one model or many. All or nothing. */
-export async function saveDetails(userId: string, entries: DetailsEntry[], source: string): Promise<DetailsResult> {
+export async function saveDetails(
+  userId: string,
+  entries: DetailsEntry[],
+  source: string,
+  /** False for somebody who may not see cost: any cost they send is ignored. */
+  opts: { allowCost?: boolean } = {},
+): Promise<DetailsResult> {
+  const allowCost = opts.allowCost !== false;
   const fail = (problems: string[]): DetailsResult => ({ ok: false, updated: [], unchanged: 0, costKept: [], problems });
   const problems: string[] = [];
   const read: { model: string; change: Change }[] = [];
@@ -106,7 +113,7 @@ export async function saveDetails(userId: string, entries: DetailsEntry[], sourc
       continue;
     }
     seen.add(model);
-    const r = readDetails(e);
+    const r = readDetails(allowCost ? e : { ...e, values: { ...e.values, Cost: null } });
     problems.push(...r.problems.map((p) => `${at}${p}`));
     read.push({ model, change: r.change });
   }
@@ -177,12 +184,14 @@ export async function saveDetails(userId: string, entries: DetailsEntry[], sourc
  * other model, each with what it has now. Change what is wrong, fill what is
  * blank, upload it.
  */
-export async function detailsSheet(): Promise<ArrayBuffer> {
+export async function detailsSheet(opts: { withCost?: boolean } = {}): Promise<ArrayBuffer> {
+  const withCost = opts.withCost !== false;
   const products = await prisma.product.findMany({ orderBy: [{ needsDetails: "desc" }, { active: "asc" }, { model: "asc" }] });
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Product details", { views: [{ state: "frozen", ySplit: 2 }] });
   ws.getCell("A1").value =
-    "Fill in or correct, then upload. A blank cell keeps what the model has. Cost only fills a missing cost. " +
+    "Fill in or correct, then upload. A blank cell keeps what the model has. " +
+    (withCost ? "Cost only fills a missing cost. " : "Cost is left blank: it is set by an admin. ") +
     "Models still needing their details are at the top.";
   ws.getCell("A1").font = { italic: true, color: { argb: "FF5B6472" } };
   ws.getRow(2).values = [...DETAILS_COLUMNS];
@@ -191,7 +200,7 @@ export async function detailsSheet(): Promise<ArrayBuffer> {
   const money = (c: number | null) => (c === null ? null : c / 100);
   for (const p of products) {
     ws.addRow([
-      p.model, p.brand, p.collection, p.gender, p.description, money(p.costCents), money(p.tpCents), money(p.msrpCents),
+      p.model, p.brand, p.collection, p.gender, p.description, withCost ? money(p.costCents) : null, money(p.tpCents), money(p.msrpCents),
       p.weightLb, p.lengthIn, p.widthIn, p.heightIn, p.ebayShippingProfile, p.upc, p.imageUrl,
     ]);
   }

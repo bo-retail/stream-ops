@@ -60,7 +60,7 @@ const failed = (problem: string): MasterResult => ({
  * the first sheet that has it. It adds and updates; it never deletes a model,
  * Its cost is the cost (see `masterChanges`). Each upload is recorded whole —
  * what it added, and every cost it filled or changed, old and new — for the
- * Master uploads history.
+ * Invicta master tab's history.
  */
 /** What one master upload did, kept on its activity-log row for the history. */
 export interface MasterUploadRecord {
