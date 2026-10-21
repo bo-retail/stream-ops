@@ -92,7 +92,7 @@ function labelFor(business: Business, platform: Platform, slot: Slot): string {
  * `showDate` is the day it belongs to, which is why this needs no window wider
  * than the period: unlike a shift tag, it cannot name some other day.
  */
-async function salesByShow(from: DateISO, to: DateISO): Promise<Map<string, ShowSales>> {
+export async function salesByShow(from: DateISO, to: DateISO): Promise<Map<string, ShowSales>> {
   const batchIds = await latestBatchIds(from, to);
   const byShow = new Map<string, ShowSales>();
   if (batchIds.length === 0) return byShow;

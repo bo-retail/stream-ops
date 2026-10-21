@@ -1,7 +1,8 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { fromDbDate, toDbDate } from "@/lib/domain/dates";
-import type { DateISO } from "@/lib/domain/types";
+import type { Business } from "@/lib/domain/business";
+import type { DateISO, Platform } from "@/lib/domain/types";
 
 /**
  * Which uploads a date range's sales actually come from.
@@ -16,6 +17,14 @@ import type { DateISO } from "@/lib/domain/types";
  * it. The workbook and the insights both read from it.
  */
 export async function latestBatchIds(from: DateISO, to: DateISO): Promise<string[]> {
+  return (await latestBatches(from, to)).map((b) => b.id);
+}
+
+/** The same uploads as `latestBatchIds`, with which checklist line each fills. */
+export async function latestBatches(
+  from: DateISO,
+  to: DateISO,
+): Promise<{ id: string; business: Business; dateISO: DateISO; platform: Platform | null; slot: string | null }[]> {
   const batches = await prisma.importBatch.findMany({
     where: { showDate: { gte: toDbDate(from), lte: toDbDate(to) }, status: "OK" },
     orderBy: { uploadedAt: "desc" },
@@ -34,12 +43,18 @@ export async function latestBatchIds(from: DateISO, to: DateISO): Promise<string
     Superseded uploads stay on record so "what did the first one say" is still
     answerable; they are simply not what the day currently reads.
   */
-  const latest = new Map<string, string>();
+  const latest = new Map<string, (typeof batches)[number]>();
   for (const batch of batches) {
     const key = `${batch.business}|${fromDbDate(batch.showDate)}|${batch.platform ?? ""}|${batch.slot ?? ""}`;
-    if (!latest.has(key)) latest.set(key, batch.id);
+    if (!latest.has(key)) latest.set(key, batch);
   }
-  return [...latest.values()];
+  return [...latest.values()].map((b) => ({
+    id: b.id,
+    business: b.business,
+    dateISO: fromDbDate(b.showDate),
+    platform: b.platform,
+    slot: b.slot,
+  }));
 }
 
 /** The earliest and latest show day anything has been loaded for. */
