@@ -8,6 +8,12 @@
  * the labels at 5:15 AM Pacific — and its report was not uploaded yet. Nothing
  * on the screen said so, and the box would have closed itself "complete" at 6.
  *
+ * 10/22: the yellow "not uploaded yet" warning, and the box that would not
+ * close itself while it showed, were taken out again. Gladys compares the
+ * printed slip with the screen and sets a short parcel aside herself. So a box
+ * closes itself on the last watch the screen lists, whatever is still to be
+ * uploaded; these are the same situations, checked against that.
+ *
  * The situations:
  *   - a combined order across two shows on one day, the second file later
  *   - a combined order across two days (night, then next morning's early show)
@@ -30,7 +36,7 @@ import { toDbDate } from "../src/lib/domain/dates";
 import { tiktokReport } from "../src/lib/domain/imports/synthetic-exports";
 import type { TiktokOptions } from "../src/lib/domain/imports/synthetic-exports";
 import { runImport } from "../src/lib/server/imports";
-import { WAITING_NOTE, getBoxById, openBoxByScan, packItem, sealBox } from "../src/lib/server/packing";
+import { getBoxById, openBoxByScan, packItem, sealBox } from "../src/lib/server/packing";
 
 assertDevDatabase("check-short-box.mts");
 
@@ -51,7 +57,8 @@ const CALLED_OFF = "2021-08-26";
 const DRAFT = "2021-08-28";
 const NO_SHOWS = "2021-08-30";
 const BY_HAND = "2021-09-01";
-const ALL = [TWO_SHOWS, NIGHT_1, EARLY_2, CANCEL, PACKERS, CALLED_OFF, DRAFT, NO_SHOWS, BY_HAND];
+const NEXT_EARLY = "2021-09-02";
+const ALL = [TWO_SHOWS, NIGHT_1, EARLY_2, CANCEL, PACKERS, CALLED_OFF, DRAFT, NO_SHOWS, BY_HAND, NEXT_EARLY];
 const PREFIX = "check: short box ";
 
 async function clean() {
@@ -142,27 +149,28 @@ try {
   await upload([tiktok("day.csv", TWO_SHOWS, 2, "71000001", { time: DAY_TIME, tracking: L1, buyer: "pat", names: ["A1", "A2"] })]);
   let box = await boxOf(L1);
   check("the box has the day show's two", await contents(L1), ["A1 0/1", "A2 0/1"]);
-  check("and says the night report is still to come", box.waitingOn, ["TikTok Night show, Mon Aug 16"]);
   await openBoxByScan(boss.id, L1);
   await packItem(boss.id, box.id, "A1");
   const last = await packItem(boss.id, box.id, "A2");
-  check("everything on the screen in: it does not close itself", last.kind === "box" && !last.autoClosed && last.box.status === "OPEN", true);
+  check(
+    "everything on the screen in: it closes itself, night file or not",
+    last.kind === "box" && last.autoClosed === true && last.box.status === "CLOSED_COMPLETE",
+    true,
+  );
+  check(
+    "the close carries only the usual note, nothing about uploads",
+    (await prisma.scanEvent.findFirst({ where: { packageId: box.id, kind: "CLOSE_COMPLETE" }, select: { note: true } }))?.note,
+    "Closed automatically: the last item was scanned.",
+  );
 
-  await upload([tiktok("night.csv", TWO_SHOWS, 3, "71000002", { time: NIGHT_TIME, tracking: L1, buyer: "pat", names: ["B1", "B2", "B3"] })]);
-  box = await boxOf(L1);
-  check("the night file adds its three, what was scanned stays", await contents(L1), ["A1 1/1", "A2 1/1", "B1 0/1", "B2 0/1", "B3 0/1"]);
-  check("nothing left to wait for", box.waitingOn, []);
-  await packItem(boss.id, box.id, "B1");
-  await packItem(boss.id, box.id, "B2");
-  const done = await packItem(boss.id, box.id, "B3");
-  check("the last one closes it complete", done.kind === "box" && done.autoClosed === true && done.box.status === "CLOSED_COMPLETE", true);
-
-  console.log("\nThe same night file uploaded again.");
-  await upload([tiktok("night (1).csv", TWO_SHOWS, 3, "71000002", { time: NIGHT_TIME, tracking: L1, buyer: "pat", names: ["B1", "B2", "B3"] })]);
-  check("the packed box is unchanged", [await contents(L1), (await boxOf(L1)).status], [
-    ["A1 1/1", "A2 1/1", "B1 1/1", "B2 1/1", "B3 1/1"],
-    "CLOSED_COMPLETE",
-  ]);
+  console.log("The night file goes up after the box closed itself.");
+  const late = await upload([tiktok("night.csv", TWO_SHOWS, 3, "71000002", { time: NIGHT_TIME, tracking: L1, buyer: "pat", names: ["B1", "B2", "B3"] })]);
+  check("the closed box is not changed", [await contents(L1), (await boxOf(L1)).status], [["A1 1/1", "A2 1/1"], "CLOSED_COMPLETE"]);
+  check(
+    "whoever uploads is told that parcel was packed without the night's watches",
+    late.flags.some((f) => f.message.includes("packed before this report added a piece") && f.message.includes(L1)),
+    true,
+  );
 
   /* ------------------------------------- two days: night, then next early show */
 
@@ -175,7 +183,6 @@ try {
   await upload([tiktok("night.csv", NIGHT_1, 2, "72000003", { time: NIGHT_TIME, tracking: L2, buyer: "mike", names: ["N1", "N2"] })]);
   box = await boxOf(L2);
   check("the night's two are there", await contents(L2), ["N1 0/1", "N2 0/1"]);
-  check("and it says the next early show's report is still to come", box.waitingOn, ["TikTok EARLY AM show, Thu Aug 19"]);
 
   console.log("The early show's orders so far uploaded, then its whole file later.");
   const early = (n: number) =>
@@ -188,7 +195,6 @@ try {
   await upload([early(2)]);
   box = await boxOf(L2);
   check("the box has all four", await contents(L2), ["E1 0/1", "E2 0/1", "N1 0/1", "N2 0/1"]);
-  check("nothing left to wait for", box.waitingOn, []);
   await upload([early(4)]);
   check("the whole file later adds nothing twice", await contents(L2), ["E1 0/1", "E2 0/1", "N1 0/1", "N2 0/1"]);
   check(
@@ -213,7 +219,6 @@ try {
     await contents(L3),
     ["C1 0/1", "C2 0/1", "C4 1/0"],
   );
-  check("both shows are in, so nothing to wait for", (await boxOf(L3)).waitingOn, []);
 
   /* -------------------------------------------------------- two packers at once */
 
@@ -240,26 +245,33 @@ try {
   for (const [day, n] of [[CALLED_OFF, 5], [DRAFT, 6], [NO_SHOWS, 7]] as const) {
     await upload([tiktok("day.csv", day, 1, `7${n}000001`, { time: DAY_TIME, tracking: label(n), buyer: "lee", names: ["Q1"] })]);
     const b = await boxOf(label(n));
-    check(`${day}: nothing to wait for`, b.waitingOn, []);
     const r = await packItem(boss.id, b.id, "Q1");
     check(`${day}: closes itself as before`, r.kind === "box" && r.autoClosed === true, true);
   }
 
-  /* ------------------------------------------------- closing by hand while waiting */
+  /* ---------------------------------- the next early show's file still to come */
 
-  console.log("\nA box waiting for a report, everything on the screen in: the packer can close it.");
+  console.log("\nA night-show label, next morning's early show not uploaded: the last scan closes it.");
   await schedule(BY_HAND, ["DAY", "NIGHT"]);
+  await schedule(NEXT_EARLY, ["EARLY AM"]);
   const L8 = label(8);
-  await upload([tiktok("day.csv", BY_HAND, 1, "78000001", { time: DAY_TIME, tracking: L8, buyer: "ann", names: ["M1"] })]);
+  await upload([tiktok("night.csv", BY_HAND, 1, "78000001", { time: NIGHT_TIME, tracking: L8, buyer: "ann", names: ["M1"] })]);
   box = await boxOf(L8);
-  check("it is waiting for the night", box.waitingOn, ["TikTok Night show, Wed Sep 1"]);
-  await packItem(boss.id, box.id, "M1");
-  const sealed = await sealBox(boss.id, box.id, false);
-  check("closed complete by hand", sealed.kind === "box" ? sealed.box.status : sealed.kind, "CLOSED_COMPLETE");
+  await openBoxByScan(boss.id, L8);
+  const m1 = await packItem(boss.id, box.id, "M1");
+  check("closes itself complete", m1.kind === "box" && m1.autoClosed === true && m1.box.status === "CLOSED_COMPLETE", true);
+
+  console.log("\nA short box (the slip lists more) closed by hand: nothing added to the note.");
+  const L9 = label(9);
+  await upload([tiktok("day.csv", BY_HAND, 2, "79000001", { time: DAY_TIME, tracking: L9, buyer: "joy", names: ["K1", "K2"] })]);
+  box = await boxOf(L9);
+  await packItem(boss.id, box.id, "K1");
+  const sealed = await sealBox(boss.id, box.id, true, "slip lists 3");
+  check("closed incomplete by hand", sealed.kind === "box" ? sealed.box.status : sealed.kind, "CLOSED_INCOMPLETE");
   check(
-    "and the close says what was not uploaded yet",
-    (await prisma.scanEvent.findFirst({ where: { packageId: box.id, kind: "CLOSE_COMPLETE" }, select: { note: true } }))?.note,
-    `${WAITING_NOTE} TikTok Night show, Wed Sep 1`,
+    "the note is only what the packer wrote",
+    (await prisma.scanEvent.findFirst({ where: { packageId: box.id, kind: "CLOSE_INCOMPLETE" }, select: { note: true } }))?.note,
+    "slip lists 3",
   );
 } finally {
   await clean();

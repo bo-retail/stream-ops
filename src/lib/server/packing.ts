@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { formatDate, fromDbDate, toDbDate } from "@/lib/domain/dates";
+import { fromDbDate, toDbDate } from "@/lib/domain/dates";
 import type { Business } from "@/lib/domain/business";
 import {
   decidePlaceholderScan,
@@ -15,8 +15,7 @@ import {
   normaliseScan,
   normaliseStockNumber,
 } from "@/lib/domain/imports/tracking";
-import { reportsStillToCome } from "@/lib/domain/imports/reports-to-come";
-import { slotShort, type DateISO } from "@/lib/domain/types";
+import type { DateISO } from "@/lib/domain/types";
 import { catalogueSpelling } from "@/lib/domain/inventory";
 import { packingDayISO } from "./settings";
 
@@ -71,13 +70,6 @@ export interface PackingBoxView {
   complete: boolean;
   closedByName: string | null;
   closedAt: Date | null;
-  /**
-   * The TikTok shows whose report is not uploaded yet and could still have
-   * pieces on this label — "TikTok EARLY AM show, Wed Oct 21". Nearly always empty.
-   * While it is not, the slip may list more than the screen, so the box does
-   * not close itself. See `domain/imports/reports-to-come`.
-   */
-  waitingOn: string[];
 }
 
 const SELECT = {
@@ -155,91 +147,12 @@ export function toBoxView(row: Row): PackingBoxView {
     complete: items.length > 0 && items.every((i) => i.outstanding === 0),
     closedByName: row.closedBy?.name ?? null,
     closedAt: row.closedAt,
-    waitingOn: [],
   };
-}
-
-/**
- * The reports an open TikTok watch box may still be waiting for.
- *
- * One label is everything a buyer bought before TikTok printed it, from every
- * show that ran by then, and the box can only hold what the reports uploaded so
- * far say. Diamonds are left out: their shop sends the whole day as one file,
- * which already covers both their shows.
- */
-async function waitingOnReports(row: Row): Promise<string[]> {
-  if (row.status !== "OPEN" || row.isUnrecognised || row.platform !== "TIKTOK" || row.business !== "WATCH") {
-    return [];
-  }
-  /*
-    Measured from the first day the label sold on, not the day the box is
-    filed under: a next-morning early show's file re-files the box onto that
-    day, and its day and night shows came after the label.
-  */
-  return reportsWaitedOn(prisma, row.trackingNumber);
-}
-
-/**
- * `waitingOnReports` for one label, against any client — the read-only
- * production lookup uses it inside its transaction. The caller decides the box
- * is an open, recognised TikTok watch box first; this does not check.
- */
-export async function reportsWaitedOn(
-  db: Pick<typeof prisma, "$queryRaw">,
-  trackingNumber: string,
-): Promise<string[]> {
-  /*
-    One query, one connection. This runs on every scan, and the pool holds
-    five connections: four queries at once per scan held back the other
-    scanner's close when two finished the same box together.
-  */
-  const [found] = await db.$queryRaw<
-    { firstSeen: Date | null; firstDay: string | null; shows: { date: string; slot: string; startsMs: number }[]; uploaded: string[] }[]
-  >`
-    WITH label AS (
-      SELECT min(b."uploadedAt") AS "firstSeen", min(s."showDate") AS "firstDay"
-        FROM "SalesRecord" s
-        JOIN "ImportBatch" b ON b.id = s."batchId"
-       WHERE s.tracking = ${trackingNumber} AND b.status = 'OK'
-    )
-    SELECT label."firstSeen",
-           to_char(label."firstDay", 'YYYY-MM-DD') AS "firstDay",
-           COALESCE((
-             SELECT json_agg(json_build_object(
-                      'date', to_char(sh.date, 'YYYY-MM-DD'),
-                      'slot', sh.slot,
-                      'startsMs', extract(epoch FROM sh."startsAt") * 1000))
-               FROM "Show" sh
-               JOIN "Release" r ON r.id = sh."releaseId"
-              WHERE sh.business = 'WATCH' AND sh.platform = 'TIKTOK' AND sh.status = 'SCHEDULED'
-                AND r."scheduleStatus" = 'PUBLISHED'
-                AND sh.date BETWEEN label."firstDay" AND label."firstDay" + 1
-           ), '[]') AS shows,
-           COALESCE((
-             SELECT json_agg(to_char(b."showDate", 'YYYY-MM-DD') || '|' || b.slot)
-               FROM "ImportBatch" b
-              WHERE b.business = 'WATCH' AND b.platform = 'TIKTOK' AND b.status = 'OK'
-                AND b.slot IS NOT NULL
-                AND b."showDate" BETWEEN label."firstDay" AND label."firstDay" + 1
-           ), '[]') AS uploaded
-      FROM label
-  `;
-  if (!found?.firstDay) return [];
-  return reportsStillToCome({
-    boxDay: found.firstDay as DateISO,
-    firstSeenAt: found.firstSeen,
-    shows: found.shows.map((s) => ({ date: s.date as DateISO, slot: s.slot, startsAt: new Date(Number(s.startsMs)) })),
-    uploadedSlots: new Set(found.uploaded),
-  }).map((r) => `TikTok ${slotShort(r.slot)} show, ${formatDate(r.date)}`);
-}
-
-async function viewOf(row: Row): Promise<PackingBoxView> {
-  return { ...toBoxView(row), waitingOn: await waitingOnReports(row) };
 }
 
 export async function getBoxById(id: string): Promise<PackingBoxView | null> {
   const row = await prisma.package.findUnique({ where: { id }, select: SELECT });
-  return row ? viewOf(row as Row) : null;
+  return row ? toBoxView(row as Row) : null;
 }
 
 /**
@@ -279,7 +192,7 @@ async function lookUpScan(rawScan: string): Promise<ScanLookup> {
   if (match.status !== "matched") return { kind: "none" };
 
   const row = candidates.find((c) => c.trackingNumber === match.tracking);
-  return row ? { kind: "box", box: await viewOf(row as Row) } : { kind: "none" };
+  return row ? { kind: "box", box: toBoxView(row as Row) } : { kind: "none" };
 }
 
 /**
@@ -457,7 +370,7 @@ export async function createUnknownBox(userId: string, rawScan: string): Promise
       select: SELECT,
     });
     if (!already) return { kind: "error", message: "That box could not be started. Try the scan again." };
-    const box = await viewOf(already as Row);
+    const box = toBoxView(already as Row);
     return box.status === "OPEN" ? { kind: "box", box } : { kind: "alreadyPacked", box };
   }
 
@@ -681,9 +594,7 @@ export const UNDO_GRACE_MS = 20_000;
  * label.
  *
  * Only that case. A box short, or with something added against the report,
- * still needs a person to say "close it incomplete". So does one still waiting
- * for a show's report (`waitingOn`): complete against the screen is not yet
- * complete against the slip. A box in no report has no
+ * still needs a person to say "close it incomplete". A box in no report has no
  * list to be complete against, so it is never closed for her.
  *
  * Conditional on the box still being open, so a packer at another scanner
@@ -694,9 +605,6 @@ async function closeIfComplete(userId: string, packageId: string): Promise<ScanO
   if (!box || box.status !== "OPEN" || box.isUnrecognised) return null;
   const over = box.items.some((i) => i.scanned > i.expected);
   if (!box.complete || over) return null;
-  // A show's report is still to come, so the slip may list more than the
-  // screen: the packer checks it and presses Close herself.
-  if (box.waitingOn.length > 0) return null;
 
   const closed = await prisma.$transaction(async (tx) => {
     const { count } = await tx.package.updateMany({
@@ -942,9 +850,6 @@ export async function overrideItem(
  * No reason is required — the system already knows exactly what was missing —
  * but a note is offered.
  */
-/** Starts the note on a box closed while a report it may need was still to come. */
-export const WAITING_NOTE = "Closed while not yet uploaded:";
-
 export async function sealBox(
   userId: string,
   packageId: string,
@@ -989,12 +894,7 @@ export async function sealBox(
         packageId,
         userId,
         kind: complete ? "CLOSE_COMPLETE" : "CLOSE_INCOMPLETE",
-        // Closed while a show's report was still to come: on record, so a
-        // parcel that later turns out short can be traced to this moment.
-        note:
-          [note?.trim(), box.waitingOn.length > 0 ? `${WAITING_NOTE} ${box.waitingOn.join("; ")}` : ""]
-            .filter(Boolean)
-            .join(" — ") || null,
+        note: note?.trim() || null,
       },
     }),
   ]);
