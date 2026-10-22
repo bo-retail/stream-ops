@@ -335,7 +335,8 @@ async function visit(page: Page, href: string, takeErrors: () => string[]): Prom
 
   if (status >= 400) problems.push(`HTTP ${status}`);
   const landed = new URL(page.url()).pathname;
-  if (landed !== href) problems.push(`sent to ${landed}`);
+  // A page opened with a query (a date range) lands on its path alone.
+  if (landed !== href.split("?")[0]) problems.push(`sent to ${landed}`);
   const screen = await errorScreen(page);
   if (screen) problems.push(`error screen: "${screen}"`);
 
@@ -396,6 +397,23 @@ async function walk(browser: Browser, position: Position, email: string) {
   const pages = NAV[position].map((n) => n.href);
   if (position === "ADMIN") pages.push(...ADMIN_EXTRA);
   for (const href of pages) record(who, href, await visit(page, href, takeErrors));
+
+  // The sales workbook carries the commission split: only the admin gets it,
+  // even on Sales insights, which shipping managers can open.
+  const admin = position === "ADMIN";
+  const workbook: string[] = [];
+  if (pages.includes("/insights")) {
+    await page.goto(`${BASE}/insights`, { timeout: PAGE_TIMEOUT });
+    const landed = new URL(page.url()).pathname;
+    if (landed !== "/insights") workbook.push(`sent to ${landed}`);
+    const links = await page.locator('a[href^="/api/sales/export"]').count();
+    if (admin ? links === 0 : links > 0) workbook.push(`${links} Download link(s) on Sales insights`);
+    // A range with no sales at all: the empty page, not an error.
+    record(who, "/insights with no sales in the range", await visit(page, "/insights?from=2030-01-01&to=2030-01-31", takeErrors));
+  }
+  const status = (await page.request.get(`${BASE}/api/sales/export?date=2026-01-01`)).status();
+  if (!admin && status !== 403) workbook.push(`the workbook answered ${status}, not 403`);
+  record(who, "sales workbook download (admin only)", workbook);
 
   for (const href of forbidden(position)) record(who, `${href} (must refuse)`, await refused(page, href, takeErrors));
 

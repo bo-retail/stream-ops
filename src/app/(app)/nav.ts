@@ -25,6 +25,7 @@ const PACKER_NAV: NavItem[] = [
 // Packing sits below the log: she can pack, but it is not what she is here for.
 const SHIPPING_DIRECTOR_NAV: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
+  { href: "/insights", label: "Sales insights", icon: "sales" },
   { href: "/sales-reports", label: "Sales report entry", icon: "reports" },
   { href: "/shipping/log", label: "Shipping log", icon: "analytics" },
   { href: "/shipping", label: "Packing", icon: "shipping" },

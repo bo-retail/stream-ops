@@ -13,7 +13,7 @@ import {
 } from "@/components/ui";
 import { DailyBars, MiniBar, SERIES, SplitBar } from "@/components/charts";
 import { WatchImage } from "@/components/watch-image";
-import { requireBoss } from "@/lib/auth/guards";
+import { requireShippingDirector } from "@/lib/auth/guards";
 import { ITEM_WORD } from "@/lib/domain/business";
 import { diffDays, formatDate, formatDateRange, isDateISO } from "@/lib/domain/dates";
 import { formatChange, formatMoney, formatMoneyShort } from "@/lib/domain/insights";
@@ -41,8 +41,9 @@ export const metadata: Metadata = { title: "Sales insights" };
  * The sections are ruled and named rather than being a wall of equal cards: five
  * questions in order, so the eye can stop at the first one it came for.
  *
- * Boss only. The shipping director loads the files and packs against them, but
- * what the business took is not her screen.
+ * The admin and the shipping director (Samuel, 22 October). No cost, margin or
+ * commission is on it; the Download stays the admin's, because the workbook
+ * carries the commission split.
  */
 
 /** A movement, as a chip: green up, red down, grey when there is nothing to say. */
@@ -113,7 +114,8 @@ export default async function InsightsPage({
 }: {
   searchParams: Promise<{ period?: string; from?: string; to?: string }>;
 }) {
-  await requireBoss();
+  // Shipping managers see it too (Samuel, 22 October): sales and pieces, no cost.
+  const user = await requireShippingDirector();
 
   const query = await searchParams;
   const presets = await rangePresets();
@@ -170,14 +172,17 @@ export default async function InsightsPage({
             </span>
           </span>
         }
+        // The workbook carries the commission split, so the download stays the admin's.
         action={
-          <a
-            href={`/api/sales/export?from=${range.from}&to=${range.to}`}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700"
-          >
-            <Download className="h-4 w-4" aria-hidden />
-            Download
-          </a>
+          user.role === "BOSS" ? (
+            <a
+              href={`/api/sales/export?from=${range.from}&to=${range.to}`}
+              className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700"
+            >
+              <Download className="h-4 w-4" aria-hidden />
+              Download
+            </a>
+          ) : undefined
         }
       />
 
