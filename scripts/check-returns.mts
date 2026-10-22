@@ -131,7 +131,7 @@ try {
   const twice = await back([[B, 1], [A, 2]], D1, "ordinary (1).xlsx");
   check("the same sheet again that day (rows in another order, another file name): asked, nothing added", [twice.ok, twice.problems[0]?.includes("already added"), await sellable(A)], [false, true, 7]);
   const fixed = await back([[A, 3], [B, 1]], D1, "ordinary fixed.xlsx");
-  check("a corrected sheet without undoing the first: asked, nothing added", [fixed.ok, fixed.problems[0]?.includes("undo it below first"), await sellable(A)], [false, true, 7]);
+  check("a corrected sheet without undoing the first: asked, nothing added", [fixed.ok, fixed.problems[0]?.includes("delete it below first"), await sellable(A)], [false, true, 7]);
   const redated = await back([[A, 2], [B, 1]], D2, "ordinary.xlsx");
   check("the same sheet with the day corrected, without undoing: asked, nothing added", [redated.ok, redated.problems[0]?.includes("under another day"), await sellable(A)], [false, true, 7]);
   const really = await back([[A, 2], [B, 1]], D1, "really-another.xlsx", true);
@@ -238,6 +238,11 @@ try {
   check("…undone twice: refused, nothing taken off again", [(await undoReturn(boss.id, wrongId)).ok, await sellable(B)], [false, 9]);
   const corrected = await back([[B, 4]], D6, "wrong-fixed.xlsx");
   check("…the corrected sheet after an undo is not asked about", [corrected.ok, await sellable(B)], [true, 13]);
+  // Two people press Delete on the same returns upload at once: it comes off once.
+  await back([[B, 2]], D6, "deleted-twice-at-once.xlsx", true);
+  const both = await entryOf("deleted-twice-at-once.xlsx");
+  const together = await Promise.all([undoReturn(boss.id, both), undoReturn(boss.id, both)]);
+  check("two Deletes of one upload at once: one done, one refused, taken off once", [together.filter((r) => r.ok).length, await sellable(B)], [1, 13]);
 
   const sold = await back([[ZEROS, 4]], D6, "sold-since.xlsx");
   const zp = await prisma.product.findUniqueOrThrow({ where: { model: ZEROS }, select: { id: true } });

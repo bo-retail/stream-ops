@@ -50,20 +50,20 @@ export default async function ReturnsPage() {
         <Card>
           <CardHeader
             title="Returns log"
-            description="Every returns upload, newest first. Added with wrong numbers? Undo it, then upload the corrected sheet."
+            description="Every returns upload, newest first. Added with wrong numbers? Delete it, then upload the corrected sheet."
           />
           {log.length === 0 ? (
             <p className="p-4 text-sm text-ink-muted">No returns yet.</p>
           ) : (
             <ul className="divide-y divide-line">
               {log.map((r) => (
-                <li key={r.entryId} className={r.undone ? "opacity-60" : undefined}>
-                  <details>
+                <li key={r.entryId} className={`flex flex-wrap items-start ${r.undone ? "opacity-60" : ""}`}>
+                  <details className="min-w-0 flex-1">
                     <summary className="flex cursor-pointer list-none items-center [&::-webkit-details-marker]:hidden justify-between gap-3 px-4 py-2.5 hover:bg-canvas">
                       <div className="min-w-0 text-sm">
                         <p className="truncate font-medium text-ink">
                           {r.name}
-                          {r.undone ? <span className="ml-2 text-xs font-semibold uppercase text-danger-700">Undone</span> : null}
+                          {r.undone ? <span className="ml-2 text-xs font-semibold uppercase text-danger-700">Deleted</span> : null}
                         </p>
                         <p className="text-xs text-ink-muted">
                           Came back {formatDate(r.returnedOn)} · {formatCount(r.pieces)} piece(s), {formatCount(r.items.length)} model(s) · uploaded{" "}
@@ -102,13 +102,9 @@ export default async function ReturnsPage() {
                           </tbody>
                         </table>
                       </div>
-                      {r.undone ? null : (
-                        <div className="mt-3">
-                          <UndoReturns entryId={r.entryId} label={r.name} />
-                        </div>
-                      )}
                     </div>
                   </details>
+                  <UndoReturns entryId={r.entryId} label={r.name} deleted={r.undone} />
                 </li>
               ))}
             </ul>

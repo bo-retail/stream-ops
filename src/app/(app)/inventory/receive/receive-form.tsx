@@ -5,24 +5,29 @@ import { Alert, Button, Input, Label } from "@/components/ui";
 import { undoDelivery, uploadReceipt } from "./actions";
 import type { ReceiveState } from "./actions";
 
-/** One delivery in the list, with its undo. */
-export function UndoDelivery({ entryId, label }: { entryId: string; label: string }) {
+/** One delivery in the list, with its Delete. */
+export function UndoDelivery({ entryId, label, deleted }: { entryId: string; label: string; deleted: boolean }) {
   const [state, run, pending] = useActionState<ReceiveState, FormData>(undoDelivery, {});
+  // Still mounted once deleted, so the message (a "below zero" warning) survives the page refreshing.
   return (
-    <form
-      action={run}
-      onSubmit={(e) => {
-        if (!window.confirm(`Undo ${label}? Its pieces come back off stock.`)) e.preventDefault();
-      }}
-      className="text-right"
-    >
-      <input type="hidden" name="entryId" value={entryId} />
-      <Button type="submit" size="sm" variant="secondary" disabled={pending}>
-        {pending ? "Undoing…" : "Undo"}
-      </Button>
-      {state.error ? <p className="mt-1 text-xs text-danger-700">{state.error}</p> : null}
-      {state.ok ? <p className="mt-1 text-xs text-ok-700">{state.ok}</p> : null}
-    </form>
+    <>
+      {deleted ? null : (
+        <form
+          action={run}
+          onSubmit={(e) => {
+            if (!window.confirm(`Delete ${label}? Its pieces come back off stock, and the corrected file can be uploaded after.`)) e.preventDefault();
+          }}
+          className="shrink-0 py-2 pr-4"
+        >
+          <input type="hidden" name="entryId" value={entryId} />
+          <Button type="submit" size="sm" variant="secondary" disabled={pending}>
+            {pending ? "Deleting…" : "Delete"}
+          </Button>
+        </form>
+      )}
+      {state.error ? <p className="basis-full px-4 pb-2 text-xs text-danger-700">{state.error}</p> : null}
+      {state.ok ? <p className="basis-full px-4 pb-2 text-xs text-ok-700">{state.ok}</p> : null}
+    </>
   );
 }
 

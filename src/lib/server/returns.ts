@@ -148,7 +148,7 @@ export async function saveReturn(
         if (sameDay) {
           asks.push(
             `Returns for that day with some of these models are already added (${sameDay.note}). ` +
-              `If that upload had wrong numbers, undo it below first, then upload the corrected sheet.`,
+              `If that upload had wrong numbers, delete it below first, then upload the corrected sheet.`,
           );
         }
         const redated = (
@@ -320,12 +320,12 @@ export async function undoReturn(userId: string, entryId: string): Promise<{ ok:
         where: { entryId, kind: "RETURN", reason: { startsWith: "return " } },
         select: { productId: true, place: true, qty: true, note: true, reason: true, at: true, product: { select: { model: true } } },
       });
-      if (moves.length === 0) return { ok: false, message: "Those returns were already undone, or are not there." };
+      if (moves.length === 0) return { ok: false, message: "Those returns were already deleted, or are not there." };
       const productIds = [...new Set(moves.map((m) => m.productId))];
 
       // Counted since: the count already holds what is on the shelf, these returns included.
       if (await countedAfter(tx, productIds, moves[0].at)) {
-        return { ok: false, message: "These watches were counted after the returns were added, so the count already has them. Nothing was undone." };
+        return { ok: false, message: "These watches were counted after the returns were added, so the count already has them. Nothing was deleted." };
       }
 
       /*
@@ -389,7 +389,7 @@ export async function undoReturn(userId: string, entryId: string): Promise<{ ok:
       return {
         ok: true,
         message:
-          `Undone: ${moves[0].note.replace(/^Returned /, "")}. ${pieces} piece(s) taken back off stock.` +
+          `Deleted: ${moves[0].note.replace(/^Returned /, "")}. ${pieces} piece(s) taken back off stock.` +
           (below.length > 0 ? ` Some had sold since, so these are now below zero: ${below.join(", ")}.` : ""),
       };
     },

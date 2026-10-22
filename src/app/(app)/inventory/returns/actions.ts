@@ -65,7 +65,7 @@ export async function uploadReturns(_prev: ReturnsState, formData: FormData): Pr
     details: [
       `Placed: Sellable ${result.placed.SELLABLE}, TT sample ${result.placed.SAMPLE_TIKTOK}, eBay sample ${result.placed.SAMPLE_EBAY}, Random pulls ${result.placed.RANDOM_PULLS}.`,
       ...(result.added.length > 0
-        ? [`Never in inventory before, so added as new model(s): ${result.added.join(", ")}. Check each number against the watch; a typo can be undone below.`]
+        ? [`Never in inventory before, so added as new model(s): ${result.added.join(", ")}. Check each number against the watch; a typo can be deleted below.`]
         : []),
       ...notes,
     ],

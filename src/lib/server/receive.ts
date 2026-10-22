@@ -194,7 +194,7 @@ export async function saveReceipt(
         if (before) {
           return fail([
             `This delivery looks already added (${before.note}): the same models and quantities. Nothing was added. ` +
-              `If it went in with wrong numbers, undo it below. If it really is another, identical delivery, ` +
+              `If it went in with wrong numbers, delete it below. If it really is another, identical delivery, ` +
               `tick "Yes, add it anyway" and upload again.`,
           ]);
         }
@@ -368,13 +368,13 @@ export async function undoReceipt(userId: string, entryId: string): Promise<{ ok
         where: { entryId, kind: "RECEIVED", reason: { startsWith: "receipt " } },
         select: { productId: true, place: true, qty: true, note: true, reason: true, at: true },
       });
-      if (moves.length === 0) return { ok: false, message: "That delivery was already undone, or is not there." };
+      if (moves.length === 0) return { ok: false, message: "That delivery was already deleted, or is not there." };
       const productIds = [...new Set(moves.map((m) => m.productId))];
 
       // Counted since: the count already holds what is on the shelf, this delivery included.
       // A starting count since holds it too, even for a model it wrote no line for.
       if (await countedAfter(tx, productIds, moves[0].at)) {
-        return { ok: false, message: "These watches were counted after this delivery, so the count already has them. Nothing was undone." };
+        return { ok: false, message: "These watches were counted after this delivery, so the count already has them. Nothing was deleted." };
       }
 
       /*
@@ -451,7 +451,7 @@ export async function undoReceipt(userId: string, entryId: string): Promise<{ ok
       return {
         ok: true,
         message:
-          `Undone: ${moves[0].note.replace(/^Received /, "")}. ${pieces} piece(s) taken back off stock.` +
+          `Deleted: ${moves[0].note.replace(/^Received /, "")}. ${pieces} piece(s) taken back off stock.` +
           (below.length > 0 ? ` Some had sold since, so these are now below zero: ${below.join(", ")}.` : ""),
       };
     },

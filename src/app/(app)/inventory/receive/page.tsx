@@ -50,20 +50,20 @@ export default async function ReceivePage() {
         <Card>
           <CardHeader
             title="Delivery log"
-            description="Every delivery received, newest first. Open one to see what was in it and where it went. Added with wrong numbers? Undo it, then upload the corrected sheet."
+            description="Every delivery received, newest first. Open one to see what was in it and where it went. Added with wrong numbers? Delete it, then upload the corrected sheet."
           />
           {log.length === 0 ? (
             <p className="p-4 text-sm text-ink-muted">Nothing received yet.</p>
           ) : (
             <ul className="divide-y divide-line">
               {log.map((d) => (
-                <li key={d.entryId} className={d.undone ? "opacity-60" : undefined}>
-                  <details>
+                <li key={d.entryId} className={`flex flex-wrap items-start ${d.undone ? "opacity-60" : ""}`}>
+                  <details className="min-w-0 flex-1">
                     <summary className="flex cursor-pointer list-none items-center [&::-webkit-details-marker]:hidden justify-between gap-3 px-4 py-2.5 hover:bg-canvas">
                       <div className="min-w-0 text-sm">
                         <p className="truncate font-medium text-ink">
                           {d.name}
-                          {d.undone ? <span className="ml-2 text-xs font-semibold uppercase text-danger-700">Undone</span> : null}
+                          {d.undone ? <span className="ml-2 text-xs font-semibold uppercase text-danger-700">Deleted</span> : null}
                         </p>
                         <p className="text-xs text-ink-muted">
                           Received {formatDate(d.receivedOn)} · {formatCount(d.pieces)} piece(s), {formatCount(d.models)} model(s) · uploaded{" "}
@@ -102,13 +102,9 @@ export default async function ReceivePage() {
                         </tbody>
                       </table>
                       </div>
-                      {d.undone ? null : (
-                        <div className="mt-3">
-                          <UndoDelivery entryId={d.entryId} label={d.name} />
-                        </div>
-                      )}
                     </div>
                   </details>
+                  <UndoDelivery entryId={d.entryId} label={d.name} deleted={d.undone} />
                 </li>
               ))}
             </ul>

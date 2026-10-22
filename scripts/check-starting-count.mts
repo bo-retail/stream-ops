@@ -261,7 +261,7 @@ try {
   check("a new model of 2: Random pulls", (await stockOf("ZZSC-108"))?.RANDOM_PULLS, 2);
   check("what was not received is untouched", await stockOf(M.fresh), freshBefore);
   const repeat = await receive([["ZZSC-108", "", 2], [M.kept, "x", 10], ["ZZSC-106", "", 10], [M.gone, "", 0]], today, "delivery-1 resaved.xlsx");
-  check("the same delivery again — re-saved, rows reordered, a 0 typed in — is refused", [repeat.ok, repeat.problems[0]?.includes("already added"), (await stockOf("ZZSC-106"))?.SELLABLE], [false, true, 8]);
+  check("the same delivery again — re-saved, rows reordered, a 0 typed in — is refused", [repeat.ok, repeat.problems[0]?.includes("already added"), repeat.problems[0]?.includes("delete it below"), (await stockOf("ZZSC-106"))?.SELLABLE], [false, true, true, 8]);
   await receive([["ZZSC-106", "", 5]], today, "delivery-2.xlsx");
   check("the model now has both samples: a second delivery goes all to Sellable", [(await stockOf("ZZSC-106"))?.SELLABLE, (await stockOf("ZZSC-106"))?.SAMPLE_TIKTOK], [13, 1]);
   await receive([["ZZSC-108", "", 10]], today, "delivery-3.xlsx");
@@ -284,6 +284,12 @@ try {
   const corrected = await receive([["ZZSC-106", "", 30]], today, "typo fixed but same.xlsx");
   check("after an undo, the same numbers can go in again", corrected.ok, true);
   await undoReceipt(boss.id, (await recentReceipts()).find((r) => r.note.endsWith("typo fixed but same.xlsx"))!.entryId);
+
+  // Two people press Delete on the same delivery at once: it comes off once.
+  await receive([["ZZSC-106", "", 7]], today, "deleted-twice-at-once.xlsx");
+  const both = (await recentReceipts()).find((r) => r.note.endsWith("deleted-twice-at-once.xlsx"))!.entryId;
+  const together = await Promise.all([undoReceipt(boss.id, both), undoReceipt(boss.id, both)]);
+  check("two Deletes of one delivery at once: one done, one refused, taken off once", [together.filter((r) => r.ok).length, (await stockOf("ZZSC-106"))?.SELLABLE], [1, 18]);
 
   // Second review: undo after some of the delivery sold.
   await receive([["ZZSC-109", "", 10]], today, "undo-after-sales.xlsx");
