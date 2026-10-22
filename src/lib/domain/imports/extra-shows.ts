@@ -125,6 +125,8 @@ export function placeOnExtraShows(
   shows: readonly TikTokShowWindow[],
   firstOrderOf: (file: string) => Date | null,
   timezone: string,
+  /** Files shared out between several shows instead (`shareWatchStream`). */
+  stream: ReadonlySet<string> = new Set(),
 ): { sales: WatchSale[]; flags: ImportFlag[] } {
   const flags: ImportFlag[] = [];
   const placed = new Map<string, ReturnType<typeof showNameFor>>();
@@ -136,7 +138,7 @@ export function placeOnExtraShows(
     const cut = key.indexOf("|");
     const business = key.slice(0, cut) as Business;
     const file = key.slice(cut + 1);
-    if (!hasExtraShow(shows, business)) continue;
+    if (!hasExtraShow(shows, business) || stream.has(file)) continue;
 
     /*
       Diamonds are left as they are. The diamond shop sends the whole day as

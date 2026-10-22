@@ -12,8 +12,9 @@ import { parseCsv } from "@/lib/domain/imports/csv";
 import { parseEbayFile, readEbaySeller } from "@/lib/domain/imports/ebay";
 import { coversNight, shareDiamondDay } from "@/lib/domain/imports/diamond-day";
 import { earliestOrderAt, latestOrderAt, orderTimesIn } from "@/lib/domain/imports/tiktok";
-import { hasExtraShow, placeCoversOnExtraShows, placeOnExtraShows, replacesAnotherShowsFile } from "@/lib/domain/imports/extra-shows";
+import { hasExtraShow, placeCoversOnExtraShows, placeOnExtraShows, replacesAnotherShowsFile, showAt, showForOrders } from "@/lib/domain/imports/extra-shows";
 import type { TikTokShowWindow } from "@/lib/domain/imports/extra-shows";
+import { shareWatchStream, showsInside, showsTouched, spansShows } from "@/lib/domain/imports/watch-day";
 import { ebayFallback, placeEbayFile } from "@/lib/domain/imports/ebay-business";
 import type { EbayPlacement } from "@/lib/domain/imports/ebay-business";
 import { isPlaceholderStock, listingOfNote } from "@/lib/domain/imports/placeholders";
@@ -1694,6 +1695,7 @@ async function placeOnScheduledShows(
   sales: WatchSale[],
   files: UploadedFile[],
   showDate: DateISO,
+  stream: ReadonlySet<string>,
 ): Promise<{ sales: WatchSale[] | null; flags: ImportFlag[] }> {
   if (!sales.some((s) => s.platform === "TIKTOK")) return { sales: null, flags: [] };
   const shows = await tiktokShowsOn(showDate);
@@ -1705,8 +1707,264 @@ async function placeOnScheduledShows(
     shows,
     (name) => earliestOrderAt(files.find((f) => f.name === name)?.text ?? ""),
     timezone,
+    stream,
   );
   return { sales: placed.sales, flags: placed.flags };
+}
+
+/** What one watch TikTok upload does with continuous-stream files — see `watchStreamFiles`. */
+interface StreamPlan {
+  /** Each stream file's checklist lines. */
+  lines: Map<string, string[]>;
+  /** The shows each stream file is shared out between. */
+  showsFor: Map<string, TikTokShowWindow[]>;
+  /** Orders a stream file must leave out: already another file's, on a show it does not write. */
+  leaveOut: Map<string, Set<string>>;
+  /** Every order of each stream file, sold or cancelled, for the check made again under the day's lock. */
+  ordersOf: Map<string, Set<string>>;
+  flags: ImportFlag[];
+}
+
+/** What each watch TikTok line of a day holds now: its newest good upload's orders and files. */
+async function watchTiktokLines(db: Prisma.TransactionClient, showDate: DateISO) {
+  const batches = await db.importBatch.findMany({
+    where: { business: "WATCH", showDate: toDbDate(showDate), status: "OK", platform: "TIKTOK", slot: { not: null } },
+    orderBy: { uploadedAt: "desc" },
+    select: { slot: true, files: true, sales: { select: { orderRef: true } }, drops: { select: { orderRef: true } } },
+  });
+  const held = new Map<string, Set<string>>();
+  const sold = new Map<string, string[]>();
+  const filesOn = new Map<string, string[]>();
+  for (const b of batches) {
+    if (held.has(b.slot!)) continue;
+    held.set(b.slot!, new Set([...b.sales, ...b.drops].map((r) => r.orderRef)));
+    sold.set(b.slot!, [...new Set(b.sales.map((r) => r.orderRef))]);
+    filesOn.set(b.slot!, [...fileNames(b.files)]);
+  }
+  return { held, sold, filesOn };
+}
+
+/**
+ * A show's own file over a line holding a stream file's share it does not
+ * have: written, those orders would be on no show at all. One refusal per such
+ * file, saying what to do — upload the two together. Asked before anything is
+ * written and again under the day's lock, where `db` is the transaction.
+ */
+async function replacesStreamShare(
+  db: Prisma.TransactionClient,
+  showDate: DateISO,
+  /** This upload's watch TikTok files that each go to one show. */
+  own: readonly { file: string; slot: string; orders: ReadonlySet<string> }[],
+  /** Every file of this upload. */
+  uploading: ReadonlySet<string>,
+): Promise<ImportFlag[]> {
+  if (own.length === 0) return [];
+  const { sold, filesOn } = await watchTiktokLines(db, showDate);
+  // A file on two or more lines at once is a stream file's shares.
+  const isStream = (file: string) => [...filesOn.values()].filter((f) => f.includes(file)).length >= 2;
+  const flags: ImportFlag[] = [];
+  for (const { file, slot, orders } of own) {
+    const theirs = (filesOn.get(slot) ?? []).filter((f) => f !== file && isStream(f) && !uploading.has(f));
+    const lost = (sold.get(slot) ?? []).filter((ref) => !orders.has(ref));
+    if (theirs.length === 0 || lost.length === 0) continue;
+    flags.push({
+      severity: "blocking",
+      message:
+        `${file} would replace the TikTok ${slotShort(slot)} show's share of ${theirs.join(", ")} — one export of the ` +
+        `whole stream — and ${lost.length} order(s) of it are not in this file, so they would be counted on no show ` +
+        `at all. Nothing was changed. Upload ${file} and ${theirs.join(", ")} together, and each order goes to one show.`,
+    });
+  }
+  return flags;
+}
+
+/**
+ * The watch TikTok files of this upload that are one continuous stream across
+ * several of the day's shows, each with the checklist lines it fills — see
+ * `domain/imports/watch-day`. Every other file is placed on one show, as ever.
+ *
+ * A file is one when enough of its orders, sold or cancelled, run well inside
+ * two shows (`spansShows`); or when the day's lines already hold its orders on
+ * two or more of them, which is a stream file uploaded before, being
+ * corrected. Its lines are every show its orders fall in now and every line
+ * holding its orders now: a correction must replace each of the first copy's
+ * shares, emptying one it no longer reaches, or that line would keep paying on
+ * orders cancelled since.
+ *
+ * A show another file has — on the day already, or in this same upload — is
+ * that file's, and the stream leaves it alone. Some days are stop and go: the
+ * early show its own file, the day and night one stream (that went live at
+ * 12:40, a few orders into the early show's hours). Those few go to the show
+ * beside them; any the other file already has are left out altogether, so
+ * nothing is counted twice. And a stream uploaded beside a show's own file
+ * holding the same orders — the early show's file and the whole day's — leaves
+ * that show to its file in the same way.
+ *
+ * What is never done is guess. A stream holding orders of a show another file
+ * has, that the other file does not have, is refused: two exports disagree.
+ * One sharing no orders with that file at all — a day show's export that ran
+ * long, beside the night's own — is placed on one show as it always was, and
+ * said so.
+ */
+async function watchStreamFiles(
+  sales: readonly WatchSale[],
+  dropped: readonly DroppedRow[],
+  empty: readonly FileCover[],
+  files: UploadedFile[],
+  showDate: DateISO,
+): Promise<StreamPlan> {
+  const plan: StreamPlan = { lines: new Map(), showsFor: new Map(), leaveOut: new Map(), ordersOf: new Map(), flags: [] };
+  const names = [
+    ...new Set(sales.filter((s) => s.business === "WATCH" && s.platform === "TIKTOK").map((s) => s.sourceFile)),
+  ];
+  if (names.length === 0) return plan;
+  const shows = (await tiktokShowsOn(showDate)).filter((s) => s.business === "WATCH");
+  const extraDay = hasExtraShow(shows, "WATCH");
+  const { held, sold, filesOn } = await watchTiktokLines(prisma, showDate);
+
+  const timesOf = new Map(names.map((n) => [n, orderTimesIn(files.find((f) => f.name === n)?.text ?? "")]));
+  const ordersIn = (n: string) =>
+    new Set([
+      ...sales.filter((s) => s.sourceFile === n).map((s) => s.orderRef),
+      ...dropped.filter((d) => d.sourceFile === n).map((d) => d.orderRef),
+    ]);
+  const holdingOf = (orders: Set<string>) =>
+    [...held].filter(([, o]) => [...o].some((ref) => orders.has(ref))).map(([slot]) => slot);
+
+  const candidates = names.filter((n) => spansShows(timesOf.get(n)!, shows) || holdingOf(ordersIn(n)).length >= 2);
+  if (candidates.length > 1) {
+    plan.flags.push({
+      severity: "warning",
+      message:
+        `${candidates.join(" and ")} each run across several watch TikTok shows. Only one file can be the whole ` +
+        `stream, so neither was shared out: each went to one show as usual. Upload the whole-stream file on its own.`,
+    });
+  }
+  if (candidates.length !== 1) return plan;
+  const stream = candidates[0];
+  const orders = ordersIn(stream);
+  const mine = sales.filter((s) => s.sourceFile === stream);
+
+  const unreadable = mine.filter((s) => s.createdAt === null).length;
+  if (unreadable > 0) {
+    plan.flags.push({
+      severity: "blocking",
+      message:
+        `${stream} runs across several watch TikTok shows, and ${unreadable} of its row(s) have no readable Created ` +
+        `Time, so there is no telling which show sold them. Nothing was changed. Upload the file as TikTok exported ` +
+        `it — not opened and saved in Excel.`,
+    });
+    return plan;
+  }
+
+  // What another file has, show by show: on the day already, or in this upload.
+  const other = new Map<string, Set<string>>();
+  const add = (slot: string, refs: Iterable<string>) => {
+    const set = other.get(slot) ?? other.set(slot, new Set()).get(slot)!;
+    for (const r of refs) set.add(r);
+  };
+  for (const n of names.filter((n) => n !== stream)) {
+    const theirs = sales.filter((s) => s.sourceFile === n);
+    const most = extraDay
+      ? showForOrders(
+          shows,
+          // Counted in pieces, as `placeOnExtraShows` counts them.
+          theirs.flatMap((s) => (s.createdAt ? Array<Date>(Math.max(1, s.qty || 1)).fill(s.createdAt) : [])),
+          timesOf.get(n)![0] ?? null,
+        )
+      : null;
+    add(most && most.slot !== "DAY" && most.slot !== "NIGHT" ? most.slot : slotOfSalesShow(theirs[0].show), ordersIn(n));
+  }
+  for (const e of empty.filter((e) => e.business === "WATCH" && e.platform === "TIKTOK")) {
+    add(slotOfSalesShow(e.show), dropped.filter((d) => d.sourceFile === e.sourceFile).map((d) => d.orderRef));
+  }
+  /*
+    A line holding a stream's share that has orders of this file is this
+    stream's earlier copy, being corrected: replaced, never left as another
+    show's file. A correction must still have every order that copy counts as
+    sold — sold or cancelled since — as a show's own corrected file must
+    (see the empty-file refusal). One exported over a shorter span would
+    otherwise keep paying on, or quietly drop, what it no longer has.
+  */
+  // Its file on two or more lines, or by this file's own name: the last share
+  // left once other shows' own files have taken the rest.
+  const streamShare = (slot: string) =>
+    (filesOn.get(slot) ?? []).some(
+      (f) => f === stream || [...filesOn.values()].filter((on) => on.includes(f)).length >= 2,
+    ) && [...(held.get(slot) ?? [])].some((ref) => orders.has(ref));
+  const missing = [...sold].filter(([slot]) => streamShare(slot)).flatMap(([, refs]) => refs.filter((ref) => !orders.has(ref)));
+  if (missing.length > 0) {
+    plan.flags.push({
+      severity: "blocking",
+      message:
+        `${stream} corrects the whole stream already uploaded for ${showDate}, but it does not have ` +
+        `${missing.length} order(s) that upload counts as sold (${[...new Set(missing)].slice(0, 5).join(", ")}` +
+        `${missing.length > 5 ? ", …" : ""}). Nothing was changed. Export the whole stream again — the full day, ` +
+        `all orders including cancelled ones — and upload that.`,
+    });
+    return plan;
+  }
+  for (const [slot, refs] of sold) {
+    if (!streamShare(slot) && refs.some((ref) => !orders.has(ref))) add(slot, held.get(slot)!);
+  }
+
+  // The stream's own orders show by show, by the time each was placed.
+  const placedIn = new Map<string, string[]>();
+  for (const s of mine) {
+    const show = showAt(shows, s.createdAt!);
+    if (show) placedIn.set(show.slot, [...(placedIn.get(show.slot) ?? []), s.orderRef]);
+  }
+  const inside = new Set(showsInside(timesOf.get(stream)!, shows));
+  const theirsTouched = showsTouched(timesOf.get(stream)!, shows).filter((slot) => other.has(slot));
+
+  /*
+    Each show another file has: left to that file when the stream only
+    touches it at an edge, or when every order the stream sold in its hours is
+    that file's too. Refused when the stream has orders there the file lacks,
+    and the stream runs well inside it — two exports of the same hours that
+    disagree. And when the stream shares no order with any of them, it is
+    another show's export that ran long: placed on one show, as it always was.
+  */
+  const leftTo: string[] = [];
+  const disagree: string[] = [];
+  for (const slot of theirsTouched) {
+    const theirs = other.get(slot)!;
+    const extra = (placedIn.get(slot) ?? []).filter((ref) => !theirs.has(ref));
+    if (!inside.has(slot) || extra.length === 0) leftTo.push(slot);
+    else disagree.push(slot);
+  }
+  const sharesAny = [...other.values()].some((refs) => [...refs].some((ref) => orders.has(ref)));
+  if (disagree.length > 0 && !sharesAny) {
+    plan.flags.push({
+      severity: "warning",
+      message:
+        `${stream}: its orders run across several watch TikTok shows, but the ${disagree.map((s) => slotShort(s)).join(" and ")} ` +
+        `show already ${disagree.length > 1 ? "have" : "has"} its own file, so it was not shared out between them and ` +
+        `went to one show as usual. If it is the whole stream, upload it again with that show's file, or tell your admin.`,
+    });
+    return plan;
+  }
+  if (disagree.length > 0) {
+    plan.flags.push({
+      severity: "blocking",
+      message:
+        `${stream} runs across several watch TikTok shows, and for the ${disagree.map((s) => slotShort(s)).join(" and ")} ` +
+        `show it has orders that show's own file does not — two exports of the same hours that disagree. Nothing ` +
+        `was changed. Upload the whole stream's file on its own, or each show's own file, not a mix.`,
+    });
+    return plan;
+  }
+
+  const own = shows.filter((s) => !leftTo.includes(s.slot));
+  const slots = [...new Set([...showsTouched(timesOf.get(stream)!, own), ...holdingOf(orders).filter((slot) => !leftTo.includes(slot))])];
+  if (slots.length === 0) return plan;
+  // Orders the shows left to another file already have: counted there, not again here.
+  const elsewhere = new Set(leftTo.flatMap((slot) => [...other.get(slot)!]));
+  plan.lines.set(stream, slots.map((slot) => `TIKTOK|${slot}`));
+  plan.showsFor.set(stream, own);
+  plan.leaveOut.set(stream, new Set([...orders].filter((ref) => elsewhere.has(ref))));
+  plan.ordersOf.set(stream, orders);
+  return plan;
 }
 
 /**
@@ -1800,12 +2058,48 @@ export async function runImport(
   let { sales, boxes, carried, empty } = read;
 
   /*
+    A watch TikTok export of one continuous stream across several shows,
+    shared out between them by when each order was placed — see
+    `watchStreamFiles`. Every other file is placed on one show as before.
+  */
+  const streamLines = new Map<string, string[]>();
+  let streamOrders = new Map<string, Set<string>>();
+  if (showDate) {
+    const stream = await watchStreamFiles(sales, dropped, empty, files, showDate);
+    flags.push(...stream.flags);
+    streamOrders = stream.ordersOf;
+    for (const [file, lines] of stream.lines) {
+      const leaveOut = stream.leaveOut.get(file) ?? new Set<string>();
+      if (leaveOut.size > 0) {
+        sales = sales.filter((s) => s.sourceFile !== file || !leaveOut.has(s.orderRef));
+        flags.push({
+          severity: "info",
+          message:
+            `${file}: ${leaveOut.size} order(s) in it are already on another show's own file, so they were left ` +
+            `there and not counted again.`,
+        });
+      }
+      const shared = shareWatchStream(sales, file, stream.showsFor.get(file) ?? []);
+      sales = shared.sales;
+      streamLines.set(file, lines);
+      flags.push({
+        severity: "info",
+        message:
+          `${file}: one watch TikTok export for several shows, shared out by when each order was placed — ` +
+          [...shared.pieces].map(([slot, n]) => `${n} piece(s) to the ${slotShort(slot)} show`).join(", ") +
+          `.`,
+      });
+    }
+    if (streamLines.size > 0) boxes = buildBoxes(sales);
+  }
+
+  /*
     A day with an extra TikTok show — the early morning one — places each
     TikTok file on the show its first order falls in, by the published hours.
     Every other day is untouched and reads exactly as it always has.
   */
   if (showDate) {
-    const extra = await placeOnScheduledShows(sales, files, showDate);
+    const extra = await placeOnScheduledShows(sales, files, showDate, new Set(streamLines.keys()));
     flags.push(...extra.flags);
     if (extra.sales !== null) {
       sales = extra.sales;
@@ -2021,6 +2315,24 @@ export async function runImport(
 
   // On a day with an extra show, never overwrite another show's file.
   if (showDate && business) flags.push(...(await anotherShowsFileGuard(business, showDate, sales, dropped, empty)));
+
+  // Nor a stream file's share that a show's own file does not have — see `replacesStreamShare`.
+  const uploading = new Set(fileInfo.map((f) => f.name));
+  const ownFiles = [
+    ...new Set(
+      [...sales, ...empty]
+        .filter((s) => s.business === "WATCH" && s.platform === "TIKTOK" && !streamLines.has(s.sourceFile))
+        .map((s) => s.sourceFile),
+    ),
+  ].map((file) => ({
+    file,
+    slot: slotOfSalesShow([...sales, ...empty].find((s) => s.sourceFile === file)!.show),
+    orders: new Set([
+      ...sales.filter((s) => s.sourceFile === file).map((s) => s.orderRef),
+      ...dropped.filter((d) => d.sourceFile === file).map((d) => d.orderRef),
+    ]),
+  }));
+  if (showDate) flags.push(...(await replacesStreamShare(prisma, showDate, ownFiles, uploading)));
 
   /*
     A file with no sale left in it empties the line it lands on — so it may do
@@ -2254,7 +2566,12 @@ export async function runImport(
     One upload is one line. Anything that would fill two at once was refused
     above, so there is exactly one here.
   */
-  const lines = new Set([...sales.map(lineKey), ...empty.map(lineKey), ...forcedLines]);
+  const lines = new Set([
+    ...sales.map(lineKey),
+    ...empty.map(lineKey),
+    ...forcedLines,
+    ...[...streamLines.values()].flat(),
+  ]);
 
   /*
     An upload may still carry several files at once — three most mornings — and
@@ -2281,6 +2598,8 @@ export async function runImport(
   // With no night show, the night line is emptied but the file is not on it:
   // the checklist counts files, and it was not that show's export.
   if (wholeDay) fileLines.set(wholeDay.file, wholeDay.onNightLine ? [...forcedLines] : ["TIKTOK|DAY"]);
+  // A watch stream file likewise, on every show it was shared between.
+  for (const [file, streamed] of streamLines) fileLines.set(file, streamed);
   const fileLine = new Map([...fileLines].map(([file, lines]) => [file, lines[0]]));
 
   const keys = [...lines];
@@ -2297,6 +2616,36 @@ export async function runImport(
         const late = await anotherShowsFileGuard(business, showDate, sales, dropped, empty, tx);
         if (late.some((f) => f.severity === "blocking")) throw new AnotherShowsFile(late);
       }
+
+      /*
+        And a stream file's shows, asked again for the same reason: another
+        show's own file may have landed on one of them since. Shared onto it
+        now, it would take that file's sales away.
+      */
+      for (const [file, streamed] of streamLines) {
+        const mine = streamOrders.get(file) ?? new Set<string>();
+        const slots = streamed.map((l) => l.split("|")[1]);
+        const now = await tx.importBatch.findMany({
+          where: { business: "WATCH", showDate: toDbDate(showDate), status: "OK", platform: "TIKTOK", slot: { in: slots } },
+          orderBy: { uploadedAt: "desc" },
+          select: { slot: true, sales: { select: { orderRef: true } } },
+        });
+        const taken = slots.filter((slot) => (now.find((b) => b.slot === slot)?.sales ?? []).some((r) => !mine.has(r.orderRef)));
+        if (taken.length > 0) {
+          throw new AnotherShowsFile([
+            {
+              severity: "blocking",
+              message:
+                `${file}: while it was being read, another file went up for the TikTok ` +
+                `${taken.map((s) => slotShort(s)).join(" and ")} show. Nothing was changed. Upload it again.`,
+            },
+          ]);
+        }
+      }
+
+      // And a show's own file over a stream's share that landed since.
+      const lost = await replacesStreamShare(tx, showDate, ownFiles, uploading);
+      if (lost.length > 0) throw new AnotherShowsFile(lost);
 
       const supersededIds: string[] = [];
       const splitOrigins: string[] = [];
